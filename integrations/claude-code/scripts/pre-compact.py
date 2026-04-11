@@ -42,12 +42,10 @@ async def _get_session_entries(session_id: str, cached_user_id: str = "") -> lis
     """Fetch recent session entries from cache engine (lightweight)."""
     try:
         from cognee.infrastructure.databases.cache.get_cache_engine import get_cache_engine
+        from cognee.modules.users.methods import get_default_user
 
-        user_id = cached_user_id
-        if not user_id:
-            from cognee.modules.users.methods import get_default_user
-            user = await get_default_user()
-            user_id = str(user.id) if hasattr(user, "id") else ""
+        user = await get_default_user()
+        user_id = str(user.id) if hasattr(user, "id") else ""
         if not user_id:
             return []
 

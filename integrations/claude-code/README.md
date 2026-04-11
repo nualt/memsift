@@ -16,6 +16,7 @@ pip install cognee
 
 ```bash
 export LLM_API_KEY="your-openai-key"
+export CACHING=true   # required for session memory
 ```
 
 **Cognee Cloud** (connect to a managed instance):

@@ -67,13 +67,14 @@ def _search_entries(entries: list, query_text: str) -> list:
 async def _get_entries(session_id: str, cached_user_id: str = "") -> list:
     """Load session entries via cognee's cache engine (lightweight imports only)."""
     from cognee.infrastructure.databases.cache.get_cache_engine import get_cache_engine
+    from cognee.modules.users.methods import get_default_user
 
-    # Use cached user ID from SessionStart, fall back to default user
-    user_id = cached_user_id
-    if not user_id:
-        from cognee.modules.users.methods import get_default_user
-        user = await get_default_user()
-        user_id = str(user.id) if hasattr(user, "id") else ""
+    # Always resolve to default user for cache lookups. The remember()
+    # session path uses the user from shared_kwargs which resolves to
+    # default_user in local mode. Using a different user_id here would
+    # miss entries stored by the PostToolUse hook.
+    user = await get_default_user()
+    user_id = str(user.id) if hasattr(user, "id") else ""
     if not user_id:
         return []
 
