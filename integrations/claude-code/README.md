@@ -12,14 +12,26 @@ pip install cognee
 
 ### 2. Configure
 
-**Local mode** (everything runs on your machine):
+**Local mode** (cognee runs in-process, no server needed):
 
 ```bash
 export LLM_API_KEY="your-openai-key"
 export CACHING=true   # required for session memory
 ```
 
-**Cognee Cloud** (connect to a managed instance):
+**Backend mode** (connect to a local or remote Cognee API server):
+
+```bash
+export COGNEE_SERVICE_URL="http://localhost:8000"   # or your cloud URL
+export COGNEE_API_KEY="your-api-key"                # optional if auth is disabled
+export CACHING=true
+```
+
+On first start, the plugin auto-registers as `claude-code@cognee.agent` on the backend — it creates an agent user, logs in, obtains an API key, and reconnects with agent-specific credentials. The agent then appears in the Cognee UI's agents list.
+
+If you already have an agent API key, set `COGNEE_API_KEY` directly and the plugin will use it without re-registering.
+
+**Cognee Cloud**:
 
 ```bash
 export COGNEE_SERVICE_URL="https://your-instance.cognee.ai"
@@ -30,8 +42,7 @@ Or create `~/.cognee-plugin/config.json`:
 
 ```json
 {
-  "service_url": "https://your-instance.cognee.ai",
-  "api_key": "ck_...",
+  "service_url": "http://localhost:8000",
   "dataset": "claude_sessions"
 }
 ```

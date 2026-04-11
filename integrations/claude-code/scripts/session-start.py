@@ -54,11 +54,10 @@ async def _start():
     except Exception as e:
         print(f"cognee-plugin: init warning ({e})", file=sys.stderr)
 
-    # Create integration identity (claude-code@cognee.local)
+    # Register agent identity (claude-code@cognee.agent)
     user_id = ""
     try:
-        user = await ensure_identity()
-        user_id = str(user.id)
+        user_id = await ensure_identity(config)
     except Exception as e:
         print(f"cognee-plugin: identity warning ({e})", file=sys.stderr)
 
