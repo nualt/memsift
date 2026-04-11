@@ -77,6 +77,32 @@ async def _start():
         file=sys.stderr,
     )
 
+    # Inject system guidance so Claude knows how to route data
+    guidance = {
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "systemMessage": (
+                "## Cognee Memory Connected\n"
+                f"Mode: {mode} | Dataset: {dataset} | Session: {session_id}\n\n"
+                "Cognee organizes knowledge into three categories. "
+                "When storing data with /cognee-memory:cognee-remember, "
+                "route to the correct category:\n\n"
+                "- **user_context** — user preferences, corrections, personal facts, "
+                "communication style. Use when the user says 'remember my preference', "
+                "'I always want', or shares personal details.\n"
+                "- **project_docs** — repository docs, code context, architecture decisions, "
+                "company data. Use when storing codebase knowledge, API docs, or project context.\n"
+                "- **agent_actions** — reasoning traces, conclusions, discovered patterns. "
+                "Use when you want to persist your own findings. "
+                "Routine tool call logging is automatic (no action needed).\n\n"
+                "When searching with /cognee-memory:cognee-search, you can filter by category "
+                "using --node-set (user_context, project_docs, or agent_actions).\n"
+                "If unsure which category, default to project_docs."
+            ),
+        }
+    }
+    print(json.dumps(guidance))
+
 
 def main():
     # Read stdin (SessionStart payload) — consumed but not used

@@ -1,19 +1,42 @@
 ---
 name: cognee-remember
-description: Store data permanently in the Cognee knowledge graph via add + cognify. Use when the user explicitly wants to persist important information into the permanent graph (not just session cache).
+description: Store data permanently in the Cognee knowledge graph. Accepts a data category (user, project, or agent) to tag the data with the correct node_set for filtered retrieval.
 ---
 
 # Cognee Permanent Memory Storage
 
-Store data permanently in the Cognee knowledge graph.
+Store data permanently in the Cognee knowledge graph with category tagging.
+
+## Data categories
+
+Cognee organizes knowledge into three categories via `node_set` tagging:
+
+| Category | Node set | What belongs here |
+|----------|----------|-------------------|
+| **user** | `user_context` | User preferences, corrections, personal facts, communication style |
+| **project** | `project_docs` | Repository docs, code context, architecture decisions, company data |
+| **agent** | `agent_actions` | Tool call logs, reasoning traces, generated artifacts (auto-captured by hooks) |
 
 ## Instructions
 
-Run the cognee remember command with the data to store:
+Determine the category from the user's intent, then run:
 
+**User data** (preferences, corrections, personal context):
 ```bash
-cognee-cli remember "$ARGUMENTS" -d "${COGNEE_PLUGIN_DATASET:-claude_sessions}"
+cognee-cli remember "$ARGUMENTS" -d "${COGNEE_PLUGIN_DATASET:-claude_sessions}" --node-set user_context
 ```
+
+**Project data** (docs, code, company knowledge):
+```bash
+cognee-cli remember "$ARGUMENTS" -d "${COGNEE_PLUGIN_DATASET:-claude_sessions}" --node-set project_docs
+```
+
+**Agent data** (explicit agent notes — routine tool logs are automatic):
+```bash
+cognee-cli remember "$ARGUMENTS" -d "${COGNEE_PLUGIN_DATASET:-claude_sessions}" --node-set agent_actions
+```
+
+If the category is unclear, default to **project**.
 
 The command outputs a summary after completion:
 
@@ -25,18 +48,23 @@ Data ingested and knowledge graph built successfully!
   Elapsed: 4.2s
 ```
 
-Use the dataset ID and content hash to track what was stored. If items_processed is 0 or the command errors, the data was not indexed and won't be searchable.
-
-**IMPORTANT**: Do NOT use the `-b` (background) flag. Running cognify in the background can result in data not being fully indexed and therefore not searchable. Always run in the foreground to ensure the full pipeline completes before returning.
+**IMPORTANT**: Do NOT use the `-b` (background) flag. Always run in the foreground to ensure the full pipeline completes.
 
 ## When to use
 
-- The user explicitly says to "remember this permanently" or "save this to the knowledge graph"
-- Important findings or conclusions that should persist beyond the current session
-- NOT for routine tool call logging (that uses session memory automatically)
+- User says "remember this" or "save this" → category **user**
+- User says "remember this about the project/codebase" → category **project**
+- You want to persist your own findings or conclusions → category **agent**
+- NOT for routine tool call logging (that's automatic via hooks with `agent_actions` tagging)
 
-## Note
+## Category routing guide
 
-This triggers the full add + cognify + improve pipeline, which builds entities and relationships in the knowledge graph, then enriches them with triplet embeddings. It is heavier than session storage. Routine tool call and response logging is handled automatically by the plugin hooks using the lightweight session cache path.
-
-After remembering, the graph knowledge is automatically synced back to the active session for fast retrieval during completions.
+| Signal | Category |
+|--------|----------|
+| "remember my preference for..." | user |
+| "I always want..." / "I prefer..." | user |
+| "remember this about the codebase" | project |
+| "save these docs" / "index this file" | project |
+| "note that this API works like..." | project |
+| "remember what we discovered" | agent |
+| Routine tool calls | agent (automatic, no action needed) |

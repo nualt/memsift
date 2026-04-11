@@ -43,7 +43,7 @@ def _build_tool_text(payload: dict) -> str:
     tool_input = json.dumps(payload.get("tool_input", {}))[:MAX_TEXT]
     tool_response = str(payload.get("tool_output") or payload.get("tool_response", ""))[:MAX_TEXT]
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return f"[{ts}] Tool: {tool_name}\nInput: {tool_input}\nOutput: {tool_response}"
+    return f"[category:agent] [{ts}] Tool: {tool_name}\nInput: {tool_input}\nOutput: {tool_response}"
 
 
 def _build_stop_text(payload: dict) -> str:
@@ -53,7 +53,7 @@ def _build_stop_text(payload: dict) -> str:
     if not msg or msg == "null":
         return ""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return f"[{ts}] Assistant response:\n{msg}"
+    return f"[category:agent] [{ts}] Assistant response:\n{msg}"
 
 
 async def _resolve_user(user_id: str):
