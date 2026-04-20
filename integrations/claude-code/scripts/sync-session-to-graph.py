@@ -15,15 +15,37 @@ Configuration:
 import asyncio
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 
 # Add scripts dir to path for config import
 sys.path.insert(0, os.path.dirname(__file__))
-from config import load_config, get_session_id, get_dataset
-
+from config import ensure_cognee_ready, get_dataset, get_session_id, load_config
 
 _RESOLVED_CACHE = Path.home() / ".cognee-plugin" / "resolved.json"
+_WATCHER_PID = Path.home() / ".cognee-plugin" / "watcher.pid"
+_WATCHER_STOP = Path.home() / ".cognee-plugin" / "watcher.stop"
+
+
+def _stop_idle_watcher() -> None:
+    """Signal the idle watcher to exit and drop its pidfile.
+
+    Uses both a sentinel file (safe, polled by the watcher) and a
+    SIGTERM (fast). Either path is sufficient; both together handle
+    the SIGTERM-blocked-during-improve edge case.
+    """
+    try:
+        _WATCHER_STOP.parent.mkdir(parents=True, exist_ok=True)
+        _WATCHER_STOP.write_text("stop", encoding="utf-8")
+    except Exception:
+        pass
+    if _WATCHER_PID.exists():
+        try:
+            pid = int(_WATCHER_PID.read_text(encoding="utf-8").strip())
+            os.kill(pid, signal.SIGTERM)
+        except Exception:
+            pass
 
 
 def _load_resolved() -> tuple:
@@ -43,18 +65,24 @@ async def _resolve_user(user_id: str):
     if user_id:
         try:
             from uuid import UUID
+
             from cognee.modules.users.methods import get_user
+
             user = await get_user(UUID(user_id))
             if user:
                 return user
         except Exception:
             pass
     from cognee.modules.users.methods import get_default_user
+
     return await get_default_user()
 
 
 async def _sync():
     import cognee
+
+    config = load_config()
+    await ensure_cognee_ready(config)
 
     session_id, dataset, user_id = _load_resolved()
     user = await _resolve_user(user_id)
@@ -78,6 +106,10 @@ async def _sync():
 def main():
     # Read stdin (SessionEnd payload) but we only use config for IDs
     sys.stdin.read()
+
+    # Stop the idle watcher first — we're about to run a blocking
+    # improve() ourselves and don't want a racing one from the watcher.
+    _stop_idle_watcher()
 
     try:
         asyncio.run(_sync())

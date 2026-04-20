@@ -21,7 +21,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-
 _CONFIG_DIR = Path.home() / ".cognee-plugin"
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
 
@@ -52,7 +51,6 @@ _ENV_MAP = {
     "LLM_MODEL": "llm_model",
     # Legacy compat
     "COGNEE_SESSION_ID": "_static_session_id",
-    "COGNEE_PLUGIN_DATASET": "dataset",
 }
 
 
@@ -64,8 +62,7 @@ def load_config() -> dict:
     if _CONFIG_FILE.exists():
         try:
             file_cfg = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
-            config.update({k: v for k, v in file_cfg.items()
-                           if v is not None and v != ""})
+            config.update({k: v for k, v in file_cfg.items() if v is not None and v != ""})
         except Exception:
             pass
 
@@ -82,8 +79,9 @@ def save_config(config: dict) -> None:
     """Write config to disk. Creates directory if needed."""
     _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     # Only save non-secret, non-default values
-    to_save = {k: v for k, v in config.items()
-               if not k.startswith("_") and v and v != _DEFAULTS.get(k)}
+    to_save = {
+        k: v for k, v in config.items() if not k.startswith("_") and v and v != _DEFAULTS.get(k)
+    }
     _CONFIG_FILE.write_text(json.dumps(to_save, indent=2), encoding="utf-8")
 
 
@@ -151,18 +149,19 @@ async def ensure_identity(config: dict):
     In local SDK mode (no service_url), falls back to creating a user
     via the SDK directly.
 
-    Returns the agent user_id string.
+    Returns (user_id, api_key) tuple. api_key may be empty in local mode.
     """
     service_url = config.get("service_url", "")
 
     if service_url:
         return await _ensure_identity_via_api(service_url, config)
     else:
-        return await _ensure_identity_via_sdk()
+        user_id = await _ensure_identity_via_sdk()
+        return user_id, ""
 
 
-async def _ensure_identity_via_api(service_url: str, config: dict) -> str:
-    """Register agent via the backend HTTP API."""
+async def _ensure_identity_via_api(service_url: str, config: dict) -> tuple:
+    """Register agent via the backend HTTP API. Returns (user_id, api_key)."""
     import aiohttp
 
     base = service_url.rstrip("/")
@@ -180,12 +179,19 @@ async def _ensure_identity_via_api(service_url: str, config: dict) -> str:
             ) as resp:
                 if resp.status == 201:
                     data = await resp.json()
-                    print(f"cognee-plugin: registered agent {_AGENT_EMAIL} (id={data['id']})", file=sys.stderr)
+                    print(
+                        f"cognee-plugin: registered agent {_AGENT_EMAIL} (id={data['id']})",
+                        file=sys.stderr,
+                    )
                 elif resp.status in (400, 409):
-                    print(f"cognee-plugin: agent {_AGENT_EMAIL} already registered", file=sys.stderr)
+                    print(
+                        f"cognee-plugin: agent {_AGENT_EMAIL} already registered", file=sys.stderr
+                    )
                 else:
                     text = await resp.text()
-                    print(f"cognee-plugin: register warning ({resp.status}: {text})", file=sys.stderr)
+                    print(
+                        f"cognee-plugin: register warning ({resp.status}: {text})", file=sys.stderr
+                    )
         except Exception as e:
             print(f"cognee-plugin: register failed ({e})", file=sys.stderr)
 
@@ -198,12 +204,12 @@ async def _ensure_identity_via_api(service_url: str, config: dict) -> str:
             ) as resp:
                 if resp.status != 200:
                     print(f"cognee-plugin: agent login failed ({resp.status})", file=sys.stderr)
-                    return ""
+                    return "", ""
                 login_data = await resp.json()
                 jwt = login_data["access_token"]
         except Exception as e:
             print(f"cognee-plugin: agent login failed ({e})", file=sys.stderr)
-            return ""
+            return "", ""
 
         # 3. Check if agent already has an API key
         try:
@@ -218,10 +224,14 @@ async def _ensure_identity_via_api(service_url: str, config: dict) -> str:
                         if agent_key:
                             # Reconnect serve() with agent's own API key
                             import cognee
+
                             await cognee.disconnect()
                             await cognee.serve(url=service_url, api_key=agent_key)
-                            print(f"cognee-plugin: connected as agent (key={agent_key[:8]}...)", file=sys.stderr)
-                            return _get_user_id_from_jwt(jwt)
+                            print(
+                                f"cognee-plugin: connected as agent (key={agent_key[:8]}...)",
+                                file=sys.stderr,
+                            )
+                            return _get_user_id_from_jwt(jwt), agent_key
         except Exception:
             pass
 
@@ -237,17 +247,24 @@ async def _ensure_identity_via_api(service_url: str, config: dict) -> str:
                     agent_key = key_data["key"]
                     # Reconnect serve() with agent's own API key
                     import cognee
+
                     await cognee.disconnect()
                     await cognee.serve(url=service_url, api_key=agent_key)
-                    print(f"cognee-plugin: created agent API key (key={agent_key[:8]}...)", file=sys.stderr)
-                    return _get_user_id_from_jwt(jwt)
+                    print(
+                        f"cognee-plugin: created agent API key (key={agent_key[:8]}...)",
+                        file=sys.stderr,
+                    )
+                    return _get_user_id_from_jwt(jwt), agent_key
                 else:
                     text = await resp.text()
-                    print(f"cognee-plugin: API key creation failed ({resp.status}: {text})", file=sys.stderr)
+                    print(
+                        f"cognee-plugin: API key creation failed ({resp.status}: {text})",
+                        file=sys.stderr,
+                    )
         except Exception as e:
             print(f"cognee-plugin: API key creation failed ({e})", file=sys.stderr)
 
-    return ""
+    return "", ""
 
 
 def _get_user_id_from_jwt(jwt: str) -> str:
@@ -288,17 +305,28 @@ async def _ensure_identity_via_sdk() -> str:
         return ""
 
 
+_RESOLVED_CACHE_PATH = Path.home() / ".cognee-plugin" / "resolved.json"
+
+
 async def ensure_cognee_ready(config: dict) -> None:
     """Configure cognee for the active mode (cloud or local).
 
-    Call once per session (in SessionStart). Subsequent scripts
-    in the same process inherit the configuration.
+    In cloud mode, loads the cached API key from resolved.json (written
+    by SessionStart) so that hooks running in separate processes can
+    authenticate against the server.
     """
     import cognee
 
     if is_cloud_mode(config):
         url = config["service_url"]
+        # Try config first, then fall back to cached key from SessionStart
         api_key = config.get("api_key", "")
+        if not api_key and _RESOLVED_CACHE_PATH.exists():
+            try:
+                resolved = json.loads(_RESOLVED_CACHE_PATH.read_text(encoding="utf-8"))
+                api_key = resolved.get("api_key", "")
+            except Exception:
+                pass
         kwargs = {"url": url}
         if api_key:
             kwargs["api_key"] = api_key
@@ -315,7 +343,10 @@ def _get_git_branch(cwd: str) -> str:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=cwd, capture_output=True, text=True, timeout=3,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=3,
         )
         if result.returncode == 0:
             branch = result.stdout.strip()
