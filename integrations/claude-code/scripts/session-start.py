@@ -16,29 +16,110 @@ can pick them up without re-computing.
 import asyncio
 import json
 import os
+import signal
+import subprocess
 import sys
 from pathlib import Path
 
 # Add scripts dir to path for config import
 sys.path.insert(0, os.path.dirname(__file__))
 from config import (
-    load_config, get_session_id, get_dataset,
-    ensure_cognee_ready, ensure_identity, save_config,
+    ensure_cognee_ready,
+    ensure_identity,
+    get_dataset,
+    get_session_id,
+    load_config,
+    save_config,
 )
 
-
 _RESOLVED_CACHE = Path.home() / ".cognee-plugin" / "resolved.json"
+_WATCHER_PID = Path.home() / ".cognee-plugin" / "watcher.pid"
+_WATCHER_STOP = Path.home() / ".cognee-plugin" / "watcher.stop"
+_WATCHER_SCRIPT = Path(__file__).with_name("idle-watcher.py")
 
 
-def _write_resolved(session_id: str, dataset: str, user_id: str, cwd: str) -> None:
-    """Cache resolved session ID, dataset, and user ID for other hook scripts."""
+def _watcher_alive() -> bool:
+    if not _WATCHER_PID.exists():
+        return False
+    try:
+        pid = int(_WATCHER_PID.read_text(encoding="utf-8").strip())
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _spawn_idle_watcher(session_id: str, dataset: str, config: dict) -> None:
+    """Launch the idle watcher as a detached background process.
+
+    Idempotent: if a watcher is already alive (from an earlier session
+    on the same machine), we kill it so the new one picks up the new
+    session. Launched with its own session via ``start_new_session=True``
+    so it survives the parent shell closing.
+    """
+    if _watcher_alive():
+        try:
+            pid = int(_WATCHER_PID.read_text(encoding="utf-8").strip())
+            os.kill(pid, signal.SIGTERM)
+        except Exception:
+            pass
+
+    # Clear any stale stop sentinel from a previous run.
+    try:
+        if _WATCHER_STOP.exists():
+            _WATCHER_STOP.unlink()
+    except Exception:
+        pass
+
+    # Only the non-secret surface of config needs to travel — the
+    # watcher re-runs ``ensure_cognee_ready`` on its own.
+    bootstrap = {
+        "session_id": session_id,
+        "dataset": dataset,
+        "config": {
+            "service_url": config.get("service_url", ""),
+            "api_key": config.get("api_key", ""),
+            "llm_api_key": config.get("llm_api_key", ""),
+            "llm_model": config.get("llm_model", ""),
+            "dataset": dataset,
+        },
+    }
+
+    log_path = Path.home() / ".cognee-plugin" / "watcher.log"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_fh = log_path.open("a", encoding="utf-8")
+    except Exception:
+        log_fh = subprocess.DEVNULL
+
+    try:
+        subprocess.Popen(
+            [sys.executable, str(_WATCHER_SCRIPT), json.dumps(bootstrap)],
+            stdin=subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=log_fh,
+            start_new_session=True,
+            close_fds=True,
+        )
+        print("cognee-plugin: idle watcher started", file=sys.stderr)
+    except Exception as e:
+        print(f"cognee-plugin: idle watcher launch failed ({e})", file=sys.stderr)
+
+
+def _write_resolved(
+    session_id: str, dataset: str, user_id: str, cwd: str, api_key: str = ""
+) -> None:
+    """Cache resolved session ID, dataset, user ID, and API key for other hook scripts."""
     _RESOLVED_CACHE.parent.mkdir(parents=True, exist_ok=True)
-    _RESOLVED_CACHE.write_text(json.dumps({
+    data = {
         "session_id": session_id,
         "dataset": dataset,
         "user_id": user_id,
         "cwd": cwd,
-    }, indent=2), encoding="utf-8")
+    }
+    if api_key:
+        data["api_key"] = api_key
+    _RESOLVED_CACHE.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 async def _start():
@@ -56,18 +137,23 @@ async def _start():
 
     # Register agent identity (claude-code@cognee.agent)
     user_id = ""
+    agent_api_key = ""
     try:
-        user_id = await ensure_identity(config)
+        user_id, agent_api_key = await ensure_identity(config)
     except Exception as e:
         print(f"cognee-plugin: identity warning ({e})", file=sys.stderr)
 
     # Write resolved values for other hooks
-    _write_resolved(session_id, dataset, user_id, cwd)
+    _write_resolved(session_id, dataset, user_id, cwd, api_key=agent_api_key)
 
     # Create config file on first run if it doesn't exist
     config_file = Path.home() / ".cognee-plugin" / "config.json"
     if not config_file.exists():
         save_config(config)
+
+    # Launch the idle watcher. If COGNEE_IDLE_DISABLED is set, skip it.
+    if os.environ.get("COGNEE_IDLE_DISABLED", "").lower() not in ("1", "true", "yes"):
+        _spawn_idle_watcher(session_id, dataset, config)
 
     mode = "cloud" if config.get("service_url") else "local"
     print(

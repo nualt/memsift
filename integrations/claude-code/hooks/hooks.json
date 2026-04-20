@@ -20,6 +20,11 @@
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/session-context-lookup.py",
             "timeout": 3,
             "statusMessage": "Searching session memory..."
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/store-user-prompt.py",
+            "async": true
           }
         ]
       }

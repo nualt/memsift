@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Store text into a Cognee session cache (lightweight, no cognify).
+"""Store tool calls and assistant responses into the Cognee session cache.
 
-Usage:
-    echo '{"tool_name":"Read","tool_input":{},"tool_output":"..."}' | python store-to-session.py
-    echo '{"assistant_message":"..."}' | python store-to-session.py --stop
+Routes tool calls to the structured ``TraceEntry`` path (new trace-step
+shape with origin_function / method_params / method_return_value /
+status). Routes the final assistant message on Stop to a ``QAEntry``.
+
+Runs async on the PostToolUse / Stop hooks — fire-and-forget, never
+blocks Claude.
 
 Configuration:
     Uses resolved session ID from SessionStart hook (via ~/.cognee-plugin/resolved.json).
@@ -14,81 +17,213 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime, timezone
-from pathlib import Path
 
-# Add scripts dir to path for config import
+# Add scripts dir to path for helper imports
 sys.path.insert(0, os.path.dirname(__file__))
-from config import load_config, get_session_id, get_dataset
+from _plugin_common import (
+    bump_turn_counter,
+    hook_log,
+    load_resolved,
+    notify,
+    resolve_user,
+    touch_activity,
+)
+from config import ensure_cognee_ready, get_dataset, get_session_id, load_config
+
+# Hard cap per field to avoid ballooning the cache with massive tool outputs.
+_MAX_PARAMS_BYTES = 4000
+_MAX_RETURN_BYTES = 8000
+_MAX_ASSISTANT_BYTES = 8000
 
 
-_RESOLVED_CACHE = Path.home() / ".cognee-plugin" / "resolved.json"
-MAX_TEXT = 4000
+async def _fire_improve_background(dataset: str, session_id: str, user, reason: str) -> None:
+    """Fire-and-forget improve() — intentionally detached from the caller.
 
-
-def _load_resolved() -> tuple:
-    """Load session ID, dataset, and user ID from resolved cache."""
-    if _RESOLVED_CACHE.exists():
-        try:
-            data = json.loads(_RESOLVED_CACHE.read_text(encoding="utf-8"))
-            return data.get("session_id", ""), data.get("dataset", ""), data.get("user_id", "")
-        except Exception:
-            pass
-    config = load_config()
-    return get_session_id(config), get_dataset(config), ""
-
-
-def _build_tool_text(payload: dict) -> str:
-    tool_name = payload.get("tool_name", "unknown")
-    tool_input = json.dumps(payload.get("tool_input", {}))[:MAX_TEXT]
-    tool_response = str(payload.get("tool_output") or payload.get("tool_response", ""))[:MAX_TEXT]
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return f"[category:agent] [{ts}] Tool: {tool_name}\nInput: {tool_input}\nOutput: {tool_response}"
-
-
-def _build_stop_text(payload: dict) -> str:
-    msg = str(payload.get("assistant_message") or payload.get("last_assistant_message", ""))[
-        :MAX_TEXT
-    ]
-    if not msg or msg == "null":
-        return ""
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return f"[category:agent] [{ts}] Assistant response:\n{msg}"
-
-
-async def _resolve_user(user_id: str):
-    """Resolve cached user ID to a User object, or fall back to default."""
-    if user_id:
-        try:
-            from uuid import UUID
-            from cognee.modules.users.methods import get_user
-            user = await get_user(UUID(user_id))
-            if user:
-                return user
-        except Exception:
-            pass
-    from cognee.modules.users.methods import get_default_user
-    return await get_default_user()
-
-
-async def _store(text: str, session_id: str, dataset: str, user_id: str):
-    """Call cognee.remember with session_id for lightweight session storage."""
+    Marked as background on the SDK so it doesn't block the hook's exit
+    path. Failures are logged but never raised.
+    """
     import cognee
 
-    user = await _resolve_user(user_id)
-    result = await cognee.remember(
-        data=text,
-        dataset_name=dataset,
-        session_id=session_id,
-        user=user,
+    try:
+        await cognee.improve(
+            dataset=dataset,
+            session_ids=[session_id],
+            user=user,
+            run_in_background=True,
+        )
+        hook_log("auto_improve_fired", {"reason": reason, "session": session_id})
+        notify(f"auto-improve fired ({reason})")
+    except Exception as exc:
+        hook_log("auto_improve_error", {"reason": reason, "error": str(exc)[:200]})
+
+
+def _truncate_str(value, cap: int) -> str:
+    """Coerce to string and cap at ``cap`` bytes (utf-8), appending ``...`` if truncated."""
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
+    encoded = text.encode("utf-8", errors="replace")
+    if len(encoded) <= cap:
+        return text
+    return encoded[: cap - 3].decode("utf-8", errors="ignore") + "..."
+
+
+def _infer_status(payload: dict) -> tuple[str, str]:
+    """Return (status, error_message) from a PostToolUse payload."""
+    # Claude Code sets tool_response.is_error=True on tool failures; also
+    # check for an explicit 'error' key at the top level.
+    response = payload.get("tool_response") or payload.get("tool_output") or ""
+    if isinstance(response, dict):
+        if response.get("is_error") or response.get("error"):
+            err = response.get("error") or response.get("message") or "Tool reported an error."
+            return "error", _truncate_str(err, 500)
+    if isinstance(payload.get("error"), str) and payload["error"]:
+        return "error", _truncate_str(payload["error"], 500)
+    return "success", ""
+
+
+def _load_session() -> tuple[str, str, str]:
+    """Load session_id, dataset, user_id from resolved cache with fallbacks."""
+    resolved = load_resolved()
+    session_id = resolved.get("session_id", "")
+    dataset = resolved.get("dataset", "")
+    user_id = resolved.get("user_id", "")
+    if not session_id or not dataset:
+        config = load_config()
+        session_id = session_id or get_session_id(config)
+        dataset = dataset or get_dataset(config)
+    return session_id, dataset, user_id
+
+
+async def _store_tool_call(payload: dict) -> None:
+    """Write a PostToolUse event as a TraceEntry."""
+    import cognee
+    from cognee.memory import TraceEntry
+
+    tool_name = payload.get("tool_name", "unknown")
+    tool_input = payload.get("tool_input") or {}
+    tool_output = payload.get("tool_output") or payload.get("tool_response") or ""
+
+    # Suppress self-reference: any Bash call that mentions 'cognee' is
+    # likely the plugin/CLI talking to itself and would recurse.
+    if tool_name == "Bash":
+        cmd = ""
+        if isinstance(tool_input, dict):
+            cmd = str(tool_input.get("command", ""))
+        if "cognee" in cmd:
+            hook_log("skip_self_cognee_bash", {"cmd_prefix": cmd[:80]})
+            return
+
+    status, error_message = _infer_status(payload)
+
+    # Normalize method_params: small structured dict is ideal; fall back
+    # to a truncated-string dict if we got something non-JSON-safe.
+    if isinstance(tool_input, dict):
+        params = {}
+        for k, v in tool_input.items():
+            params[k] = _truncate_str(v, _MAX_PARAMS_BYTES)
+    else:
+        params = {"value": _truncate_str(tool_input, _MAX_PARAMS_BYTES)}
+
+    return_value = _truncate_str(tool_output, _MAX_RETURN_BYTES)
+
+    session_id, dataset, user_id = _load_session()
+    if not session_id:
+        hook_log("no_session_id", {"tool": tool_name})
+        return
+
+    config = load_config()
+    await ensure_cognee_ready(config)
+    user = await resolve_user(user_id)
+
+    entry = TraceEntry(
+        origin_function=tool_name,
+        status=status,
+        method_params=params,
+        method_return_value=return_value,
+        error_message=error_message,
+        # LLM-backed feedback per step is expensive on a busy session —
+        # fall back to the deterministic one-liner. Users who want the
+        # LLM summary can flip this in a future config.
+        generate_feedback_with_llm=False,
     )
 
-    if not result:
-        status = getattr(result, "status", "unknown")
-        print(
-            f"cognee-session: store failed (status={status})",
-            file=sys.stderr,
+    try:
+        result = await cognee.remember(
+            entry,
+            dataset_name=dataset,
+            session_id=session_id,
+            user=user,
         )
+    except Exception as exc:
+        hook_log("trace_store_error", {"tool": tool_name, "error": str(exc)[:200]})
+        notify(f"trace store failed ({exc})")
+        return
+
+    if result:
+        hook_log(
+            "trace_stored",
+            {
+                "tool": tool_name,
+                "status": status,
+                "trace_id": getattr(result, "entry_id", None),
+            },
+        )
+        notify(f"trace stored ({tool_name}, {status})")
+
+        touch_activity()
+        count, should_improve = bump_turn_counter(session_id)
+        if should_improve:
+            await _fire_improve_background(dataset, session_id, user, reason=f"turn_{count}")
+    else:
+        hook_log("trace_store_noresult", {"tool": tool_name})
+
+
+async def _store_assistant_stop(payload: dict) -> None:
+    """Write a Stop-hook payload (final assistant message) as a QAEntry."""
+    import cognee
+    from cognee.memory import QAEntry
+
+    msg = str(payload.get("assistant_message") or payload.get("last_assistant_message") or "")
+    if not msg or msg == "null":
+        return
+
+    msg = _truncate_str(msg, _MAX_ASSISTANT_BYTES)
+
+    session_id, dataset, user_id = _load_session()
+    if not session_id:
+        hook_log("no_session_id", {"event": "stop"})
+        return
+
+    config = load_config()
+    await ensure_cognee_ready(config)
+    user = await resolve_user(user_id)
+
+    # Answer-only QAEntry: we don't have the matching question at Stop
+    # time. Leaving question="" keeps the entry searchable by the
+    # assistant message text.
+    entry = QAEntry(question="", answer=msg, context="")
+
+    try:
+        result = await cognee.remember(
+            entry,
+            dataset_name=dataset,
+            session_id=session_id,
+            user=user,
+        )
+    except Exception as exc:
+        hook_log("stop_store_error", {"error": str(exc)[:200]})
+        notify(f"stop store failed ({exc})")
+        return
+
+    if result:
+        hook_log("stop_stored", {"chars": len(msg), "qa_id": getattr(result, "entry_id", None)})
+        notify(f"assistant message stored ({len(msg)} chars)")
+
+        touch_activity()
+        count, should_improve = bump_turn_counter(session_id)
+        if should_improve:
+            await _fire_improve_background(dataset, session_id, user, reason=f"turn_{count}")
 
 
 def main():
@@ -99,25 +234,17 @@ def main():
     try:
         payload = json.loads(payload_raw)
     except json.JSONDecodeError:
+        hook_log("invalid_payload_json")
         return
 
     is_stop = "--stop" in sys.argv
-
-    # Skip recursive cognee-cli / cognee calls
-    if not is_stop:
-        tool_name = payload.get("tool_name", "")
-        tool_input_str = json.dumps(payload.get("tool_input", {}))
-        if tool_name == "Bash" and "cognee" in tool_input_str:
-            return
-        text = _build_tool_text(payload)
-    else:
-        text = _build_stop_text(payload)
-
-    if not text:
-        return
-
-    session_id, dataset, user_id = _load_resolved()
-    asyncio.run(_store(text, session_id, dataset, user_id))
+    try:
+        if is_stop:
+            asyncio.run(_store_assistant_stop(payload))
+        else:
+            asyncio.run(_store_tool_call(payload))
+    except Exception as exc:
+        hook_log("run_exception", {"stop": is_stop, "error": str(exc)[:200]})
 
 
 if __name__ == "__main__":
