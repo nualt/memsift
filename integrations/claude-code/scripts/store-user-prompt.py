@@ -15,7 +15,14 @@ import sys
 
 # Add scripts dir to path for helper imports
 sys.path.insert(0, os.path.dirname(__file__))
-from _plugin_common import hook_log, load_resolved, notify, resolve_user, touch_activity
+from _plugin_common import (
+    bump_save_counter,
+    hook_log,
+    load_resolved,
+    notify,
+    resolve_user,
+    touch_activity,
+)
 from config import ensure_cognee_ready, get_dataset, get_session_id, load_config
 
 MAX_TEXT = 4000
@@ -68,6 +75,7 @@ async def _store(prompt: str):
             "prompt_stored", {"chars": len(prompt), "qa_id": getattr(result, "entry_id", None)}
         )
         notify(f"user prompt stored ({len(prompt)} chars)")
+        bump_save_counter(session_id, "prompt")
         touch_activity()
 
 

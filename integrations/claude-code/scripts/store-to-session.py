@@ -21,6 +21,7 @@ import sys
 # Add scripts dir to path for helper imports
 sys.path.insert(0, os.path.dirname(__file__))
 from _plugin_common import (
+    bump_save_counter,
     bump_turn_counter,
     hook_log,
     load_resolved,
@@ -39,9 +40,21 @@ _MAX_ASSISTANT_BYTES = 8000
 async def _fire_improve_background(dataset: str, session_id: str, user, reason: str) -> None:
     """Fire-and-forget improve() — intentionally detached from the caller.
 
-    Marked as background on the SDK so it doesn't block the hook's exit
-    path. Failures are logged but never raised.
+    Prefers POST /api/v1/improve against a running backend (avoids the
+    Kuzu single-writer lock). Falls back to the SDK path with
+    ``run_in_background=True`` when no backend is reachable. Failures are
+    logged but never raised.
     """
+    from _plugin_common import improve_via_http  # type: ignore
+
+    try:
+        if improve_via_http(dataset, session_id, run_in_background=True):
+            hook_log("auto_improve_fired", {"reason": reason, "session": session_id, "via": "http"})
+            notify(f"auto-improve fired via HTTP ({reason})")
+            return
+    except Exception as exc:
+        hook_log("auto_improve_http_error", {"reason": reason, "error": str(exc)[:200]})
+
     import cognee
 
     try:
@@ -51,7 +64,7 @@ async def _fire_improve_background(dataset: str, session_id: str, user, reason: 
             user=user,
             run_in_background=True,
         )
-        hook_log("auto_improve_fired", {"reason": reason, "session": session_id})
+        hook_log("auto_improve_fired", {"reason": reason, "session": session_id, "via": "sdk"})
         notify(f"auto-improve fired ({reason})")
     except Exception as exc:
         hook_log("auto_improve_error", {"reason": reason, "error": str(exc)[:200]})
@@ -170,6 +183,7 @@ async def _store_tool_call(payload: dict) -> None:
             },
         )
         notify(f"trace stored ({tool_name}, {status})")
+        bump_save_counter(session_id, "trace")
 
         touch_activity()
         count, should_improve = bump_turn_counter(session_id)
@@ -219,6 +233,7 @@ async def _store_assistant_stop(payload: dict) -> None:
     if result:
         hook_log("stop_stored", {"chars": len(msg), "qa_id": getattr(result, "entry_id", None)})
         notify(f"assistant message stored ({len(msg)} chars)")
+        bump_save_counter(session_id, "answer")
 
         touch_activity()
         count, should_improve = bump_turn_counter(session_id)

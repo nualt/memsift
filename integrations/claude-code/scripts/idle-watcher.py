@@ -81,9 +81,23 @@ def _install_signal_handlers() -> None:
 
 
 async def _improve_once(session_id: str, dataset: str, config: dict) -> bool:
-    """Fire one improve cycle. Returns True on success."""
+    """Fire one improve cycle. Returns True on success.
+
+    Prefers the running backend via HTTP to avoid Kuzu single-writer lock
+    conflicts — the backend server already holds the lock. Falls back to
+    the local SDK when no backend is reachable.
+    """
+    sys.path.insert(0, os.path.dirname(__file__))
     try:
-        sys.path.insert(0, os.path.dirname(__file__))
+        from _plugin_common import improve_via_http  # type: ignore
+
+        if improve_via_http(dataset, session_id, run_in_background=True):
+            _log("improve_via_http", session=session_id, dataset=dataset)
+            return True
+    except Exception as exc:
+        _log("improve_http_check_error", error=str(exc)[:200])
+
+    try:
         from config import ensure_cognee_ready, ensure_identity  # type: ignore
 
         await ensure_cognee_ready(config)
@@ -99,7 +113,7 @@ async def _improve_once(session_id: str, dataset: str, config: dict) -> bool:
             dataset=dataset,
             session_ids=[session_id],
             user=user,
-            run_in_background=False,
+            run_in_background=True,
         )
         return True
     except Exception as exc:

@@ -7,6 +7,12 @@ Calls cognee.improve(session_ids=[...]) to run:
   3. Default enrichment (triplet embeddings)
   4. Sync graph knowledge back into session cache
 
+Execution path:
+    1. If a local backend is running (COGNEE_LOCAL_API_URL or
+       http://localhost:8000), POST to /api/v1/improve so the server
+       — which holds the Kuzu single-writer lock — runs the pipeline.
+    2. Otherwise, fall back to direct cognee.improve() SDK call.
+
 Configuration:
     Uses resolved session ID and dataset from SessionStart hook
     (via ~/.cognee-plugin/resolved.json). Falls back to env vars.
@@ -19,8 +25,9 @@ import signal
 import sys
 from pathlib import Path
 
-# Add scripts dir to path for config import
+# Add scripts dir to path for config/_plugin_common imports
 sys.path.insert(0, os.path.dirname(__file__))
+from _plugin_common import improve_via_http
 from config import ensure_cognee_ready, get_dataset, get_session_id, load_config
 
 _RESOLVED_CACHE = Path.home() / ".cognee-plugin" / "resolved.json"
@@ -81,16 +88,25 @@ async def _resolve_user(user_id: str):
 async def _sync():
     import cognee
 
+    session_id, dataset, user_id = _load_resolved()
+
+    # Prefer the running backend to avoid the Kuzu single-writer lock.
+    if improve_via_http(dataset, session_id, run_in_background=True):
+        print(
+            f"cognee-sync: via HTTP dataset={dataset} session={session_id}",
+            file=sys.stderr,
+        )
+        return
+
+    # Fallback: no backend running → run improve() locally via the SDK.
     config = load_config()
     await ensure_cognee_ready(config)
-
-    session_id, dataset, user_id = _load_resolved()
     user = await _resolve_user(user_id)
 
     result = await cognee.improve(
         dataset=dataset,
         session_ids=[session_id],
-        run_in_background=False,
+        run_in_background=True,
         user=user,
     )
 

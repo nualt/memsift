@@ -8,6 +8,8 @@ they run on every user prompt / tool call.
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -17,6 +19,11 @@ _RESOLVED_CACHE = _PLUGIN_DIR / "resolved.json"
 _HOOK_LOG = _PLUGIN_DIR / "hook.log"
 _COUNTER_FILE = _PLUGIN_DIR / "counter.json"
 _ACTIVITY_FILE = _PLUGIN_DIR / "activity.ts"
+_ACTIVITY_LOG = _PLUGIN_DIR / "activity.log"
+_SAVE_COUNTER = _PLUGIN_DIR / "save_counter.json"
+
+# Save-kinds tracked per turn. Keep this tuple in sync with bump_save_counter callers.
+SAVE_KINDS = ("prompt", "trace", "answer")
 
 # Cap the per-line log size so a noisy tool output doesn't bloat the file.
 _LOG_LINE_CAP = 600
@@ -77,9 +84,70 @@ def hook_log(event: str, detail: Optional[dict] = None) -> None:
         pass
 
 
+def _verbose_enabled() -> bool:
+    return os.environ.get("COGNEE_PLUGIN_VERBOSE", "").lower() in ("1", "true", "yes")
+
+
 def notify(msg: str) -> None:
-    """Print a status line to stderr (shown under the hook's status indicator)."""
-    print(f"cognee-plugin: {msg}", file=sys.stderr)
+    """Print a status line to stderr (shown under the hook's status indicator).
+
+    When ``COGNEE_PLUGIN_VERBOSE=1`` is set, also append a timestamped
+    line to ``~/.cognee-plugin/activity.log`` so saves that happen in
+    async hooks are ``tail -f``-visible (they never surface in the
+    Claude transcript on their own).
+    """
+    line = f"cognee-plugin: {msg}"
+    print(line, file=sys.stderr)
+    if _verbose_enabled():
+        try:
+            _PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with _ACTIVITY_LOG.open("a", encoding="utf-8") as fh:
+                fh.write(f"{ts} {line}\n")
+        except Exception:
+            pass
+
+
+def bump_save_counter(session_id: str, kind: str) -> None:
+    """Record a save of ``kind`` (one of ``SAVE_KINDS``) for this session.
+
+    Used to surface per-turn save volume back to the user through the
+    next UserPromptSubmit's injected context. Cheap, best-effort file IO —
+    never raises.
+    """
+    if not session_id or kind not in SAVE_KINDS:
+        return
+    try:
+        data = json.loads(_SAVE_COUNTER.read_text(encoding="utf-8")) if _SAVE_COUNTER.exists() else {}
+    except Exception:
+        data = {}
+    sess = data.get(session_id) or {k: 0 for k in SAVE_KINDS}
+    sess[kind] = int(sess.get(kind, 0)) + 1
+    data[session_id] = sess
+    try:
+        _PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+        _SAVE_COUNTER.write_text(json.dumps(data), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def read_and_reset_save_counter(session_id: str) -> dict:
+    """Return the save-kind counts accumulated since the last reset, then zero them."""
+    zero = {k: 0 for k in SAVE_KINDS}
+    if not session_id:
+        return zero
+    try:
+        data = json.loads(_SAVE_COUNTER.read_text(encoding="utf-8")) if _SAVE_COUNTER.exists() else {}
+    except Exception:
+        return zero
+    sess = data.get(session_id) or zero
+    data[session_id] = dict(zero)
+    try:
+        _PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+        _SAVE_COUNTER.write_text(json.dumps(data), encoding="utf-8")
+    except Exception:
+        pass
+    return {k: int(sess.get(k, 0)) for k in SAVE_KINDS}
 
 
 def _auto_improve_threshold() -> int:
@@ -132,3 +200,63 @@ def touch_activity() -> None:
         _ACTIVITY_FILE.write_text(str(datetime.now(timezone.utc).timestamp()), encoding="utf-8")
     except Exception:
         pass
+
+
+def _local_api_url() -> str:
+    return os.environ.get("COGNEE_LOCAL_API_URL", "http://localhost:8000")
+
+
+def _backend_reachable(base_url: str, timeout: float = 1.5) -> bool:
+    try:
+        with urllib.request.urlopen(f"{base_url.rstrip('/')}/docs", timeout=timeout) as resp:
+            return 200 <= resp.status < 500
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+
+
+def improve_via_http(
+    dataset: str,
+    session_id: str,
+    run_in_background: bool = False,
+    timeout: float = 600.0,
+) -> bool:
+    """POST /api/v1/improve to the running backend if reachable.
+
+    Returns True on HTTP 2xx, False if the backend is unreachable or the
+    request failed. Callers should fall back to the local SDK path on False.
+
+    Purpose: Kuzu is a single-writer graph DB. When the backend server is
+    running it holds the lock; a second process importing ``cognee.improve()``
+    fails mid-pipeline. Routing through HTTP lets the server — which owns
+    the lock — run improve() in its own process.
+    """
+    base_url = _local_api_url()
+    if not _backend_reachable(base_url):
+        return False
+    url = f"{base_url.rstrip('/')}/api/v1/improve"
+    payload = json.dumps(
+        {
+            "dataset_name": dataset,
+            "session_ids": [session_id],
+            "run_in_background": run_in_background,
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            hook_log(
+                "improve_http_ok",
+                {"status": resp.status, "dataset": dataset, "session": session_id},
+            )
+            return 200 <= resp.status < 300
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        hook_log(
+            "improve_http_failed",
+            {"error": str(exc)[:200], "dataset": dataset, "session": session_id},
+        )
+        return False
