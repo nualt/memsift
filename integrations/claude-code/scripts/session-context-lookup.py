@@ -18,7 +18,13 @@ import sys
 
 # Add scripts dir to path for helper imports
 sys.path.insert(0, os.path.dirname(__file__))
-from _plugin_common import hook_log, load_resolved, notify, read_and_reset_save_counter, resolve_user
+from _plugin_common import (
+    hook_log,
+    load_resolved,
+    notify,
+    read_and_reset_save_counter,
+    resolve_user,
+)
 from config import ensure_cognee_ready, get_session_id, load_config
 
 TOP_K = 5
