@@ -18,7 +18,13 @@ import sys
 
 # Add scripts dir to path for helper imports
 sys.path.insert(0, os.path.dirname(__file__))
-from _plugin_common import hook_log, load_resolved, notify, read_and_reset_save_counter
+from _plugin_common import (
+    hook_log,
+    load_resolved,
+    notify,
+    read_and_reset_save_counter,
+    resolve_user,
+)
 from config import ensure_cognee_ready, get_session_id, load_config
 
 TOP_K = 5
@@ -34,6 +40,10 @@ def _load_session_id() -> str:
         config = load_config()
         session_id = get_session_id(config)
     return session_id
+
+
+def _load_user_id() -> str:
+    return load_resolved().get("user_id", "")
 
 
 def _format_entry(entry: dict) -> str:
@@ -88,22 +98,42 @@ async def _run(prompt: str, out_stream=None):
 
     saves_last_turn = read_and_reset_save_counter(session_id)
 
-    try:
-        results = await cognee.recall(
-            prompt,
-            session_id=session_id,
-            top_k=TOP_K,
-            scope=["session", "trace", "graph_context", "graph"],
-            only_context=True,
-            query_type=SearchType.GRAPH_COMPLETION,
-        )
-    except Exception as exc:
-        hook_log("recall_error", {"error": str(exc)[:200]})
-        results = []
+    user = await resolve_user(_load_user_id())
+
+    # Run scopes independently: a failure in one (e.g. graph search hitting an
+    # empty/locked Ladybug DB) must not discard hits already collected from the
+    # others. cognee.recall loops over scopes and re-raises on the first failure,
+    # so we call it once per scope and collect whatever succeeds.
+    results: list = []
+    scope_specs = [
+        (["session"], None),
+        (["trace"], None),
+        (["graph_context"], None),
+        (["graph"], SearchType.GRAPH_COMPLETION),
+    ]
+    for scope_list, qtype in scope_specs:
+        try:
+            part = await cognee.recall(
+                prompt,
+                session_id=session_id,
+                top_k=TOP_K,
+                scope=scope_list,
+                only_context=True,
+                query_type=qtype,
+                user=user,
+            )
+            if part:
+                results.extend(part)
+        except Exception as exc:
+            hook_log("recall_error", {"scope": scope_list, "error": str(exc)[:200]})
 
     # Bucket results by _source for human-readable output.
+    # Local SDK mode returns Pydantic models (ResponseQAEntry, etc.); cloud
+    # mode returns plain dicts via HTTP. Normalize to dicts here.
     by_source: dict[str, list] = {"session": [], "trace": [], "graph_context": []}
     for r in results or []:
+        if hasattr(r, "model_dump"):
+            r = r.model_dump()
         if not isinstance(r, dict):
             continue
         src = r.get("source", "session")
