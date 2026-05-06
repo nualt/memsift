@@ -17,10 +17,11 @@
     "agents"
   ],
   "skills": "./skills/",
+  "hooks": "./hooks.json",
   "interface": {
     "displayName": "Cognee",
-    "shortDescription": "Use Cognee from Codex through the cognee CLI.",
-    "longDescription": "Reusable Codex skills for running Cognee's CLI workflows: configure local or cloud Cognee, remember and recall knowledge, ingest codebases, manage datasets, and launch the local UI with cognee-cli -ui. This plugin intentionally does not configure MCP.",
+    "shortDescription": "Use Cognee from Codex with automatic memory capture and recall.",
+    "longDescription": "Reusable Codex skills for running Cognee's CLI workflows plus hooks that automatically capture Codex session starts, user prompts, tool results, and assistant stops into Cognee session memory, then recall relevant context on each prompt. This plugin intentionally does not configure MCP.",
     "developerName": "Topoteretes",
     "category": "Engineering",
     "capabilities": [
@@ -32,7 +33,7 @@
     "defaultPrompt": [
       "Use Cognee CLI to remember the important context in this repo.",
       "Use Cognee CLI to recall what we know about this feature.",
-      "Launch the local Cognee UI with the CLI and check its health."
+      "Check that Codex session events are reaching Cognee."
     ],
     "brandColor": "#6510F4"
   }
