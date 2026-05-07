@@ -160,6 +160,8 @@ async def _main_loop(session_id: str, dataset: str, config: dict) -> None:
             if ok:
                 last_improved_at = time.time()
                 _log("bridge_done")
+                exit_reason = "bridge_complete"
+                break
 
         await asyncio.sleep(POLL_SECONDS)
 
