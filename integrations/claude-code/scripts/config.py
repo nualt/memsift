@@ -23,6 +23,7 @@ from typing import Optional
 
 _CONFIG_DIR = Path.home() / ".cognee-plugin"
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
+_BRIDGE_STATE_FILE = _CONFIG_DIR / "bridge_state.json"
 
 _DEFAULTS = {
     "dataset": "claude_sessions",
@@ -361,14 +362,12 @@ async def ensure_cognee_ready(config: dict) -> None:
 
 
 async def ensure_dataset_ready(dataset: str, user) -> None:
-    """Ensure the user can write to the dataset before session improve().
+    """Ensure the user can write to the dataset before session bridging.
 
-    Cognee's improve(session_ids=[...]) bridges cached session entries
-    before the default enrichment stage. On a fresh local install, that
-    bridge can run before the dataset has been created, causing the
-    session persistence stages to no-op with permission errors. Use
-    Cognee's own pipeline resolver so dataset creation and ACL grants
-    follow the SDK's normal path.
+    On a fresh local install, session bridging can run before the dataset
+    has been created, causing persistence to no-op with permission
+    errors. Use Cognee's own pipeline resolver so dataset creation and
+    ACL grants follow the SDK's normal path.
 
     Cognee 1.0.8's session/trace persistence pipelines call memify()
     without forwarding their user argument. In local plugin processes,
@@ -387,10 +386,62 @@ async def ensure_dataset_ready(dataset: str, user) -> None:
     await resolve_authorized_user_datasets(dataset, user=user)
 
 
+async def sync_graph_context_to_session(dataset: str, session_id: str, user) -> dict:
+    """Sync permanent graph context into one session without full improve().
+
+    ``cognee.improve(session_ids=[...])`` also persists session cache
+    entries. The integration already does that explicitly via
+    ``persist_session_cache_to_graph()``, so call only Cognee's final
+    graph-context sync step to keep recall working without duplicating
+    session documents or holding the DB lock for the full improve path.
+    """
+    if not session_id or not user:
+        return {"synced": 0}
+
+    from cognee.modules.pipelines.layers.resolve_authorized_user_datasets import (
+        resolve_authorized_user_datasets,
+    )
+    from cognee.tasks.memify.sync_graph_to_session import sync_graph_to_session
+
+    _, authorized_datasets = await resolve_authorized_user_datasets(dataset, user=user)
+    if not authorized_datasets:
+        return {"synced": 0}
+
+    return await sync_graph_to_session(
+        user_id=str(user.id),
+        session_id=session_id,
+        dataset_id=authorized_datasets[0].id,
+        dataset_name=dataset,
+    )
+
+
 def _read_field(entry, field: str) -> str:
     if isinstance(entry, dict):
         return str(entry.get(field) or "")
     return str(getattr(entry, field, "") or "")
+
+
+def _load_bridge_state() -> dict:
+    try:
+        return json.loads(_BRIDGE_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_bridge_state(state: dict) -> None:
+    try:
+        _BRIDGE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _BRIDGE_STATE_FILE.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _bridge_state_key(dataset: str, session_id: str, user_id: str, kind: str) -> str:
+    return hashlib.sha256(f"{user_id}:{dataset}:{session_id}:{kind}".encode()).hexdigest()
+
+
+def _content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 async def persist_session_cache_to_graph(dataset: str, session_id: str, user) -> bool:
@@ -416,6 +467,8 @@ async def persist_session_cache_to_graph(dataset: str, session_id: str, user) ->
         return False
 
     wrote = False
+    bridge_state = _load_bridge_state()
+    state_changed = False
 
     qa_entries = await session_manager.get_session(
         user_id=user_id,
@@ -434,8 +487,18 @@ async def persist_session_cache_to_graph(dataset: str, session_id: str, user) ->
             qa_lines.append("")
     qa_text = "\n".join(qa_lines).strip()
     if qa_text:
+        qa_document = f"Session ID: {session_id}\n\n{qa_text}"
+        qa_key = _bridge_state_key(dataset, session_id, user_id, "qa")
+        qa_hash = _content_hash(qa_document)
+        if bridge_state.get(qa_key) == qa_hash:
+            qa_text = ""
+        else:
+            bridge_state[qa_key] = qa_hash
+            state_changed = True
+
+    if qa_text:
         await cognee.remember(
-            f"Session ID: {session_id}\n\n{qa_text}",
+            qa_document,
             dataset_name=dataset,
             node_set=["user_sessions_from_cache"],
             self_improvement=False,
@@ -450,8 +513,18 @@ async def persist_session_cache_to_graph(dataset: str, session_id: str, user) ->
     )
     trace_text = "\n".join(str(value).strip() for value in trace_values or [] if str(value).strip())
     if trace_text:
+        trace_document = f"Session ID: {session_id}\n\n{trace_text}"
+        trace_key = _bridge_state_key(dataset, session_id, user_id, "trace")
+        trace_hash = _content_hash(trace_document)
+        if bridge_state.get(trace_key) == trace_hash:
+            trace_text = ""
+        else:
+            bridge_state[trace_key] = trace_hash
+            state_changed = True
+
+    if trace_text:
         await cognee.remember(
-            f"Session ID: {session_id}\n\n{trace_text}",
+            trace_document,
             dataset_name=dataset,
             node_set=["agent_trace_feedbacks"],
             self_improvement=False,
@@ -459,6 +532,9 @@ async def persist_session_cache_to_graph(dataset: str, session_id: str, user) ->
             user=user,
         )
         wrote = True
+
+    if state_changed:
+        _save_bridge_state(bridge_state)
 
     return wrote
 

@@ -1,17 +1,9 @@
 #!/usr/bin/env python3
 """Bridge session cache entries into the permanent knowledge graph on session end.
 
-Calls cognee.improve(session_ids=[...]) to run:
-  1. Apply feedback weights from session scores
-  2. Persist session Q&A into the permanent graph
-  3. Default enrichment (triplet embeddings)
-  4. Sync graph knowledge back into session cache
-
-Execution path:
-    1. If a local backend is running (COGNEE_LOCAL_API_URL or
-       http://localhost:8000), POST to /api/v1/improve so the server
-       — which holds the Kuzu single-writer lock — runs the pipeline.
-    2. Otherwise, fall back to direct cognee.improve() SDK call.
+Runs the integration's explicit session bridge:
+  1. Persist session Q&A/trace cache into the permanent graph
+  2. Sync graph knowledge back into the session cache for recall
 
 Configuration:
     Uses resolved session ID and dataset from SessionStart hook
@@ -28,7 +20,7 @@ from pathlib import Path
 
 # Add scripts dir to path for config/_plugin_common imports
 sys.path.insert(0, os.path.dirname(__file__))
-from _plugin_common import hook_log, improve_via_http, sync_lock
+from _plugin_common import hook_log, sync_lock
 from config import (
     ensure_cognee_ready,
     ensure_dataset_ready,
@@ -36,6 +28,7 @@ from config import (
     get_session_id,
     load_config,
     persist_session_cache_to_graph,
+    sync_graph_context_to_session,
 )
 
 _RESOLVED_CACHE = Path.home() / ".cognee-plugin" / "resolved.json"
@@ -140,8 +133,6 @@ async def _resolve_user(user_id: str):
 
 
 async def _sync(stop_watcher: bool):
-    import cognee
-
     session_id, dataset, user_id = _load_resolved()
     hook_log(
         "sync_start",
@@ -158,37 +149,28 @@ async def _sync(stop_watcher: bool):
             _stop_idle_watcher()
             hook_log("sync_stopped_watcher", {"session": session_id, "dataset": dataset})
 
-        # Prefer the running backend to avoid the Kuzu single-writer lock.
-        if improve_via_http(dataset, session_id, run_in_background=False):
-            hook_log("sync_http_done", {"session": session_id, "dataset": dataset})
-            print(
-                f"cognee-sync: via HTTP dataset={dataset} session={session_id}",
-                file=sys.stderr,
-            )
-            return
-
-        # Fallback: no backend running → run improve() locally via the SDK.
         config = load_config()
         await ensure_cognee_ready(config)
         user = await _resolve_user(user_id)
         await ensure_dataset_ready(dataset, user)
-        await persist_session_cache_to_graph(dataset, session_id, user)
+        wrote = await persist_session_cache_to_graph(dataset, session_id, user)
+        graph_result = await sync_graph_context_to_session(dataset, session_id, user)
 
-        result = await cognee.improve(
-            dataset=dataset,
-            session_ids=[session_id],
-            run_in_background=False,
-            user=user,
+        hook_log(
+            "sync_bridge_done",
+            {
+                "session": session_id,
+                "dataset": dataset,
+                "wrote": wrote,
+                "graph_synced": graph_result.get("synced", 0),
+            },
         )
-
-        hook_log("sync_sdk_done", {"session": session_id, "dataset": dataset})
-        # Log summary to stderr (visible in hook output, not in Claude's context)
-        if result and isinstance(result, dict):
-            for ds_id, run_info in result.items():
-                status = getattr(run_info, "status", "unknown")
-                print(f"cognee-sync: dataset={ds_id} status={status}", file=sys.stderr)
-        else:
-            print(f"cognee-sync: dataset={dataset} session={session_id} completed", file=sys.stderr)
+        print(
+            "cognee-sync: "
+            f"dataset={dataset} session={session_id} wrote={wrote} "
+            f"graph_synced={graph_result.get('synced', 0)}",
+            file=sys.stderr,
+        )
 
 
 def main():

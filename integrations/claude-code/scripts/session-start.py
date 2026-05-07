@@ -80,8 +80,6 @@ def _spawn_idle_watcher(session_id: str, dataset: str, config: dict) -> None:
         "dataset": dataset,
         "config": {
             "service_url": config.get("service_url", ""),
-            "api_key": config.get("api_key", ""),
-            "llm_api_key": config.get("llm_api_key", ""),
             "llm_model": config.get("llm_model", ""),
             "dataset": dataset,
         },

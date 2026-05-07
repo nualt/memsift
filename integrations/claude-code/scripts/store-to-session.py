@@ -36,6 +36,7 @@ from config import (
     get_session_id,
     load_config,
     persist_session_cache_to_graph,
+    sync_graph_context_to_session,
 )
 
 # Hard cap per field to avoid ballooning the cache with massive tool outputs.
@@ -45,39 +46,23 @@ _MAX_ASSISTANT_BYTES = 8000
 
 
 async def _fire_improve_background(dataset: str, session_id: str, user, reason: str) -> None:
-    """Fire-and-forget improve() — intentionally detached from the caller.
-
-    Prefers POST /api/v1/improve against a running backend (avoids the
-    Kuzu single-writer lock). Falls back to the local SDK path in the
-    current process when no backend is reachable, so Cognee's session
-    persistence stages keep the resolved user/write-permission context.
-    Failures are logged but never raised.
-    """
-    from _plugin_common import improve_via_http  # type: ignore
-
-    try:
-        if improve_via_http(dataset, session_id, run_in_background=True):
-            hook_log("auto_improve_fired", {"reason": reason, "session": session_id, "via": "http"})
-            notify(f"auto-improve fired via HTTP ({reason})")
-            return
-    except Exception as exc:
-        hook_log("auto_improve_http_error", {"reason": reason, "error": str(exc)[:200]})
-
-    import cognee
-
+    """Fire-and-forget session bridge; failures are logged but never raised."""
     try:
         await ensure_dataset_ready(dataset, user)
-        await persist_session_cache_to_graph(dataset, session_id, user)
-        await cognee.improve(
-            dataset=dataset,
-            session_ids=[session_id],
-            user=user,
-            run_in_background=True,
+        wrote = await persist_session_cache_to_graph(dataset, session_id, user)
+        graph_result = await sync_graph_context_to_session(dataset, session_id, user)
+        hook_log(
+            "auto_bridge_fired",
+            {
+                "reason": reason,
+                "session": session_id,
+                "wrote": wrote,
+                "graph_synced": graph_result.get("synced", 0),
+            },
         )
-        hook_log("auto_improve_fired", {"reason": reason, "session": session_id, "via": "sdk"})
-        notify(f"auto-improve fired ({reason})")
+        notify(f"session bridge persisted ({reason})")
     except Exception as exc:
-        hook_log("auto_improve_error", {"reason": reason, "error": str(exc)[:200]})
+        hook_log("auto_bridge_error", {"reason": reason, "error": str(exc)[:200]})
 
 
 def _truncate_str(value, cap: int) -> str:
