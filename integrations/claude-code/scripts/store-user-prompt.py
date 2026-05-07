@@ -63,6 +63,7 @@ async def _store(prompt: str):
             entry,
             dataset_name=dataset,
             session_id=session_id,
+            self_improvement=False,
             user=user,
         )
     except Exception as exc:

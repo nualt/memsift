@@ -29,7 +29,14 @@ from _plugin_common import (
     resolve_user,
     touch_activity,
 )
-from config import ensure_cognee_ready, get_dataset, get_session_id, load_config
+from config import (
+    ensure_cognee_ready,
+    ensure_dataset_ready,
+    get_dataset,
+    get_session_id,
+    load_config,
+    persist_session_cache_to_graph,
+)
 
 # Hard cap per field to avoid ballooning the cache with massive tool outputs.
 _MAX_PARAMS_BYTES = 4000
@@ -41,9 +48,10 @@ async def _fire_improve_background(dataset: str, session_id: str, user, reason: 
     """Fire-and-forget improve() — intentionally detached from the caller.
 
     Prefers POST /api/v1/improve against a running backend (avoids the
-    Kuzu single-writer lock). Falls back to the SDK path with
-    ``run_in_background=True`` when no backend is reachable. Failures are
-    logged but never raised.
+    Kuzu single-writer lock). Falls back to the local SDK path in the
+    current process when no backend is reachable, so Cognee's session
+    persistence stages keep the resolved user/write-permission context.
+    Failures are logged but never raised.
     """
     from _plugin_common import improve_via_http  # type: ignore
 
@@ -58,6 +66,8 @@ async def _fire_improve_background(dataset: str, session_id: str, user, reason: 
     import cognee
 
     try:
+        await ensure_dataset_ready(dataset, user)
+        await persist_session_cache_to_graph(dataset, session_id, user)
         await cognee.improve(
             dataset=dataset,
             session_ids=[session_id],
@@ -166,6 +176,7 @@ async def _store_tool_call(payload: dict) -> None:
             entry,
             dataset_name=dataset,
             session_id=session_id,
+            self_improvement=False,
             user=user,
         )
     except Exception as exc:
@@ -223,6 +234,7 @@ async def _store_assistant_stop(payload: dict) -> None:
             entry,
             dataset_name=dataset,
             session_id=session_id,
+            self_improvement=False,
             user=user,
         )
     except Exception as exc:

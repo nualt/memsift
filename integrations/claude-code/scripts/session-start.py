@@ -23,8 +23,10 @@ from pathlib import Path
 
 # Add scripts dir to path for config import
 sys.path.insert(0, os.path.dirname(__file__))
+from _plugin_common import touch_activity
 from config import (
     ensure_cognee_ready,
+    ensure_dataset_ready,
     ensure_identity,
     get_dataset,
     get_session_id,
@@ -143,6 +145,17 @@ async def _start(out_stream=None):
     except Exception as e:
         print(f"cognee-plugin: identity warning ({e})", file=sys.stderr)
 
+    try:
+        if user_id:
+            from uuid import UUID
+
+            from cognee.modules.users.methods import get_user
+
+            user = await get_user(UUID(user_id))
+            await ensure_dataset_ready(dataset, user)
+    except Exception as e:
+        print(f"cognee-plugin: dataset warning ({e})", file=sys.stderr)
+
     # Write resolved values for other hooks
     _write_resolved(session_id, dataset, user_id, cwd, api_key=agent_api_key)
 
@@ -150,6 +163,11 @@ async def _start(out_stream=None):
     config_file = Path.home() / ".cognee-plugin" / "config.json"
     if not config_file.exists():
         save_config(config)
+
+    # Reset the idle clock for this Claude process before the watcher
+    # starts, otherwise a stale timestamp from a prior session can cause
+    # an immediate improve on startup.
+    touch_activity()
 
     # Launch the idle watcher. If COGNEE_IDLE_DISABLED is set, skip it.
     if os.environ.get("COGNEE_IDLE_DISABLED", "").lower() not in ("1", "true", "yes"):

@@ -84,6 +84,18 @@ def _format_entry(entry: dict) -> str:
     return "\n".join(lines)
 
 
+def _has_entry_content(entry: dict) -> bool:
+    """Return True when a recall entry has useful content to inject."""
+    source = entry.get("source", "")
+    if source == "graph_context":
+        return bool(str(entry.get("content", "") or entry.get("text", "")).strip())
+    if source == "trace":
+        fields = ("origin_function", "status", "session_feedback", "method_return_value")
+    else:
+        fields = ("question", "answer")
+    return any(str(entry.get(field, "") or "").strip() for field in fields)
+
+
 async def _run(prompt: str, out_stream=None):
     import cognee
     from cognee.modules.search.types import SearchType
@@ -142,6 +154,8 @@ async def _run(prompt: str, out_stream=None):
         if src == "graph":
             r["source"] = "graph_context"
             src = "graph_context"
+        if not _has_entry_content(r):
+            continue
         by_source.setdefault(src, []).append(r)
 
     counts = {k: len(v) for k, v in by_source.items()}

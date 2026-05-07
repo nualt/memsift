@@ -10,6 +10,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -21,6 +22,7 @@ _COUNTER_FILE = _PLUGIN_DIR / "counter.json"
 _ACTIVITY_FILE = _PLUGIN_DIR / "activity.ts"
 _ACTIVITY_LOG = _PLUGIN_DIR / "activity.log"
 _SAVE_COUNTER = _PLUGIN_DIR / "save_counter.json"
+_SYNC_LOCK = _PLUGIN_DIR / "sync.lock"
 
 # Save-kinds tracked per turn. Keep this tuple in sync with bump_save_counter callers.
 SAVE_KINDS = ("prompt", "trace", "answer")
@@ -30,6 +32,7 @@ _LOG_LINE_CAP = 600
 
 # Default auto-improve threshold (tool calls + stops). Env override.
 AUTO_IMPROVE_EVERY_DEFAULT = 30
+SYNC_LOCK_STALE_SECONDS = 15 * 60
 
 
 def load_resolved() -> dict:
@@ -206,6 +209,52 @@ def touch_activity() -> None:
         pass
 
 
+@contextmanager
+def sync_lock(owner: str):
+    """Best-effort cross-hook lock for graph sync/improve work."""
+    acquired = False
+    try:
+        _PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc).timestamp()
+        if _SYNC_LOCK.exists():
+            try:
+                current = json.loads(_SYNC_LOCK.read_text(encoding="utf-8"))
+                created_at = float(current.get("created_at", 0))
+                pid = int(current.get("pid", 0))
+            except Exception:
+                created_at = 0
+                pid = 0
+            pid_alive = False
+            if pid > 0:
+                try:
+                    os.kill(pid, 0)
+                    pid_alive = True
+                except PermissionError:
+                    pid_alive = True
+                except OSError:
+                    pid_alive = False
+            if not pid_alive or now - created_at > SYNC_LOCK_STALE_SECONDS:
+                try:
+                    _SYNC_LOCK.unlink()
+                except Exception:
+                    pass
+        try:
+            fd = os.open(str(_SYNC_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump({"owner": owner, "pid": os.getpid(), "created_at": now}, fh)
+            acquired = True
+            yield True
+        except FileExistsError:
+            hook_log("sync_lock_busy", {"owner": owner})
+            yield False
+    finally:
+        if acquired:
+            try:
+                _SYNC_LOCK.unlink()
+            except Exception:
+                pass
+
+
 def _local_api_url() -> str:
     return os.environ.get("COGNEE_LOCAL_API_URL", "http://localhost:8000")
 
@@ -226,8 +275,9 @@ def improve_via_http(
 ) -> bool:
     """POST /api/v1/improve to the running backend if reachable.
 
-    Returns True on HTTP 2xx, False if the backend is unreachable or the
-    request failed. Callers should fall back to the local SDK path on False.
+    Returns True on HTTP 2xx, False if the backend is unreachable, the
+    plugin has no cached agent API key, or the request failed. Callers
+    should fall back to the local SDK path on False.
 
     Purpose: Kuzu is a single-writer graph DB. When the backend server is
     running it holds the lock; a second process importing ``cognee.improve()``
@@ -236,6 +286,13 @@ def improve_via_http(
     """
     base_url = _local_api_url()
     if not _backend_reachable(base_url):
+        return False
+    api_key = load_resolved().get("api_key", "") or os.environ.get("COGNEE_API_KEY", "")
+    if not api_key:
+        hook_log(
+            "improve_http_skipped_no_api_key",
+            {"dataset": dataset, "session": session_id},
+        )
         return False
     url = f"{base_url.rstrip('/')}/api/v1/improve"
     payload = json.dumps(
@@ -248,7 +305,10 @@ def improve_via_http(
     req = urllib.request.Request(
         url,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "X-Api-Key": api_key,
+        },
         method="POST",
     )
     try:

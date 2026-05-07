@@ -21,6 +21,7 @@ import os
 import signal
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
 
@@ -89,48 +90,70 @@ async def _improve_once(session_id: str, dataset: str, config: dict) -> bool:
     """
     sys.path.insert(0, os.path.dirname(__file__))
     try:
-        from _plugin_common import improve_via_http  # type: ignore
+        from _plugin_common import improve_via_http, sync_lock  # type: ignore
 
-        if improve_via_http(dataset, session_id, run_in_background=True):
-            _log("improve_via_http", session=session_id, dataset=dataset)
+        lock = sync_lock("idle-watcher")
+    except Exception as exc:
+        _log("sync_lock_import_error", error=str(exc)[:200])
+        lock = nullcontext(True)
+
+    with lock as acquired:
+        if not acquired:
+            _log("improve_skipped_lock_busy", session=session_id, dataset=dataset)
+            return False
+
+        try:
+            if improve_via_http(dataset, session_id, run_in_background=True):
+                _log("improve_via_http", session=session_id, dataset=dataset)
+                return True
+        except Exception as exc:
+            _log("improve_http_check_error", error=str(exc)[:200])
+
+        try:
+            from config import (  # type: ignore
+                ensure_cognee_ready,
+                ensure_dataset_ready,
+                ensure_identity,
+                persist_session_cache_to_graph,
+            )
+
+            await ensure_cognee_ready(config)
+            user_id, _ = await ensure_identity(config)
+
+            from uuid import UUID
+
+            import cognee
+            from cognee.modules.users.methods import get_user
+
+            user = await get_user(UUID(user_id)) if user_id else None
+            if user:
+                await ensure_dataset_ready(dataset, user)
+                await persist_session_cache_to_graph(dataset, session_id, user)
+            await cognee.improve(
+                dataset=dataset,
+                session_ids=[session_id],
+                user=user,
+                run_in_background=False,
+            )
             return True
-    except Exception as exc:
-        _log("improve_http_check_error", error=str(exc)[:200])
-
-    try:
-        from config import ensure_cognee_ready, ensure_identity  # type: ignore
-
-        await ensure_cognee_ready(config)
-        user_id, _ = await ensure_identity(config)
-
-        from uuid import UUID
-
-        import cognee
-        from cognee.modules.users.methods import get_user
-
-        user = await get_user(UUID(user_id)) if user_id else None
-        await cognee.improve(
-            dataset=dataset,
-            session_ids=[session_id],
-            user=user,
-            run_in_background=True,
-        )
-        return True
-    except Exception as exc:
-        _log("improve_error", error=str(exc)[:300])
-        return False
+        except Exception as exc:
+            _log("improve_error", error=str(exc)[:300])
+            return False
 
 
 async def _main_loop(session_id: str, dataset: str, config: dict) -> None:
     _log("started", session=session_id, dataset=dataset, poll=POLL_SECONDS, idle=IDLE_SECONDS)
     last_improved_at = 0.0
+    exit_reason = "loop_complete"
 
     while not _should_stop:
         if _STOPFILE.exists():
             _log("stop_sentinel_seen")
+            exit_reason = "stop_sentinel"
             break
         if not _owns_pidfile():
             _log("pidfile_replaced")
+            exit_reason = "pidfile_replaced"
             break
 
         now = time.time()
@@ -150,7 +173,20 @@ async def _main_loop(session_id: str, dataset: str, config: dict) -> None:
 
         await asyncio.sleep(POLL_SECONDS)
 
-    _log("exiting")
+    if _should_stop:
+        exit_reason = "signal"
+
+    ts = _read_activity_ts()
+    if exit_reason in {"signal", "stop_sentinel"} and ts and ts > last_improved_at:
+        _log("shutdown_trigger", reason=exit_reason, activity_age=round(time.time() - ts, 1))
+        ok = await _improve_once(session_id, dataset, config)
+        if ok:
+            last_improved_at = time.time()
+            _log("shutdown_improve_done")
+        else:
+            _log("shutdown_improve_failed")
+
+    _log("exiting", reason=exit_reason)
     try:
         if _owns_pidfile():
             _PIDFILE.unlink()

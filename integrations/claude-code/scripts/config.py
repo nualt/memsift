@@ -360,6 +360,109 @@ async def ensure_cognee_ready(config: dict) -> None:
     print("cognee-plugin: local databases ready", file=sys.stderr)
 
 
+async def ensure_dataset_ready(dataset: str, user) -> None:
+    """Ensure the user can write to the dataset before session improve().
+
+    Cognee's improve(session_ids=[...]) bridges cached session entries
+    before the default enrichment stage. On a fresh local install, that
+    bridge can run before the dataset has been created, causing the
+    session persistence stages to no-op with permission errors. Use
+    Cognee's own pipeline resolver so dataset creation and ACL grants
+    follow the SDK's normal path.
+
+    Cognee 1.0.8's session/trace persistence pipelines call memify()
+    without forwarding their user argument. In local plugin processes,
+    make the resolved agent the process-local default user too, so those
+    nested calls resolve the same write permissions.
+    """
+    from cognee.base_config import get_base_config
+    from cognee.modules.pipelines.layers.resolve_authorized_user_datasets import (
+        resolve_authorized_user_datasets,
+    )
+
+    email = getattr(user, "email", "")
+    if email:
+        get_base_config().default_user_email = email
+
+    await resolve_authorized_user_datasets(dataset, user=user)
+
+
+def _read_field(entry, field: str) -> str:
+    if isinstance(entry, dict):
+        return str(entry.get(field) or "")
+    return str(getattr(entry, field, "") or "")
+
+
+async def persist_session_cache_to_graph(dataset: str, session_id: str, user) -> bool:
+    """Persist cached session QA/trace text to the permanent graph.
+
+    This is a local-mode compatibility bridge for Cognee 1.0.8. The SDK's
+    built-in session persistence can complete without extracting entries
+    from the file-system cache in the Claude plugin setup. Reading the same
+    cache directly here keeps the integration useful while still using
+    cognee.remember() for the actual add+cognify pipeline.
+    """
+    if not session_id or not user:
+        return False
+
+    import cognee
+    from cognee.infrastructure.session.get_session_manager import get_session_manager
+
+    await ensure_dataset_ready(dataset, user)
+
+    user_id = str(user.id)
+    session_manager = get_session_manager()
+    if not session_manager.is_available:
+        return False
+
+    wrote = False
+
+    qa_entries = await session_manager.get_session(
+        user_id=user_id,
+        session_id=session_id,
+        formatted=False,
+    )
+    qa_lines: list[str] = []
+    for entry in qa_entries or []:
+        question = _read_field(entry, "question").strip()
+        answer = _read_field(entry, "answer").strip()
+        if question:
+            qa_lines.append(f"Question: {question}")
+        if answer:
+            qa_lines.append(f"Answer: {answer}")
+        if question or answer:
+            qa_lines.append("")
+    qa_text = "\n".join(qa_lines).strip()
+    if qa_text:
+        await cognee.remember(
+            f"Session ID: {session_id}\n\n{qa_text}",
+            dataset_name=dataset,
+            node_set=["user_sessions_from_cache"],
+            self_improvement=False,
+            run_in_background=False,
+            user=user,
+        )
+        wrote = True
+
+    trace_values = await session_manager.get_agent_trace_feedback(
+        user_id=user_id,
+        session_id=session_id,
+    )
+    trace_text = "\n".join(str(value).strip() for value in trace_values or [] if str(value).strip())
+    if trace_text:
+        await cognee.remember(
+            f"Session ID: {session_id}\n\n{trace_text}",
+            dataset_name=dataset,
+            node_set=["agent_trace_feedbacks"],
+            self_improvement=False,
+            run_in_background=False,
+            user=user,
+        )
+        wrote = True
+
+    return wrote
+
+
 def _get_git_branch(cwd: str) -> str:
     """Get current git branch, or empty string if not a git repo."""
     try:
