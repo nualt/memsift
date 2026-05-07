@@ -27,9 +27,11 @@ from _plugin_common import touch_activity
 from config import (
     ensure_cognee_ready,
     ensure_dataset_ready,
+    ensure_dataset_ready_via_api,
     ensure_identity,
     get_dataset,
     get_session_id,
+    is_cloud_mode,
     load_config,
     save_config,
 )
@@ -144,7 +146,13 @@ async def _start(out_stream=None):
         print(f"cognee-plugin: identity warning ({e})", file=sys.stderr)
 
     try:
-        if user_id:
+        if user_id and is_cloud_mode(config):
+            await ensure_dataset_ready_via_api(
+                config.get("service_url", ""),
+                agent_api_key or config.get("api_key", ""),
+                dataset,
+            )
+        elif user_id:
             from uuid import UUID
 
             from cognee.modules.users.methods import get_user

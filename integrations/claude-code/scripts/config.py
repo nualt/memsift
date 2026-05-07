@@ -223,11 +223,6 @@ async def _ensure_identity_via_api(service_url: str, config: dict) -> tuple:
                     if keys:
                         agent_key = keys[0].get("key", "")
                         if agent_key:
-                            # Reconnect serve() with agent's own API key
-                            import cognee
-
-                            await cognee.disconnect()
-                            await cognee.serve(url=service_url, api_key=agent_key)
                             print(
                                 f"cognee-plugin: connected as agent (key={agent_key[:8]}...)",
                                 file=sys.stderr,
@@ -246,11 +241,6 @@ async def _ensure_identity_via_api(service_url: str, config: dict) -> tuple:
                 if resp.status == 200:
                     key_data = await resp.json()
                     agent_key = key_data["key"]
-                    # Reconnect serve() with agent's own API key
-                    import cognee
-
-                    await cognee.disconnect()
-                    await cognee.serve(url=service_url, api_key=agent_key)
                     print(
                         f"cognee-plugin: created agent API key (key={agent_key[:8]}...)",
                         file=sys.stderr,
@@ -266,6 +256,27 @@ async def _ensure_identity_via_api(service_url: str, config: dict) -> tuple:
             print(f"cognee-plugin: API key creation failed ({e})", file=sys.stderr)
 
     return "", ""
+
+
+async def ensure_dataset_ready_via_api(service_url: str, api_key: str, dataset: str) -> None:
+    """Ensure the remote backend has the dataset for the authenticated agent.
+
+    This mirrors local SDK mode's ``ensure_dataset_ready(dataset, user)``:
+    the backend creates or returns the dataset and grants permissions to
+    the API-key user.
+    """
+    if not service_url or not api_key or not dataset:
+        return
+
+    import aiohttp
+
+    base = service_url.rstrip("/")
+    async with aiohttp.ClientSession(headers={"X-Api-Key": api_key}) as session:
+        async with session.post(f"{base}/api/v1/datasets", json={"name": dataset}) as resp:
+            if resp.status in (200, 201):
+                return
+            text = await resp.text()
+            raise RuntimeError(f"remote dataset ensure failed ({resp.status}: {text[:200]})")
 
 
 def _get_user_id_from_jwt(jwt: str) -> str:
@@ -333,24 +344,19 @@ async def ensure_cognee_ready(config: dict) -> None:
     fresh virtualenv has its databases/tables before identity, recall, or
     session writes touch them.
     """
-    import cognee
-
     if is_cloud_mode(config):
         url = config["service_url"]
-        # Try config first, then fall back to cached key from SessionStart
-        api_key = config.get("api_key", "")
-        if not api_key and _RESOLVED_CACHE_PATH.exists():
-            try:
-                resolved = json.loads(_RESOLVED_CACHE_PATH.read_text(encoding="utf-8"))
-                api_key = resolved.get("api_key", "")
-            except Exception:
-                pass
-        kwargs = {"url": url}
-        if api_key:
-            kwargs["api_key"] = api_key
-        await cognee.serve(**kwargs)
+        import aiohttp
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{url.rstrip('/')}/health") as resp:
+                if resp.status >= 400:
+                    text = await resp.text()
+                    raise RuntimeError(f"backend health check failed ({resp.status}: {text[:200]})")
         print(f"cognee-plugin: connected to {url}", file=sys.stderr)
         return
+
+    import cognee
 
     if config.get("llm_api_key"):
         cognee.config.set_llm_api_key(config["llm_api_key"])

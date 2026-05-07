@@ -20,12 +20,13 @@ from pathlib import Path
 
 # Add scripts dir to path for config/_plugin_common imports
 sys.path.insert(0, os.path.dirname(__file__))
-from _plugin_common import hook_log, sync_lock
+from _plugin_common import hook_log, persist_session_cache_to_graph_via_http, sync_lock
 from config import (
     ensure_cognee_ready,
     ensure_dataset_ready,
     get_dataset,
     get_session_id,
+    is_cloud_mode,
     load_config,
     persist_session_cache_to_graph,
     sync_graph_context_to_session,
@@ -150,6 +151,19 @@ async def _sync(stop_watcher: bool):
             hook_log("sync_stopped_watcher", {"session": session_id, "dataset": dataset})
 
         config = load_config()
+        if is_cloud_mode(config):
+            wrote = persist_session_cache_to_graph_via_http(dataset, session_id)
+            hook_log(
+                "sync_bridge_done",
+                {"session": session_id, "dataset": dataset, "via": "http_remember", "wrote": wrote},
+            )
+            print(
+                "cognee-sync: "
+                f"dataset={dataset} session={session_id} via=http_remember wrote={wrote}",
+                file=sys.stderr,
+            )
+            return
+
         await ensure_cognee_ready(config)
         user = await _resolve_user(user_id)
         await ensure_dataset_ready(dataset, user)

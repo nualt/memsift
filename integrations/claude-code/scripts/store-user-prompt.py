@@ -18,14 +18,16 @@ from pathlib import Path
 # Add scripts dir to path for helper imports
 sys.path.insert(0, os.path.dirname(__file__))
 from _plugin_common import (
+    append_http_bridge_entry,
     bump_save_counter,
     hook_log,
     load_resolved,
     notify,
+    remember_entry_via_http,
     resolve_user,
     touch_activity,
 )
-from config import ensure_cognee_ready, get_dataset, get_session_id, load_config
+from config import ensure_cognee_ready, get_dataset, get_session_id, is_cloud_mode, load_config
 
 MAX_TEXT = 4000
 _WATCHER_PID = Path.home() / ".cognee-plugin" / "watcher.pid"
@@ -101,9 +103,6 @@ def _ensure_idle_watcher(session_id: str, dataset: str, config: dict) -> None:
 
 
 async def _store(prompt: str):
-    import cognee
-    from cognee.memory import QAEntry
-
     session_id, dataset, user_id = _load_session()
     if not session_id:
         hook_log("no_session_id", {"event": "prompt"})
@@ -114,30 +113,41 @@ async def _store(prompt: str):
     _ensure_idle_watcher(session_id, dataset, config)
 
     await ensure_cognee_ready(config)
-    user = await resolve_user(user_id)
 
     # Question-only QAEntry: the answer fills in on the Stop hook as
     # a separate entry. Keeping the prompt in the `question` field
     # lets recall's tokenizer search it naturally.
-    entry = QAEntry(question=prompt[:MAX_TEXT], answer="", context="")
+    entry = {"type": "qa", "question": prompt[:MAX_TEXT], "answer": "", "context": ""}
 
     try:
-        result = await cognee.remember(
-            entry,
-            dataset_name=dataset,
-            session_id=session_id,
-            self_improvement=False,
-            user=user,
-        )
+        if is_cloud_mode(config):
+            result = remember_entry_via_http(dataset, session_id, entry)
+        else:
+            import cognee
+            from cognee.memory import QAEntry
+
+            user = await resolve_user(user_id)
+            result = await cognee.remember(
+                QAEntry(**entry),
+                dataset_name=dataset,
+                session_id=session_id,
+                self_improvement=False,
+                user=user,
+            )
     except Exception as exc:
         hook_log("prompt_store_error", {"error": str(exc)[:200]})
         notify(f"prompt store failed ({exc})")
         return
 
     if result:
-        hook_log(
-            "prompt_stored", {"chars": len(prompt), "qa_id": getattr(result, "entry_id", None)}
+        if is_cloud_mode(config):
+            append_http_bridge_entry(dataset, session_id, question=prompt[:MAX_TEXT])
+        qa_id = (
+            result.get("entry_id")
+            if isinstance(result, dict)
+            else getattr(result, "entry_id", None)
         )
+        hook_log("prompt_stored", {"chars": len(prompt), "qa_id": qa_id})
         notify(f"user prompt stored ({len(prompt)} chars)")
         bump_save_counter(session_id, "prompt")
 

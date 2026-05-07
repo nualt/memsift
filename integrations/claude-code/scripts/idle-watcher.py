@@ -85,7 +85,10 @@ async def _improve_once(session_id: str, dataset: str, config: dict) -> bool:
     """Fire one session bridge cycle. Returns True on success."""
     sys.path.insert(0, os.path.dirname(__file__))
     try:
-        from _plugin_common import sync_lock  # type: ignore
+        from _plugin_common import (  # type: ignore
+            persist_session_cache_to_graph_via_http,
+            sync_lock,
+        )
 
         lock = sync_lock("idle-watcher")
     except Exception as exc:
@@ -102,9 +105,21 @@ async def _improve_once(session_id: str, dataset: str, config: dict) -> bool:
                 ensure_cognee_ready,
                 ensure_dataset_ready,
                 ensure_identity,
+                is_cloud_mode,
                 persist_session_cache_to_graph,
                 sync_graph_context_to_session,
             )
+
+            if is_cloud_mode(config):
+                wrote = persist_session_cache_to_graph_via_http(dataset, session_id)
+                _log(
+                    "session_bridge_done",
+                    session=session_id,
+                    dataset=dataset,
+                    via="http_remember",
+                    wrote=wrote,
+                )
+                return True
 
             await ensure_cognee_ready(config)
             user_id, _ = await ensure_identity(config)
