@@ -1,17 +1,9 @@
 #!/usr/bin/env python3
 """Bridge session cache entries into the permanent knowledge graph on session end.
 
-Calls cognee.improve(session_ids=[...]) to run:
-  1. Apply feedback weights from session scores
-  2. Persist session Q&A into the permanent graph
-  3. Default enrichment (triplet embeddings)
-  4. Sync graph knowledge back into session cache
-
-Execution path:
-    1. If a local backend is running (COGNEE_LOCAL_API_URL or
-       http://localhost:8000), POST to /api/v1/improve so the server
-       — which holds the Kuzu single-writer lock — runs the pipeline.
-    2. Otherwise, fall back to direct cognee.improve() SDK call.
+Runs the integration's explicit session bridge:
+  1. Persist session Q&A/trace cache into the permanent graph
+  2. Sync graph knowledge back into the session cache for recall
 
 Configuration:
     Uses resolved session ID and dataset from SessionStart hook
@@ -22,17 +14,28 @@ import asyncio
 import json
 import os
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
 # Add scripts dir to path for config/_plugin_common imports
 sys.path.insert(0, os.path.dirname(__file__))
-from _plugin_common import improve_via_http
-from config import ensure_cognee_ready, get_dataset, get_session_id, load_config
+from _plugin_common import hook_log, persist_session_cache_to_graph_via_http, sync_lock
+from config import (
+    ensure_cognee_ready,
+    ensure_dataset_ready,
+    get_dataset,
+    get_session_id,
+    is_cloud_mode,
+    load_config,
+    persist_session_cache_to_graph,
+    sync_graph_context_to_session,
+)
 
 _RESOLVED_CACHE = Path.home() / ".cognee-plugin" / "resolved.json"
 _WATCHER_PID = Path.home() / ".cognee-plugin" / "watcher.pid"
 _WATCHER_STOP = Path.home() / ".cognee-plugin" / "watcher.stop"
+_DETACHED_ARG = "--detached-final"
 
 
 def _stop_idle_watcher() -> None:
@@ -53,6 +56,51 @@ def _stop_idle_watcher() -> None:
             os.kill(pid, signal.SIGTERM)
         except Exception:
             pass
+
+
+def _spawn_detached_sync() -> bool:
+    """Run the expensive sync outside Claude's short SessionEnd hook window."""
+    try:
+        subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), _DETACHED_ARG],
+            cwd=os.getcwd(),
+            env=os.environ.copy(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return True
+    except Exception as exc:
+        hook_log("sync_detach_failed", {"error": str(exc)[:300]})
+        return False
+
+
+def _is_session_end_payload(payload_raw: str) -> bool:
+    """Return True only for an actual Claude Code SessionEnd hook payload."""
+    if not payload_raw.strip():
+        return False
+    try:
+        payload = json.loads(payload_raw)
+    except json.JSONDecodeError:
+        return False
+
+    def _contains_session_end(value) -> bool:
+        if isinstance(value, dict):
+            return any(_contains_session_end(item) for item in value.values())
+        if isinstance(value, list):
+            return any(_contains_session_end(item) for item in value)
+        if isinstance(value, str):
+            return value == "SessionEnd" or value.endswith(".SessionEnd")
+        return False
+
+    event = (
+        payload.get("hook_event_name")
+        or payload.get("hookEventName")
+        or payload.get("event")
+        or payload.get("hook")
+    )
+    return event == "SessionEnd" or _contains_session_end(payload)
 
 
 def _load_resolved() -> tuple:
@@ -85,52 +133,87 @@ async def _resolve_user(user_id: str):
     return await get_default_user()
 
 
-async def _sync():
-    import cognee
-
+async def _sync(stop_watcher: bool):
     session_id, dataset, user_id = _load_resolved()
-
-    # Prefer the running backend to avoid the Kuzu single-writer lock.
-    if improve_via_http(dataset, session_id, run_in_background=True):
-        print(
-            f"cognee-sync: via HTTP dataset={dataset} session={session_id}",
-            file=sys.stderr,
-        )
-        return
-
-    # Fallback: no backend running → run improve() locally via the SDK.
-    config = load_config()
-    await ensure_cognee_ready(config)
-    user = await _resolve_user(user_id)
-
-    result = await cognee.improve(
-        dataset=dataset,
-        session_ids=[session_id],
-        run_in_background=True,
-        user=user,
+    hook_log(
+        "sync_start",
+        {"session": session_id, "dataset": dataset, "stop_watcher": stop_watcher},
     )
 
-    # Log summary to stderr (visible in hook output, not in Claude's context)
-    if result and isinstance(result, dict):
-        for ds_id, run_info in result.items():
-            status = getattr(run_info, "status", "unknown")
-            print(f"cognee-sync: dataset={ds_id} status={status}", file=sys.stderr)
-    else:
-        print(f"cognee-sync: dataset={dataset} session={session_id} completed", file=sys.stderr)
+    with sync_lock("sync-session-to-graph") as acquired:
+        if not acquired:
+            hook_log("sync_skipped_lock_busy", {"session": session_id, "dataset": dataset})
+            print("cognee-sync: skipped, another sync is running", file=sys.stderr)
+            return
+
+        if stop_watcher:
+            _stop_idle_watcher()
+            hook_log("sync_stopped_watcher", {"session": session_id, "dataset": dataset})
+
+        config = load_config()
+        if is_cloud_mode(config):
+            wrote = persist_session_cache_to_graph_via_http(dataset, session_id)
+            hook_log(
+                "sync_bridge_done",
+                {"session": session_id, "dataset": dataset, "via": "http_remember", "wrote": wrote},
+            )
+            print(
+                "cognee-sync: "
+                f"dataset={dataset} session={session_id} via=http_remember wrote={wrote}",
+                file=sys.stderr,
+            )
+            return
+
+        await ensure_cognee_ready(config)
+        user = await _resolve_user(user_id)
+        await ensure_dataset_ready(dataset, user)
+        wrote = await persist_session_cache_to_graph(dataset, session_id, user)
+        graph_result = await sync_graph_context_to_session(dataset, session_id, user)
+
+        hook_log(
+            "sync_bridge_done",
+            {
+                "session": session_id,
+                "dataset": dataset,
+                "wrote": wrote,
+                "graph_synced": graph_result.get("synced", 0),
+            },
+        )
+        print(
+            "cognee-sync: "
+            f"dataset={dataset} session={session_id} wrote={wrote} "
+            f"graph_synced={graph_result.get('synced', 0)}",
+            file=sys.stderr,
+        )
 
 
 def main():
-    # Read stdin (SessionEnd payload) but we only use config for IDs
-    sys.stdin.read()
+    detached_final = _DETACHED_ARG in sys.argv
+    payload_raw = "" if detached_final else sys.stdin.read()
+    is_session_end = _is_session_end_payload(payload_raw)
+    hook_log(
+        "sync_payload",
+        {
+            "is_session_end": is_session_end,
+            "detached_final": detached_final,
+            "payload_preview": payload_raw[:200],
+        },
+    )
 
-    # Stop the idle watcher first — we're about to run a blocking
-    # improve() ourselves and don't want a racing one from the watcher.
-    _stop_idle_watcher()
+    # Only a true SessionEnd should stop the watcher. Manual syncs and
+    # slash-command invocations happen mid-session, and killing the watcher
+    # there prevents later idle persistence.
+    if is_session_end:
+        spawned = _spawn_detached_sync()
+        _stop_idle_watcher()
+        hook_log("sync_deferred_to_shutdown_worker", {"spawned": spawned})
+        return
 
     try:
-        asyncio.run(_sync())
+        asyncio.run(_sync(stop_watcher=False))
     except Exception as exc:
         # Non-fatal: session sync failure should not crash Claude Code
+        hook_log("sync_failed", {"error": str(exc)[:300]})
         print(f"cognee-sync: failed ({exc})", file=sys.stderr)
 
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Idle watcher daemon — triggers ``cognee.improve()`` on quiet sessions.
+"""Idle watcher daemon — persists quiet sessions into Cognee.
 
 Launched detached from ``session-start.py``. Polls
 ``~/.cognee-plugin/activity.ts`` every ``POLL_SECONDS``. When the last
-activity is older than ``IDLE_SECONDS`` and we haven't improved since
-that point, fires ``cognee.improve(session_ids=[session_id])``.
+activity is older than ``IDLE_SECONDS`` and we haven't bridged since
+that point, persists the session cache and refreshes graph context.
 
 Stops cleanly on:
   * ``~/.cognee-plugin/watcher.stop`` sentinel file.
@@ -21,12 +21,13 @@ import os
 import signal
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
 
 # Tunable via env. Defaults chosen to avoid thrashing the LLM: 60s idle
 # threshold means you have to actively pause a full minute, and the 20s
-# improve cooldown prevents back-to-back runs when activity is sporadic.
+# bridge cooldown prevents back-to-back runs when activity is sporadic.
 POLL_SECONDS = float(os.environ.get("COGNEE_IDLE_POLL", "10"))
 IDLE_SECONDS = float(os.environ.get("COGNEE_IDLE_THRESHOLD", "60"))
 IMPROVE_COOLDOWN = float(os.environ.get("COGNEE_IMPROVE_COOLDOWN", "120"))
@@ -81,56 +82,83 @@ def _install_signal_handlers() -> None:
 
 
 async def _improve_once(session_id: str, dataset: str, config: dict) -> bool:
-    """Fire one improve cycle. Returns True on success.
-
-    Prefers the running backend via HTTP to avoid Kuzu single-writer lock
-    conflicts — the backend server already holds the lock. Falls back to
-    the local SDK when no backend is reachable.
-    """
+    """Fire one session bridge cycle. Returns True on success."""
     sys.path.insert(0, os.path.dirname(__file__))
     try:
-        from _plugin_common import improve_via_http  # type: ignore
-
-        if improve_via_http(dataset, session_id, run_in_background=True):
-            _log("improve_via_http", session=session_id, dataset=dataset)
-            return True
-    except Exception as exc:
-        _log("improve_http_check_error", error=str(exc)[:200])
-
-    try:
-        from config import ensure_cognee_ready, ensure_identity  # type: ignore
-
-        await ensure_cognee_ready(config)
-        user_id, _ = await ensure_identity(config)
-
-        from uuid import UUID
-
-        import cognee
-        from cognee.modules.users.methods import get_user
-
-        user = await get_user(UUID(user_id)) if user_id else None
-        await cognee.improve(
-            dataset=dataset,
-            session_ids=[session_id],
-            user=user,
-            run_in_background=True,
+        from _plugin_common import (  # type: ignore
+            persist_session_cache_to_graph_via_http,
+            sync_lock,
         )
-        return True
+
+        lock = sync_lock("idle-watcher")
     except Exception as exc:
-        _log("improve_error", error=str(exc)[:300])
-        return False
+        _log("sync_lock_import_error", error=str(exc)[:200])
+        lock = nullcontext(True)
+
+    with lock as acquired:
+        if not acquired:
+            _log("bridge_skipped_lock_busy", session=session_id, dataset=dataset)
+            return False
+
+        try:
+            from config import (  # type: ignore
+                ensure_cognee_ready,
+                ensure_dataset_ready,
+                ensure_identity,
+                is_cloud_mode,
+                persist_session_cache_to_graph,
+                sync_graph_context_to_session,
+            )
+
+            if is_cloud_mode(config):
+                wrote = persist_session_cache_to_graph_via_http(dataset, session_id)
+                _log(
+                    "session_bridge_done",
+                    session=session_id,
+                    dataset=dataset,
+                    via="http_remember",
+                    wrote=wrote,
+                )
+                return True
+
+            await ensure_cognee_ready(config)
+            user_id, _ = await ensure_identity(config)
+
+            from uuid import UUID
+
+            from cognee.modules.users.methods import get_user
+
+            user = await get_user(UUID(user_id)) if user_id else None
+            if user:
+                await ensure_dataset_ready(dataset, user)
+                wrote = await persist_session_cache_to_graph(dataset, session_id, user)
+                graph_result = await sync_graph_context_to_session(dataset, session_id, user)
+                _log(
+                    "session_bridge_done",
+                    session=session_id,
+                    dataset=dataset,
+                    wrote=wrote,
+                    graph_synced=graph_result.get("synced", 0),
+                )
+            return True
+        except Exception as exc:
+            _log("bridge_error", error=str(exc)[:300])
+            return False
 
 
 async def _main_loop(session_id: str, dataset: str, config: dict) -> None:
     _log("started", session=session_id, dataset=dataset, poll=POLL_SECONDS, idle=IDLE_SECONDS)
     last_improved_at = 0.0
+    exit_reason = "loop_complete"
 
     while not _should_stop:
         if _STOPFILE.exists():
             _log("stop_sentinel_seen")
+            exit_reason = "stop_sentinel"
             break
         if not _owns_pidfile():
             _log("pidfile_replaced")
+            exit_reason = "pidfile_replaced"
             break
 
         now = time.time()
@@ -146,11 +174,26 @@ async def _main_loop(session_id: str, dataset: str, config: dict) -> None:
             ok = await _improve_once(session_id, dataset, config)
             if ok:
                 last_improved_at = time.time()
-                _log("improve_done")
+                _log("bridge_done")
+                exit_reason = "bridge_complete"
+                break
 
         await asyncio.sleep(POLL_SECONDS)
 
-    _log("exiting")
+    if _should_stop:
+        exit_reason = "signal"
+
+    ts = _read_activity_ts()
+    if exit_reason in {"signal", "stop_sentinel"} and ts and ts > last_improved_at:
+        _log("shutdown_trigger", reason=exit_reason, activity_age=round(time.time() - ts, 1))
+        ok = await _improve_once(session_id, dataset, config)
+        if ok:
+            last_improved_at = time.time()
+            _log("shutdown_bridge_done")
+        else:
+            _log("shutdown_bridge_failed")
+
+    _log("exiting", reason=exit_reason)
     try:
         if _owns_pidfile():
             _PIDFILE.unlink()
@@ -173,7 +216,13 @@ def main():
 
     session_id = bootstrap.get("session_id", "")
     dataset = bootstrap.get("dataset", "claude_sessions")
-    config = bootstrap.get("config", {})
+    try:
+        from config import load_config  # type: ignore
+
+        config = load_config()
+        config.update({k: v for k, v in bootstrap.get("config", {}).items() if v})
+    except Exception:
+        config = bootstrap.get("config", {})
     if not session_id:
         _log("fatal_no_session_id")
         sys.exit(1)

@@ -23,9 +23,10 @@ from _plugin_common import (
     load_resolved,
     notify,
     read_and_reset_save_counter,
+    recall_via_http,
     resolve_user,
 )
-from config import ensure_cognee_ready, get_session_id, load_config
+from config import ensure_cognee_ready, get_session_id, is_cloud_mode, load_config
 
 TOP_K = 5
 TRUNCATE_ANSWER = 500
@@ -84,10 +85,19 @@ def _format_entry(entry: dict) -> str:
     return "\n".join(lines)
 
 
-async def _run(prompt: str, out_stream=None):
-    import cognee
-    from cognee.modules.search.types import SearchType
+def _has_entry_content(entry: dict) -> bool:
+    """Return True when a recall entry has useful content to inject."""
+    source = entry.get("source", "")
+    if source == "graph_context":
+        return bool(str(entry.get("content", "") or entry.get("text", "")).strip())
+    if source == "trace":
+        fields = ("origin_function", "status", "session_feedback", "method_return_value")
+    else:
+        fields = ("question", "answer")
+    return any(str(entry.get(field, "") or "").strip() for field in fields)
 
+
+async def _run(prompt: str, out_stream=None):
     config = load_config()
     await ensure_cognee_ready(config)
 
@@ -98,8 +108,6 @@ async def _run(prompt: str, out_stream=None):
 
     saves_last_turn = read_and_reset_save_counter(session_id)
 
-    user = await resolve_user(_load_user_id())
-
     # Run scopes independently: a failure in one (e.g. graph search hitting an
     # empty/locked Ladybug DB) must not discard hits already collected from the
     # others. cognee.recall loops over scopes and re-raises on the first failure,
@@ -109,19 +117,37 @@ async def _run(prompt: str, out_stream=None):
         (["session"], None),
         (["trace"], None),
         (["graph_context"], None),
-        (["graph"], SearchType.GRAPH_COMPLETION),
+        (["graph"], "GRAPH_COMPLETION"),
     ]
+    cloud_mode = is_cloud_mode(config)
+    if not cloud_mode:
+        import cognee
+        from cognee.modules.search.types import SearchType
+
+        user = await resolve_user(_load_user_id())
+
     for scope_list, qtype in scope_specs:
         try:
-            part = await cognee.recall(
-                prompt,
-                session_id=session_id,
-                top_k=TOP_K,
-                scope=scope_list,
-                only_context=True,
-                query_type=qtype,
-                user=user,
-            )
+            if cloud_mode:
+                part = recall_via_http(
+                    prompt,
+                    session_id=session_id,
+                    top_k=TOP_K,
+                    scope=scope_list,
+                    only_context=True,
+                    search_type=qtype,
+                )
+            else:
+                query_type = SearchType.GRAPH_COMPLETION if qtype == "GRAPH_COMPLETION" else None
+                part = await cognee.recall(
+                    prompt,
+                    session_id=session_id,
+                    top_k=TOP_K,
+                    scope=scope_list,
+                    only_context=True,
+                    query_type=query_type,
+                    user=user,
+                )
             if part:
                 results.extend(part)
         except Exception as exc:
@@ -142,6 +168,8 @@ async def _run(prompt: str, out_stream=None):
         if src == "graph":
             r["source"] = "graph_context"
             src = "graph_context"
+        if not _has_entry_content(r):
+            continue
         by_source.setdefault(src, []).append(r)
 
     counts = {k: len(v) for k, v in by_source.items()}

@@ -23,6 +23,7 @@ from typing import Optional
 
 _CONFIG_DIR = Path.home() / ".cognee-plugin"
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
+_BRIDGE_STATE_FILE = _CONFIG_DIR / "bridge_state.json"
 
 _DEFAULTS = {
     "dataset": "claude_sessions",
@@ -222,11 +223,6 @@ async def _ensure_identity_via_api(service_url: str, config: dict) -> tuple:
                     if keys:
                         agent_key = keys[0].get("key", "")
                         if agent_key:
-                            # Reconnect serve() with agent's own API key
-                            import cognee
-
-                            await cognee.disconnect()
-                            await cognee.serve(url=service_url, api_key=agent_key)
                             print(
                                 f"cognee-plugin: connected as agent (key={agent_key[:8]}...)",
                                 file=sys.stderr,
@@ -245,11 +241,6 @@ async def _ensure_identity_via_api(service_url: str, config: dict) -> tuple:
                 if resp.status == 200:
                     key_data = await resp.json()
                     agent_key = key_data["key"]
-                    # Reconnect serve() with agent's own API key
-                    import cognee
-
-                    await cognee.disconnect()
-                    await cognee.serve(url=service_url, api_key=agent_key)
                     print(
                         f"cognee-plugin: created agent API key (key={agent_key[:8]}...)",
                         file=sys.stderr,
@@ -265,6 +256,27 @@ async def _ensure_identity_via_api(service_url: str, config: dict) -> tuple:
             print(f"cognee-plugin: API key creation failed ({e})", file=sys.stderr)
 
     return "", ""
+
+
+async def ensure_dataset_ready_via_api(service_url: str, api_key: str, dataset: str) -> None:
+    """Ensure the remote backend has the dataset for the authenticated agent.
+
+    This mirrors local SDK mode's ``ensure_dataset_ready(dataset, user)``:
+    the backend creates or returns the dataset and grants permissions to
+    the API-key user.
+    """
+    if not service_url or not api_key or not dataset:
+        return
+
+    import aiohttp
+
+    base = service_url.rstrip("/")
+    async with aiohttp.ClientSession(headers={"X-Api-Key": api_key}) as session:
+        async with session.post(f"{base}/api/v1/datasets", json={"name": dataset}) as resp:
+            if resp.status in (200, 201):
+                return
+            text = await resp.text()
+            raise RuntimeError(f"remote dataset ensure failed ({resp.status}: {text[:200]})")
 
 
 def _get_user_id_from_jwt(jwt: str) -> str:
@@ -332,24 +344,19 @@ async def ensure_cognee_ready(config: dict) -> None:
     fresh virtualenv has its databases/tables before identity, recall, or
     session writes touch them.
     """
-    import cognee
-
     if is_cloud_mode(config):
         url = config["service_url"]
-        # Try config first, then fall back to cached key from SessionStart
-        api_key = config.get("api_key", "")
-        if not api_key and _RESOLVED_CACHE_PATH.exists():
-            try:
-                resolved = json.loads(_RESOLVED_CACHE_PATH.read_text(encoding="utf-8"))
-                api_key = resolved.get("api_key", "")
-            except Exception:
-                pass
-        kwargs = {"url": url}
-        if api_key:
-            kwargs["api_key"] = api_key
-        await cognee.serve(**kwargs)
+        import aiohttp
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{url.rstrip('/')}/health") as resp:
+                if resp.status >= 400:
+                    text = await resp.text()
+                    raise RuntimeError(f"backend health check failed ({resp.status}: {text[:200]})")
         print(f"cognee-plugin: connected to {url}", file=sys.stderr)
         return
+
+    import cognee
 
     if config.get("llm_api_key"):
         cognee.config.set_llm_api_key(config["llm_api_key"])
@@ -358,6 +365,184 @@ async def ensure_cognee_ready(config: dict) -> None:
 
     await _ensure_local_databases()
     print("cognee-plugin: local databases ready", file=sys.stderr)
+
+
+async def ensure_dataset_ready(dataset: str, user) -> None:
+    """Ensure the user can write to the dataset before session bridging.
+
+    On a fresh local install, session bridging can run before the dataset
+    has been created, causing persistence to no-op with permission
+    errors. Use Cognee's own pipeline resolver so dataset creation and
+    ACL grants follow the SDK's normal path.
+
+    Cognee 1.0.8's session/trace persistence pipelines call memify()
+    without forwarding their user argument. In local plugin processes,
+    make the resolved agent the process-local default user too, so those
+    nested calls resolve the same write permissions.
+    """
+    from cognee.base_config import get_base_config
+    from cognee.modules.pipelines.layers.resolve_authorized_user_datasets import (
+        resolve_authorized_user_datasets,
+    )
+
+    email = getattr(user, "email", "")
+    if email:
+        get_base_config().default_user_email = email
+
+    await resolve_authorized_user_datasets(dataset, user=user)
+
+
+async def sync_graph_context_to_session(dataset: str, session_id: str, user) -> dict:
+    """Sync permanent graph context into one session without full improve().
+
+    ``cognee.improve(session_ids=[...])`` also persists session cache
+    entries. The integration already does that explicitly via
+    ``persist_session_cache_to_graph()``, so call only Cognee's final
+    graph-context sync step to keep recall working without duplicating
+    session documents or holding the DB lock for the full improve path.
+    """
+    if not session_id or not user:
+        return {"synced": 0}
+
+    from cognee.modules.pipelines.layers.resolve_authorized_user_datasets import (
+        resolve_authorized_user_datasets,
+    )
+    from cognee.tasks.memify.sync_graph_to_session import sync_graph_to_session
+
+    _, authorized_datasets = await resolve_authorized_user_datasets(dataset, user=user)
+    if not authorized_datasets:
+        return {"synced": 0}
+
+    return await sync_graph_to_session(
+        user_id=str(user.id),
+        session_id=session_id,
+        dataset_id=authorized_datasets[0].id,
+        dataset_name=dataset,
+    )
+
+
+def _read_field(entry, field: str) -> str:
+    if isinstance(entry, dict):
+        return str(entry.get(field) or "")
+    return str(getattr(entry, field, "") or "")
+
+
+def _load_bridge_state() -> dict:
+    try:
+        return json.loads(_BRIDGE_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_bridge_state(state: dict) -> None:
+    try:
+        _BRIDGE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _BRIDGE_STATE_FILE.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _bridge_state_key(dataset: str, session_id: str, user_id: str, kind: str) -> str:
+    return hashlib.sha256(f"{user_id}:{dataset}:{session_id}:{kind}".encode()).hexdigest()
+
+
+def _content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+async def persist_session_cache_to_graph(dataset: str, session_id: str, user) -> bool:
+    """Persist cached session QA/trace text to the permanent graph.
+
+    This is a local-mode compatibility bridge for Cognee 1.0.8. The SDK's
+    built-in session persistence can complete without extracting entries
+    from the file-system cache in the Claude plugin setup. Reading the same
+    cache directly here keeps the integration useful while still using
+    cognee.remember() for the actual add+cognify pipeline.
+    """
+    if not session_id or not user:
+        return False
+
+    import cognee
+    from cognee.infrastructure.session.get_session_manager import get_session_manager
+
+    await ensure_dataset_ready(dataset, user)
+
+    user_id = str(user.id)
+    session_manager = get_session_manager()
+    if not session_manager.is_available:
+        return False
+
+    wrote = False
+    bridge_state = _load_bridge_state()
+    state_changed = False
+
+    qa_entries = await session_manager.get_session(
+        user_id=user_id,
+        session_id=session_id,
+        formatted=False,
+    )
+    qa_lines: list[str] = []
+    for entry in qa_entries or []:
+        question = _read_field(entry, "question").strip()
+        answer = _read_field(entry, "answer").strip()
+        if question:
+            qa_lines.append(f"Question: {question}")
+        if answer:
+            qa_lines.append(f"Answer: {answer}")
+        if question or answer:
+            qa_lines.append("")
+    qa_text = "\n".join(qa_lines).strip()
+    if qa_text:
+        qa_document = f"Session ID: {session_id}\n\n{qa_text}"
+        qa_key = _bridge_state_key(dataset, session_id, user_id, "qa")
+        qa_hash = _content_hash(qa_document)
+        if bridge_state.get(qa_key) == qa_hash:
+            qa_text = ""
+        else:
+            bridge_state[qa_key] = qa_hash
+            state_changed = True
+
+    if qa_text:
+        await cognee.remember(
+            qa_document,
+            dataset_name=dataset,
+            node_set=["user_sessions_from_cache"],
+            self_improvement=False,
+            run_in_background=False,
+            user=user,
+        )
+        wrote = True
+
+    trace_values = await session_manager.get_agent_trace_feedback(
+        user_id=user_id,
+        session_id=session_id,
+    )
+    trace_text = "\n".join(str(value).strip() for value in trace_values or [] if str(value).strip())
+    if trace_text:
+        trace_document = f"Session ID: {session_id}\n\n{trace_text}"
+        trace_key = _bridge_state_key(dataset, session_id, user_id, "trace")
+        trace_hash = _content_hash(trace_document)
+        if bridge_state.get(trace_key) == trace_hash:
+            trace_text = ""
+        else:
+            bridge_state[trace_key] = trace_hash
+            state_changed = True
+
+    if trace_text:
+        await cognee.remember(
+            trace_document,
+            dataset_name=dataset,
+            node_set=["agent_trace_feedbacks"],
+            self_improvement=False,
+            run_in_background=False,
+            user=user,
+        )
+        wrote = True
+
+    if state_changed:
+        _save_bridge_state(bridge_state)
+
+    return wrote
 
 
 def _get_git_branch(cwd: str) -> str:

@@ -21,15 +21,27 @@ import sys
 # Add scripts dir to path for helper imports
 sys.path.insert(0, os.path.dirname(__file__))
 from _plugin_common import (
+    append_http_bridge_entry,
     bump_save_counter,
     bump_turn_counter,
     hook_log,
     load_resolved,
     notify,
+    persist_session_cache_to_graph_via_http,
+    remember_entry_via_http,
     resolve_user,
     touch_activity,
 )
-from config import ensure_cognee_ready, get_dataset, get_session_id, load_config
+from config import (
+    ensure_cognee_ready,
+    ensure_dataset_ready,
+    get_dataset,
+    get_session_id,
+    is_cloud_mode,
+    load_config,
+    persist_session_cache_to_graph,
+    sync_graph_context_to_session,
+)
 
 # Hard cap per field to avoid ballooning the cache with massive tool outputs.
 _MAX_PARAMS_BYTES = 4000
@@ -38,36 +50,33 @@ _MAX_ASSISTANT_BYTES = 8000
 
 
 async def _fire_improve_background(dataset: str, session_id: str, user, reason: str) -> None:
-    """Fire-and-forget improve() — intentionally detached from the caller.
-
-    Prefers POST /api/v1/improve against a running backend (avoids the
-    Kuzu single-writer lock). Falls back to the SDK path with
-    ``run_in_background=True`` when no backend is reachable. Failures are
-    logged but never raised.
-    """
-    from _plugin_common import improve_via_http  # type: ignore
-
+    """Fire-and-forget session bridge; failures are logged but never raised."""
     try:
-        if improve_via_http(dataset, session_id, run_in_background=True):
-            hook_log("auto_improve_fired", {"reason": reason, "session": session_id, "via": "http"})
-            notify(f"auto-improve fired via HTTP ({reason})")
+        if is_cloud_mode(load_config()):
+            wrote = persist_session_cache_to_graph_via_http(dataset, session_id)
+            hook_log(
+                "auto_bridge_fired",
+                {"reason": reason, "session": session_id, "via": "http_remember", "wrote": wrote},
+            )
+            if wrote:
+                notify(f"session bridge persisted ({reason})")
             return
-    except Exception as exc:
-        hook_log("auto_improve_http_error", {"reason": reason, "error": str(exc)[:200]})
 
-    import cognee
-
-    try:
-        await cognee.improve(
-            dataset=dataset,
-            session_ids=[session_id],
-            user=user,
-            run_in_background=True,
+        await ensure_dataset_ready(dataset, user)
+        wrote = await persist_session_cache_to_graph(dataset, session_id, user)
+        graph_result = await sync_graph_context_to_session(dataset, session_id, user)
+        hook_log(
+            "auto_bridge_fired",
+            {
+                "reason": reason,
+                "session": session_id,
+                "wrote": wrote,
+                "graph_synced": graph_result.get("synced", 0),
+            },
         )
-        hook_log("auto_improve_fired", {"reason": reason, "session": session_id, "via": "sdk"})
-        notify(f"auto-improve fired ({reason})")
+        notify(f"session bridge persisted ({reason})")
     except Exception as exc:
-        hook_log("auto_improve_error", {"reason": reason, "error": str(exc)[:200]})
+        hook_log("auto_bridge_error", {"reason": reason, "error": str(exc)[:200]})
 
 
 def _truncate_str(value, cap: int) -> str:
@@ -110,9 +119,6 @@ def _load_session() -> tuple[str, str, str]:
 
 async def _store_tool_call(payload: dict) -> None:
     """Write a PostToolUse event as a TraceEntry."""
-    import cognee
-    from cognee.memory import TraceEntry
-
     tool_name = payload.get("tool_name", "unknown")
     tool_input = payload.get("tool_input") or {}
     tool_output = payload.get("tool_output") or payload.get("tool_response") or ""
@@ -147,42 +153,67 @@ async def _store_tool_call(payload: dict) -> None:
 
     config = load_config()
     await ensure_cognee_ready(config)
-    user = await resolve_user(user_id)
 
-    entry = TraceEntry(
-        origin_function=tool_name,
-        status=status,
-        method_params=params,
-        method_return_value=return_value,
-        error_message=error_message,
+    entry = {
+        "type": "trace",
+        "origin_function": tool_name,
+        "status": status,
+        "method_params": params,
+        "method_return_value": return_value,
+        "error_message": error_message,
         # LLM-backed feedback per step is expensive on a busy session —
         # fall back to the deterministic one-liner. Users who want the
         # LLM summary can flip this in a future config.
-        generate_feedback_with_llm=False,
-    )
+        "generate_feedback_with_llm": False,
+    }
 
     try:
-        result = await cognee.remember(
-            entry,
-            dataset_name=dataset,
-            session_id=session_id,
-            user=user,
-        )
+        if is_cloud_mode(config):
+            result = remember_entry_via_http(dataset, session_id, entry)
+            user = None
+        else:
+            import cognee
+            from cognee.memory import TraceEntry
+
+            user = await resolve_user(user_id)
+            result = await cognee.remember(
+                TraceEntry(**entry),
+                dataset_name=dataset,
+                session_id=session_id,
+                self_improvement=False,
+                user=user,
+            )
     except Exception as exc:
         hook_log("trace_store_error", {"tool": tool_name, "error": str(exc)[:200]})
         notify(f"trace store failed ({exc})")
         return
 
     if result:
+        trace_id = (
+            result.get("entry_id")
+            if isinstance(result, dict)
+            else getattr(result, "entry_id", None)
+        )
         hook_log(
             "trace_stored",
             {
                 "tool": tool_name,
                 "status": status,
-                "trace_id": getattr(result, "entry_id", None),
+                "trace_id": trace_id,
             },
         )
         notify(f"trace stored ({tool_name}, {status})")
+        if is_cloud_mode(config):
+            trace_text = (
+                f"{tool_name} [{status}]\n"
+                f"Params: {json.dumps(params, ensure_ascii=False)}\n"
+                f"Return: {return_value}"
+            )
+            append_http_bridge_entry(
+                dataset,
+                session_id,
+                trace=trace_text,
+            )
         bump_save_counter(session_id, "trace")
 
         touch_activity()
@@ -195,9 +226,6 @@ async def _store_tool_call(payload: dict) -> None:
 
 async def _store_assistant_stop(payload: dict) -> None:
     """Write a Stop-hook payload (final assistant message) as a QAEntry."""
-    import cognee
-    from cognee.memory import QAEntry
-
     msg = str(payload.get("assistant_message") or payload.get("last_assistant_message") or "")
     if not msg or msg == "null":
         return
@@ -211,27 +239,42 @@ async def _store_assistant_stop(payload: dict) -> None:
 
     config = load_config()
     await ensure_cognee_ready(config)
-    user = await resolve_user(user_id)
 
     # Answer-only QAEntry: we don't have the matching question at Stop
     # time. Leaving question="" keeps the entry searchable by the
     # assistant message text.
-    entry = QAEntry(question="", answer=msg, context="")
+    entry = {"type": "qa", "question": "", "answer": msg, "context": ""}
 
     try:
-        result = await cognee.remember(
-            entry,
-            dataset_name=dataset,
-            session_id=session_id,
-            user=user,
-        )
+        if is_cloud_mode(config):
+            result = remember_entry_via_http(dataset, session_id, entry)
+            user = None
+        else:
+            import cognee
+            from cognee.memory import QAEntry
+
+            user = await resolve_user(user_id)
+            result = await cognee.remember(
+                QAEntry(**entry),
+                dataset_name=dataset,
+                session_id=session_id,
+                self_improvement=False,
+                user=user,
+            )
     except Exception as exc:
         hook_log("stop_store_error", {"error": str(exc)[:200]})
         notify(f"stop store failed ({exc})")
         return
 
     if result:
-        hook_log("stop_stored", {"chars": len(msg), "qa_id": getattr(result, "entry_id", None)})
+        if is_cloud_mode(config):
+            append_http_bridge_entry(dataset, session_id, answer=msg)
+        qa_id = (
+            result.get("entry_id")
+            if isinstance(result, dict)
+            else getattr(result, "entry_id", None)
+        )
+        hook_log("stop_stored", {"chars": len(msg), "qa_id": qa_id})
         notify(f"assistant message stored ({len(msg)} chars)")
         bump_save_counter(session_id, "answer")
 
