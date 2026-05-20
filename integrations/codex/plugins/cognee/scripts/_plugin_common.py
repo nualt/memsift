@@ -182,11 +182,13 @@ def quiet_hook_output(label: str):
     saved_stderr_fd = os.dup(2)
     log_fd = os.open(_SUBPROCESS_LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
+        marker = (
+            f"\n--- {datetime.now(timezone.utc).isoformat(timespec='seconds')} "
+            f"{label} pid={os.getpid()} ---\n"
+        )
         os.write(
             log_fd,
-            f"\n--- {datetime.now(timezone.utc).isoformat(timespec='seconds')} {label} pid={os.getpid()} ---\n".encode(
-                "utf-8"
-            ),
+            marker.encode("utf-8"),
         )
         os.dup2(log_fd, 1)
         os.dup2(log_fd, 2)
