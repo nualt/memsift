@@ -10,6 +10,9 @@ and assistant stop messages. It also ensures the configured dataset exists and
 periodically runs Cognee improve in the background so session cache entries are
 bridged into the permanent graph. On each user prompt it recalls relevant
 memory from the same Cognee backend and injects it into Codex context.
+Codex CLI currently may not invoke plugin `SessionEnd` on normal shutdown, so a
+small exit watcher starts at `SessionStart` and runs graph sync only after the
+owning Codex process exits.
 
 ## Contents
 
@@ -67,6 +70,11 @@ assistant stop and then every 30 stored tool/assistant events by default. Set
 `COGNEE_CODEX_AUTO_IMPROVE_EVERY=<n>` to change the threshold. Improve runs in
 background mode by default; set `COGNEE_CODEX_IMPROVE_BACKGROUND=false` only
 when blocking graph sync is explicitly desired.
+
+For local native mode, `PreCompact`, supported `SessionEnd` events, and the
+exit watcher start `scripts/sync-session-to-graph.py` as a detached worker so
+long graph syncs are not constrained by Codex's short hook timeout. Disable the
+idle watcher with `COGNEE_IDLE_DISABLED=true`.
 
 On every user prompt the hook prepends a status line to Codex
 `hookSpecificOutput.additionalContext`, for example:
