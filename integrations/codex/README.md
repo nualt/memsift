@@ -31,13 +31,21 @@ Automatic capture also requires Codex hooks to be enabled:
 
 ```toml
 [features]
-codex_hooks = true
+hooks = true
+plugin_hooks = true
 ```
 
-The hook reads Cognee connection details from `COGNEE_SERVICE_URL` /
-`COGNEE_API_KEY` or `~/.cognee/cloud_credentials.json`. If no URL is
-configured, it uses `http://localhost:8000`. It writes to the `codex_sessions`
-dataset unless `COGNEE_CODEX_DATASET` is set. Prompt recall searches
+By default, the hook first tries to use an installed local `cognee` Python
+package from the Codex process environment. Start Codex from a virtual
+environment where Cognee is installed to use this native SDK path. Set
+`COGNEE_CODEX_BACKEND=http` to force the HTTP backend path, or
+`COGNEE_CODEX_BACKEND=native` to require local SDK mode.
+
+In HTTP mode, the hook reads Cognee connection details from
+`COGNEE_SERVICE_URL` / `COGNEE_API_KEY` or
+`~/.cognee/cloud_credentials.json`. If no URL is configured, it uses
+`http://localhost:8000`. It writes to the `codex_sessions` dataset unless
+`COGNEE_CODEX_DATASET` is set. Prompt recall searches
 `session,trace,graph_context,graph` by default; override with
 `COGNEE_CODEX_RECALL_SCOPE`.
 

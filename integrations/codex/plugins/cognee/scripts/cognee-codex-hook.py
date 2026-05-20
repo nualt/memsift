@@ -8,6 +8,8 @@ or credentials are not configured, Codex continues normally.
 from __future__ import annotations
 
 import argparse
+import asyncio
+from contextlib import redirect_stdout
 import hashlib
 import json
 import os
@@ -22,6 +24,7 @@ from typing import Any
 
 DEFAULT_DATASET = "codex_sessions"
 DEFAULT_SERVICE_URL = "http://localhost:8000"
+DEFAULT_BACKEND_MODE = "auto"
 DEFAULT_TIMEOUT_SECONDS = 2.0
 DEFAULT_RECALL_TIMEOUT_SECONDS = 3.0
 DEFAULT_IMPROVE_TIMEOUT_SECONDS = 2.0
@@ -42,6 +45,7 @@ SAVE_COUNTER_PATH = STATE_DIR / "codex-save-counter.json"
 LAST_RECALL_PATH = STATE_DIR / "codex-last-recall.json"
 RECALL_AUDIT_PATH = STATE_DIR / "codex-recall-audit.log"
 AUTO_IMPROVE_PATH = STATE_DIR / "codex-auto-improve.json"
+PENDING_PROMPTS_PATH = STATE_DIR / "codex-pending-prompts.json"
 SAVE_KINDS = ("prompt", "trace", "answer")
 RECALL_SOURCES = ("session", "trace", "graph_context")
 RECALL_SECTION_LIMITS = {"session": 3, "trace": 2, "graph_context": 2}
@@ -95,6 +99,23 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if not raw:
         return default
     return raw in {"1", "true", "yes", "on"}
+
+
+def _backend_mode() -> str:
+    raw = os.environ.get("COGNEE_CODEX_BACKEND", DEFAULT_BACKEND_MODE).strip().lower()
+    if raw in {"http", "api", "remote"}:
+        return "http"
+    if raw in {"native", "sdk", "local"}:
+        return "native"
+    return DEFAULT_BACKEND_MODE
+
+
+def _explicit_http_connection_configured() -> bool:
+    return bool(
+        os.environ.get("COGNEE_SERVICE_URL")
+        or os.environ.get("COGNEE_LOCAL_API_URL")
+        or os.environ.get("COGNEE_API_KEY")
+    )
 
 
 def _truncate(text: Any, max_bytes: int = MAX_STRING_BYTES) -> str:
@@ -216,6 +237,52 @@ def _read_and_reset_save_counter(session_id: str) -> dict[str, int]:
         return counts
     except Exception:
         return _zero_save_counts()
+
+
+def _pending_prompt_keys(payload: dict[str, Any]) -> tuple[str, str]:
+    session_id = _session_id(payload)
+    turn_id = str(payload.get("turn_id") or "").strip()
+    session_key = f"{session_id}:"
+    turn_key = f"{session_id}:{turn_id}" if turn_id else session_key
+    return turn_key, session_key
+
+
+def _remember_pending_prompt(payload: dict[str, Any]) -> None:
+    prompt = str(payload.get("prompt") or "")
+    if not prompt.strip():
+        return
+    try:
+        turn_key, session_key = _pending_prompt_keys(payload)
+        data = _load_json_file(PENDING_PROMPTS_PATH)
+        entry = {
+            "prompt": _truncate(prompt, MAX_RETURN_BYTES),
+            "context": _memory_context(payload),
+            "ts": _now(),
+        }
+        data[turn_key] = entry
+        data[session_key] = entry
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        PENDING_PROMPTS_PATH.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _pop_pending_prompt(payload: dict[str, Any]) -> dict[str, str]:
+    try:
+        turn_key, session_key = _pending_prompt_keys(payload)
+        data = _load_json_file(PENDING_PROMPTS_PATH)
+        entry = data.pop(turn_key, None) or data.get(session_key) or {}
+        data.pop(session_key, None)
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        PENDING_PROMPTS_PATH.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+        if isinstance(entry, dict):
+            return {
+                "prompt": str(entry.get("prompt") or ""),
+                "context": str(entry.get("context") or ""),
+            }
+    except Exception:
+        pass
+    return {"prompt": "", "context": ""}
 
 
 def _auto_improve_enabled() -> bool:
@@ -419,21 +486,27 @@ def _memory_context(payload: dict[str, Any]) -> str:
 def _entry(event: str, payload: dict[str, Any]) -> dict[str, Any]:
     if event == "UserPromptSubmit":
         return {
-            "type": "qa",
-            "question": _truncate(payload.get("prompt", ""), MAX_RETURN_BYTES),
-            "answer": "",
-            "context": _memory_context(payload),
+            "type": "trace",
+            "origin_function": _origin(event, payload),
+            "status": "success",
+            "method_params": _method_params(event, payload),
+            "method_return_value": {"prompt_saved_for_stop": bool(payload.get("prompt"))},
+            "memory_query": _memory_query(event, payload),
+            "memory_context": _memory_context(payload),
+            "error_message": "",
+            "generate_feedback_with_llm": False,
         }
 
     if event == "Stop":
+        pending_prompt = _pop_pending_prompt(payload)
         return {
             "type": "qa",
-            "question": "",
+            "question": pending_prompt["prompt"],
             "answer": _truncate(
                 payload.get("last_assistant_message") or payload.get("assistant_message") or "",
                 MAX_RETURN_BYTES,
             ),
-            "context": _memory_context(payload),
+            "context": pending_prompt["context"] or _memory_context(payload),
         }
 
     status, error_message = _status(payload)
@@ -448,6 +521,167 @@ def _entry(event: str, payload: dict[str, Any]) -> dict[str, Any]:
         "error_message": error_message,
         "generate_feedback_with_llm": False,
     }
+
+
+def _run_async(coro: Any) -> Any:
+    return asyncio.run(coro)
+
+
+async def _native_user() -> Any:
+    from cognee.modules.users.methods import get_default_user
+
+    return await get_default_user()
+
+
+async def _ensure_native_cognee_ready() -> None:
+    from cognee.modules.engine.operations.setup import setup
+
+    await setup()
+
+
+async def _ensure_native_dataset_ready(dataset: str, user: Any) -> None:
+    from cognee.modules.pipelines.layers.resolve_authorized_user_datasets import (
+        resolve_authorized_user_datasets,
+    )
+
+    await resolve_authorized_user_datasets(dataset, user=user)
+
+
+async def _remember_entry_native(
+    dataset: str,
+    session_id: str,
+    entry: dict[str, Any],
+) -> Any:
+    import cognee
+    from cognee.memory import QAEntry, TraceEntry
+
+    await _ensure_native_cognee_ready()
+    user = await _native_user()
+    await _ensure_native_dataset_ready(dataset, user)
+    if entry.get("type") == "qa":
+        typed_entry = QAEntry(**entry)
+    elif entry.get("type") == "trace":
+        typed_entry = TraceEntry(**entry)
+    else:
+        raise ValueError(f"Unsupported Cognee memory entry type: {entry.get('type')}")
+
+    return await cognee.remember(
+        typed_entry,
+        dataset_name=dataset,
+        session_id=session_id,
+        self_improvement=False,
+        user=user,
+    )
+
+
+async def _recall_native(dataset: str, session_id: str, prompt: str) -> dict[str, Any]:
+    import cognee
+    from cognee.modules.search.types import SearchType
+
+    empty = {"context": "", "counts": _zero_recall_counts()}
+    if not prompt or len(prompt) < 5 or _env_bool("COGNEE_CODEX_RECALL_DISABLED"):
+        return empty
+
+    await _ensure_native_cognee_ready()
+    user = await _native_user()
+    await _ensure_native_dataset_ready(dataset, user)
+    raw_items: list[Any] = []
+    for scope in _recall_scope():
+        query_type = SearchType.GRAPH_COMPLETION if scope == "graph" else None
+        try:
+            part = await cognee.recall(
+                prompt,
+                query_type=query_type,
+                session_id=session_id,
+                datasets=[dataset],
+                top_k=_recall_top_k(),
+                scope=[scope],
+                only_context=True,
+                user=user,
+            )
+            raw_items.extend(part or [])
+        except Exception as exc:
+            _log("native_recall_scope_error", {"scope": scope, "error": str(exc)[:300]})
+
+    normalized: list[Any] = []
+    for item in raw_items:
+        if hasattr(item, "model_dump"):
+            item = item.model_dump()
+        if isinstance(item, dict) and item.get("source") == "graph":
+            item["source"] = "graph_context"
+        normalized.append(item)
+
+    counts = _zero_recall_counts()
+    buckets = {source: [] for source in RECALL_SOURCES}
+    for item in normalized:
+        if not _recall_item_text(item).strip():
+            continue
+        source = _recall_source(item)
+        counts[source] += 1
+        buckets[source].append(item)
+
+    if not any(counts.values()):
+        _log("native_recall_empty", {"session_id": session_id, "counts": counts})
+        return {"context": "", "counts": counts}
+
+    context = _build_recall_context(buckets, counts)
+    if not context:
+        _log("native_recall_empty", {"session_id": session_id, "counts": counts})
+        return {"context": "", "counts": counts}
+
+    _log("native_recall_hit", {"session_id": session_id, "items": len(normalized), "counts": counts})
+    return {"context": context, "counts": counts}
+
+
+async def _improve_native(dataset: str, session_id: str) -> Any:
+    import cognee
+
+    await _ensure_native_cognee_ready()
+    user = await _native_user()
+    await _ensure_native_dataset_ready(dataset, user)
+    return await cognee.improve(
+        dataset=dataset,
+        session_ids=[session_id],
+        run_in_background=_env_bool("COGNEE_CODEX_IMPROVE_BACKGROUND", True),
+        user=user,
+    )
+
+
+def _native_cognee_available() -> bool:
+    try:
+        with redirect_stdout(sys.stderr):
+            __import__("cognee")
+        return True
+    except Exception as exc:
+        _log("native_cognee_unavailable", {"error": str(exc)[:300]})
+        return False
+
+
+def _use_native_backend() -> bool:
+    mode = _backend_mode()
+    if mode == "native":
+        return True
+    if mode == "http":
+        return False
+    if _explicit_http_connection_configured():
+        return False
+    return _native_cognee_available()
+
+
+def _post_to_cognee_native(
+    dataset: str,
+    session_id: str,
+    entry: dict[str, Any],
+) -> tuple[int, str]:
+    with redirect_stdout(sys.stderr):
+        result = _run_async(_remember_entry_native(dataset, session_id, entry))
+    if hasattr(result, "to_dict"):
+        payload = result.to_dict()
+    elif isinstance(result, dict):
+        payload = result
+    else:
+        payload = {"result": str(result)}
+    return 200, json.dumps(payload, default=str)
 
 
 def _headers(api_key: str) -> dict[str, str]:
@@ -614,6 +848,39 @@ def _maybe_fire_auto_improve(
             "reason": reason,
             "status": status,
             "response": text[:500],
+        },
+    )
+
+
+def _maybe_fire_auto_improve_native(dataset: str, session_id: str, event: str) -> None:
+    count, reason = _bump_auto_improve_counter(session_id, event)
+    if not reason:
+        return
+
+    try:
+        with redirect_stdout(sys.stderr):
+            result = _run_async(_improve_native(dataset, session_id))
+    except Exception as exc:
+        _log(
+            "native_auto_improve_error",
+            {
+                "dataset": dataset,
+                "session_id": session_id,
+                "reason": reason,
+                "error": str(exc)[:300],
+            },
+        )
+        return
+
+    _log(
+        "native_auto_improve_fired",
+        {
+            "dataset": dataset,
+            "session_id": session_id,
+            "event": event,
+            "count": count,
+            "reason": reason,
+            "response": _truncate(result, 500),
         },
     )
 
@@ -812,7 +1079,7 @@ def _graph_preview(item: dict[str, Any]) -> str:
         item.get("text"),
         raw.get("content"),
         raw.get("text"),
-        item,
+        raw.get("value"),
     )
     return _clean_preview(text, MAX_GRAPH_PREVIEW_BYTES)
 
@@ -901,7 +1168,7 @@ def _recall_context(
     prompt: str,
 ) -> dict[str, Any]:
     empty = {"context": "", "counts": _zero_recall_counts()}
-    if not prompt or len(prompt) < 5 or os.environ.get("COGNEE_CODEX_RECALL_DISABLED"):
+    if not prompt or len(prompt) < 5 or _env_bool("COGNEE_CODEX_RECALL_DISABLED"):
         return empty
 
     payload = {
@@ -934,6 +1201,8 @@ def _recall_context(
     counts = _zero_recall_counts()
     buckets = {source: [] for source in RECALL_SOURCES}
     for item in raw_items:
+        if not _recall_item_text(item).strip():
+            continue
         source = _recall_source(item)
         counts[source] += 1
         buckets[source].append(item)
@@ -1033,16 +1302,25 @@ def main() -> int:
     status_line = ""
 
     try:
-        service_url, api_key = _load_connection()
         session_id = _session_id(payload)
         dataset = _dataset_name()
-        if event in {"SessionStart", "UserPromptSubmit", "Stop"}:
-            _ensure_dataset(service_url, api_key, dataset, _timeout_seconds())
+        use_native = _use_native_backend()
+        if not use_native:
+            service_url, api_key = _load_connection()
+            if event in {"SessionStart", "UserPromptSubmit", "Stop"}:
+                _ensure_dataset(service_url, api_key, dataset, _timeout_seconds())
         if event == "UserPromptSubmit":
             saves_last_turn = _read_and_reset_save_counter(session_id)
-            recall_result = _recall_context(
-                service_url, api_key, session_id, payload.get("prompt", "")
-            )
+            _remember_pending_prompt(payload)
+            if use_native:
+                with redirect_stdout(sys.stderr):
+                    recall_result = _run_async(
+                        _recall_native(dataset, session_id, payload.get("prompt", ""))
+                    )
+            else:
+                recall_result = _recall_context(
+                    service_url, api_key, session_id, payload.get("prompt", "")
+                )
             recall_context = str(recall_result.get("context", ""))
             recall_counts = dict(recall_result.get("counts", _zero_recall_counts()))
             status_line = _status_line(recall_counts, saves_last_turn)
@@ -1055,28 +1333,35 @@ def main() -> int:
                 recall_context,
             )
         entry = _entry(event, payload)
-        status, response_text = _post_to_cognee(
-            service_url,
-            api_key,
-            dataset,
-            session_id,
-            entry,
-            _timeout_seconds(),
-        )
+        if use_native:
+            status, response_text = _post_to_cognee_native(dataset, session_id, entry)
+        else:
+            status, response_text = _post_to_cognee(
+                service_url,
+                api_key,
+                dataset,
+                session_id,
+                entry,
+                _timeout_seconds(),
+            )
         _log(
-            "stored",
+            "stored_native" if use_native else "stored",
             {
                 "event": event,
                 "status": status,
                 "session_id": session_id,
                 "dataset": dataset,
+                "backend": "native" if use_native else "http",
                 "elapsed_ms": round((time.monotonic() - started) * 1000),
                 "response": response_text,
             },
         )
         if 200 <= status < 300:
             _bump_save_counter(session_id, _save_kind(event))
-            _maybe_fire_auto_improve(service_url, api_key, dataset, session_id, event)
+            if use_native:
+                _maybe_fire_auto_improve_native(dataset, session_id, event)
+            else:
+                _maybe_fire_auto_improve(service_url, api_key, dataset, session_id, event)
         _debug(f"stored {event} for {session_id} ({status})")
     except urllib.error.HTTPError as exc:
         body = exc.read(512).decode("utf-8", errors="replace")

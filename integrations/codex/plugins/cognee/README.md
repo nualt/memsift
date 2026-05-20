@@ -38,15 +38,22 @@ Codex hooks must be enabled in `~/.codex/config.toml`:
 
 ```toml
 [features]
-codex_hooks = true
+hooks = true
+plugin_hooks = true
 ```
 
-The hook uses `COGNEE_SERVICE_URL` and `COGNEE_API_KEY` when set, otherwise it
-falls back to `~/.cognee/cloud_credentials.json`. If no URL is configured, it
-uses `http://localhost:8000`. The default dataset is `codex_sessions`; override
-it with `COGNEE_CODEX_DATASET`. The hook creates or reuses that dataset through
-`/api/v1/datasets` so it appears in the Cognee UI and session rows can attach to
-it. Automatic prompt recall searches
+By default, the hook first tries to use an installed local `cognee` Python
+package from the Codex process environment. Start Codex from a virtual
+environment where Cognee is installed to use this native SDK path. Set
+`COGNEE_CODEX_BACKEND=http` to force the HTTP backend path, or
+`COGNEE_CODEX_BACKEND=native` to require local SDK mode.
+
+In HTTP mode, the hook uses `COGNEE_SERVICE_URL` and `COGNEE_API_KEY` when set,
+otherwise it falls back to `~/.cognee/cloud_credentials.json`. If no URL is
+configured, it uses `http://localhost:8000`. The default dataset is
+`codex_sessions`; override it with `COGNEE_CODEX_DATASET`. In HTTP mode, the
+hook creates or reuses that dataset through `/api/v1/datasets` so it appears in
+the Cognee UI and session rows can attach to it. Automatic prompt recall searches
 `session,trace,graph_context,graph` by default; override with
 `COGNEE_CODEX_RECALL_SCOPE`. `graph_context` covers session-attached graph
 snapshots, while `graph` searches the live Cognee graph and is counted in the

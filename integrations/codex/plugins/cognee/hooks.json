@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/scripts/cognee-codex-hook.py\" --event SessionStart",
-            "timeout": 5,
+            "timeout": 10,
             "statusMessage": "Connecting Cognee session memory..."
           }
         ]
@@ -19,7 +19,7 @@
           {
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/scripts/cognee-codex-hook.py\" --event UserPromptSubmit",
-            "timeout": 5
+            "timeout": 10
           }
         ]
       }
@@ -31,7 +31,7 @@
           {
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/scripts/cognee-codex-hook.py\" --event PostToolUse",
-            "timeout": 5
+            "timeout": 10
           }
         ]
       }
@@ -42,7 +42,7 @@
           {
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/scripts/cognee-codex-hook.py\" --event Stop",
-            "timeout": 5
+            "timeout": 10
           }
         ]
       }
