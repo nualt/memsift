@@ -38,31 +38,11 @@ Start Codex from the same environment where `cognee` is installed:
 ```bash
 cd /path/to/your/project
 source .venv/bin/activate
+export LLM_API_KEY="your-key"
 codex
 ```
 
 ## Configuration
-
-Native local mode is the default. To require it explicitly:
-
-```bash
-export COGNEE_CODEX_BACKEND=native
-```
-
-Graph sync uses Cognee LLM configuration, so set the LLM API key expected by
-your Cognee install before running compaction or graph sync:
-
-```bash
-export LLM_API_KEY="your-key"
-```
-
-Optional settings:
-
-```bash
-export COGNEE_CODEX_DATASET=codex_sessions
-export COGNEE_CODEX_RECALL_SCOPE=session,trace,graph_context,graph
-export COGNEE_IDLE_DISABLED=true
-```
 
 HTTP/API mode is still supported for hosted Cognee:
 
