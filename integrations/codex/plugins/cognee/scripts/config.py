@@ -32,6 +32,7 @@ _DEFAULTS = {
     "session_strategy": "per-directory",  # per-directory | git-branch | static
     "session_prefix": "codex",
     "top_k": 3,
+    "backend": "auto",
     # Cloud / remote
     "service_url": "",
     "api_key": "",
@@ -62,6 +63,7 @@ def _config_log(event: str, detail: dict | None = None) -> None:
 
 # Env var overrides (env var name → config key)
 _ENV_MAP = {
+    "COGNEE_CODEX_BACKEND": "backend",
     "COGNEE_CODEX_DATASET": "dataset",
     "COGNEE_PLUGIN_DATASET": "dataset",
     "COGNEE_SESSION_STRATEGY": "session_strategy",
@@ -79,6 +81,7 @@ _ENV_MAP = {
 def load_config() -> dict:
     """Load merged config: defaults → file → env vars."""
     config = dict(_DEFAULTS)
+    env_has_service_url = bool(os.environ.get("COGNEE_SERVICE_URL", ""))
 
     # Layer 2: config file
     if _CONFIG_FILE.exists():
@@ -94,6 +97,19 @@ def load_config() -> dict:
         if val:
             config[config_key] = val
 
+    backend = str(config.get("backend") or "auto").lower()
+    if backend in ("native", "local", "sdk"):
+        config["service_url"] = ""
+        config["api_key"] = ""
+        config["base_url"] = ""
+    elif backend not in ("http", "api", "cloud", "server") and not env_has_service_url:
+        # Auto mode defaults to native local SDK mode. A service_url saved
+        # from an earlier HTTP run must not keep forcing HTTP mode after the
+        # user has unset the environment.
+        config["service_url"] = ""
+        config["api_key"] = ""
+        config["base_url"] = ""
+
     return config
 
 
@@ -101,8 +117,14 @@ def save_config(config: dict) -> None:
     """Write config to disk. Creates directory if needed."""
     _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     # Only save non-secret, non-default values
+    transient_keys = {"api_key", "llm_api_key", "service_url", "base_url", "backend"}
     to_save = {
-        k: v for k, v in config.items() if not k.startswith("_") and v and v != _DEFAULTS.get(k)
+        k: v
+        for k, v in config.items()
+        if k not in transient_keys
+        and not k.startswith("_")
+        and v
+        and v != _DEFAULTS.get(k)
     }
     _CONFIG_FILE.write_text(json.dumps(to_save, indent=2), encoding="utf-8")
 
