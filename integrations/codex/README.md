@@ -6,6 +6,10 @@ into Cognee session memory, recalls relevant memory on each prompt, and syncs
 session memory into Cognee's graph during compaction, supported session-end
 events, idle periods, or after the owning Codex process exits.
 
+The setup below is for **Codex CLI**: the terminal-based `codex` command.
+Start `codex` from the same shell where the Cognee virtual environment and LLM
+API key are active.
+
 ## Install
 
 Create or activate the Python environment where `cognee` is installed:
