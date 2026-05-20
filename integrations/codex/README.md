@@ -11,7 +11,7 @@ events, idle periods, or after the owning Codex process exits.
 Create or activate the Python environment where `cognee` is installed:
 
 ```bash
-cd /Users/laszlo/codex_integration_test
+cd /path/to/your/project
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install cognee
@@ -28,7 +28,7 @@ plugin_hooks = true
 Add this local marketplace and install the plugin:
 
 ```bash
-cd /Users/laszlo/Documents/GitHub/cognee-integrations/integrations/codex
+cd /path/to/cognee-integrations/integrations/codex
 codex plugin marketplace add .
 codex plugin add cognee@cognee-local
 ```
@@ -36,7 +36,7 @@ codex plugin add cognee@cognee-local
 Start Codex from the same environment where `cognee` is installed:
 
 ```bash
-cd /Users/laszlo/codex_integration_test
+cd /path/to/your/project
 source .venv/bin/activate
 codex
 ```
@@ -77,7 +77,7 @@ export COGNEE_API_KEY="your-key"
 After editing this plugin, reinstall it so Codex refreshes the cached copy:
 
 ```bash
-cd /Users/laszlo/Documents/GitHub/cognee-integrations/integrations/codex
+cd /path/to/cognee-integrations/integrations/codex
 codex plugin remove cognee@cognee-local
 codex plugin add cognee@cognee-local
 ```
