@@ -61,6 +61,7 @@ def _config_log(event: str, detail: dict | None = None) -> None:
     except Exception:
         pass
 
+
 # Env var overrides (env var name → config key)
 _ENV_MAP = {
     "COGNEE_CODEX_BACKEND": "backend",
@@ -89,7 +90,9 @@ def load_config() -> dict:
             file_cfg = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
             config.update({k: v for k, v in file_cfg.items() if v is not None and v != ""})
         except Exception as exc:
-            _config_log("config_file_load_failed", {"path": str(_CONFIG_FILE), "error": str(exc)[:200]})
+            _config_log(
+                "config_file_load_failed", {"path": str(_CONFIG_FILE), "error": str(exc)[:200]}
+            )
 
     # Layer 3: env vars (highest priority)
     for env_key, config_key in _ENV_MAP.items():
@@ -121,10 +124,7 @@ def save_config(config: dict) -> None:
     to_save = {
         k: v
         for k, v in config.items()
-        if k not in transient_keys
-        and not k.startswith("_")
-        and v
-        and v != _DEFAULTS.get(k)
+        if k not in transient_keys and not k.startswith("_") and v and v != _DEFAULTS.get(k)
     }
     _CONFIG_FILE.write_text(json.dumps(to_save, indent=2), encoding="utf-8")
 
@@ -474,7 +474,9 @@ def _load_bridge_state() -> dict:
     try:
         return json.loads(_BRIDGE_STATE_FILE.read_text(encoding="utf-8"))
     except Exception as exc:
-        _config_log("bridge_state_load_failed", {"path": str(_BRIDGE_STATE_FILE), "error": str(exc)[:200]})
+        _config_log(
+            "bridge_state_load_failed", {"path": str(_BRIDGE_STATE_FILE), "error": str(exc)[:200]}
+        )
         return {}
 
 
@@ -483,7 +485,9 @@ def _save_bridge_state(state: dict) -> None:
         _BRIDGE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         _BRIDGE_STATE_FILE.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
     except Exception as exc:
-        _config_log("bridge_state_save_failed", {"path": str(_BRIDGE_STATE_FILE), "error": str(exc)[:200]})
+        _config_log(
+            "bridge_state_save_failed", {"path": str(_BRIDGE_STATE_FILE), "error": str(exc)[:200]}
+        )
 
 
 def _bridge_state_key(dataset: str, session_id: str, user_id: str, kind: str) -> str:

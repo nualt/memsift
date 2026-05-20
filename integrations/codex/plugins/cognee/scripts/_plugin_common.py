@@ -47,7 +47,9 @@ def load_resolved() -> dict:
         try:
             return json.loads(_RESOLVED_CACHE.read_text(encoding="utf-8"))
         except Exception as exc:
-            hook_log("resolved_load_failed", {"path": str(_RESOLVED_CACHE), "error": str(exc)[:200]})
+            hook_log(
+                "resolved_load_failed", {"path": str(_RESOLVED_CACHE), "error": str(exc)[:200]}
+            )
     return {}
 
 
@@ -233,7 +235,9 @@ def read_and_reset_save_counter(session_id: str) -> dict:
             json.loads(_SAVE_COUNTER.read_text(encoding="utf-8")) if _SAVE_COUNTER.exists() else {}
         )
     except Exception as exc:
-        hook_log("save_counter_reset_read_failed", {"path": str(_SAVE_COUNTER), "error": str(exc)[:200]})
+        hook_log(
+            "save_counter_reset_read_failed", {"path": str(_SAVE_COUNTER), "error": str(exc)[:200]}
+        )
         return zero
     sess = data.get(session_id) or zero
     data[session_id] = dict(zero)
@@ -241,7 +245,9 @@ def read_and_reset_save_counter(session_id: str) -> dict:
         _PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
         _SAVE_COUNTER.write_text(json.dumps(data), encoding="utf-8")
     except Exception as exc:
-        hook_log("save_counter_reset_write_failed", {"path": str(_SAVE_COUNTER), "error": str(exc)[:200]})
+        hook_log(
+            "save_counter_reset_write_failed", {"path": str(_SAVE_COUNTER), "error": str(exc)[:200]}
+        )
     return {k: int(sess.get(k, 0)) for k in SAVE_KINDS}
 
 
@@ -251,7 +257,9 @@ def _pending_keys(session_id: str, turn_id: str = "") -> tuple[str, str]:
     return turn_key, session_key
 
 
-def remember_pending_prompt(session_id: str, prompt: str, *, turn_id: str = "", context: str = "") -> None:
+def remember_pending_prompt(
+    session_id: str, prompt: str, *, turn_id: str = "", context: str = ""
+) -> None:
     """Store the current prompt until Codex Stop provides the assistant answer."""
     if not session_id or not prompt.strip():
         return
