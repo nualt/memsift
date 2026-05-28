@@ -397,12 +397,22 @@ def _local_api_url() -> str:
     return (
         os.environ.get("COGNEE_LOCAL_API_URL")
         or os.environ.get("COGNEE_SERVICE_URL")
-        or "http://localhost:8000"
+        or "http://localhost:8011"
     )
 
 
 def _api_key() -> str:
     return load_resolved().get("api_key", "") or os.environ.get("COGNEE_API_KEY", "")
+
+
+def _patch_resolved_cache(updates: dict) -> None:
+    current = load_resolved()
+    current.update(updates)
+    _write_json_file(_RESOLVED_CACHE, current)
+
+
+def set_agent_registration(registered: bool) -> None:
+    _patch_resolved_cache({"registered": bool(registered)})
 
 
 def _json_http_request(
@@ -458,6 +468,30 @@ def remember_entry_via_http(
         },
         timeout=timeout,
     )
+
+
+def register_agent_via_http(*, timeout: float = 15.0) -> tuple[bool, int]:
+    try:
+        result = _json_http_request("/api/v1/agents/register", method="POST", timeout=timeout)
+        if isinstance(result, dict):
+            count = int(result.get("activeAgents", 0) or result.get("active_agents", 0) or 0)
+            return True, count
+        return True, 0
+    except Exception as exc:
+        hook_log("agent_register_failed", {"error": str(exc)[:200]})
+        return False, 0
+
+
+def unregister_agent_via_http(*, timeout: float = 15.0) -> tuple[bool, int]:
+    try:
+        result = _json_http_request("/api/v1/agents/unregister", method="POST", timeout=timeout)
+        if isinstance(result, dict):
+            count = int(result.get("activeAgents", 0) or result.get("active_agents", 0) or 0)
+            return True, count
+        return True, 0
+    except Exception as exc:
+        hook_log("agent_unregister_failed", {"error": str(exc)[:200]})
+        return False, 0
 
 
 def recall_via_http(

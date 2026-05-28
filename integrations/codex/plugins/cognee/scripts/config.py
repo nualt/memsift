@@ -29,6 +29,7 @@ _HOOK_LOG = _STATE_DIR / "hook.log"
 
 _DEFAULTS = {
     "dataset": "codex_sessions",
+    "agent_name": "codex-agent",
     "session_strategy": "per-directory",  # per-directory | git-branch | static
     "session_prefix": "codex",
     "top_k": 3,
@@ -66,6 +67,7 @@ def _config_log(event: str, detail: dict | None = None) -> None:
 _ENV_MAP = {
     "COGNEE_CODEX_BACKEND": "backend",
     "COGNEE_CODEX_DATASET": "dataset",
+    "COGNEE_AGENT_NAME": "agent_name",
     "COGNEE_PLUGIN_DATASET": "dataset",
     "COGNEE_SESSION_STRATEGY": "session_strategy",
     "COGNEE_SESSION_PREFIX": "session_prefix",

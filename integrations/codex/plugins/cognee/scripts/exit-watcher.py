@@ -62,6 +62,7 @@ def _spawn_sync(session_id: str, dataset: str) -> None:
     try:
         env = os.environ.copy()
         env.setdefault("COGNEE_SYNC_START_DELAY", str(_SYNC_START_DELAY))
+        env["COGNEE_UNREGISTER_ON_FINISH"] = "1"
         subprocess.Popen(
             [sys.executable, str(_SYNC_SCRIPT), _DETACHED_SYNC_ARG],
             cwd=os.getcwd(),
