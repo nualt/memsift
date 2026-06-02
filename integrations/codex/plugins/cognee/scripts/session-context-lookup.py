@@ -8,7 +8,7 @@ graph-knowledge snapshot from ``improve()``) flows back into Codex's
 context.
 
 Configuration:
-    Uses resolved session ID from SessionStart hook (via ~/.cognee-plugin/codex/resolved.json).
+    Resolves session state via Cognee HTTP endpoints.
 """
 
 import asyncio
@@ -26,6 +26,7 @@ from _plugin_common import (
     read_and_reset_save_counter,
     recall_via_http,
     resolve_user,
+    set_session_key,
 )
 from config import ensure_cognee_ready, get_session_id, is_cloud_mode, load_config
 
@@ -328,6 +329,10 @@ def main():
         payload = json.loads(payload_raw)
     except json.JSONDecodeError:
         return
+
+    payload_session_id = str(payload.get("session_id", "") or "").strip()
+    if payload_session_id:
+        set_session_key(payload_session_id)
 
     prompt = payload.get("prompt", "")
     if not prompt or len(prompt) < 5:

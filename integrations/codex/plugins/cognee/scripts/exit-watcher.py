@@ -59,11 +59,31 @@ def _owns_pidfile(pidfile: Path) -> bool:
         return False
 
 
-def _spawn_sync(session_id: str, dataset: str) -> None:
+def _spawn_sync(
+    session_id: str,
+    dataset: str,
+    *,
+    session_key: str = "",
+    agent_session_name: str = "",
+    api_key: str = "",
+    service_url: str = "",
+) -> None:
     try:
         env = os.environ.copy()
         env.setdefault("COGNEE_SYNC_START_DELAY", str(_SYNC_START_DELAY))
         env["COGNEE_UNREGISTER_ON_FINISH"] = "1"
+        if session_id:
+            env["COGNEE_SYNC_SESSION_ID"] = session_id
+        if dataset:
+            env["COGNEE_SYNC_DATASET"] = dataset
+        if session_key:
+            env["COGNEE_SESSION_KEY"] = session_key
+        if agent_session_name:
+            env["COGNEE_AGENT_SESSION_NAME"] = agent_session_name
+        if api_key:
+            env["COGNEE_API_KEY"] = api_key
+        if service_url:
+            env["COGNEE_SERVICE_URL"] = service_url
         subprocess.Popen(
             [sys.executable, str(_SYNC_SCRIPT), _DETACHED_SYNC_ARG],
             cwd=os.getcwd(),
@@ -91,6 +111,10 @@ def main() -> None:
     parent_pid = int(bootstrap.get("parent_pid") or 0)
     session_id = str(bootstrap.get("session_id") or "")
     dataset = str(bootstrap.get("dataset") or "codex_sessions")
+    session_key = str(bootstrap.get("session_key") or "")
+    agent_session_name = str(bootstrap.get("agent_session_name") or "")
+    api_key = str(bootstrap.get("api_key") or "")
+    service_url = str(bootstrap.get("service_url") or "")
     pidfile_raw = str(bootstrap.get("pidfile") or "").strip()
     pidfile = Path(pidfile_raw) if pidfile_raw else _PIDFILE
     if not parent_pid:
@@ -137,7 +161,14 @@ def main() -> None:
         return
 
     _log("parent_exited", parent_pid=parent_pid, session=session_id, dataset=dataset)
-    _spawn_sync(session_id, dataset)
+    _spawn_sync(
+        session_id,
+        dataset,
+        session_key=session_key,
+        agent_session_name=agent_session_name,
+        api_key=api_key,
+        service_url=service_url,
+    )
 
     try:
         if _owns_pidfile(pidfile):

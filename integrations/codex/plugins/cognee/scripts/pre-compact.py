@@ -42,7 +42,7 @@ _SYNC_START_DELAY_SECONDS = "2"
 
 
 def _load_resolved_fields() -> tuple[str, str, str]:
-    """Return (session_id, dataset, user_id) from resolved cache or config."""
+    """Return (session_id, dataset, user_id) from runtime endpoint state or config."""
     resolved = load_resolved()
     session_id = resolved.get("session_id", "")
     dataset = resolved.get("dataset", "")

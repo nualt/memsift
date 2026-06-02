@@ -9,8 +9,7 @@ Runs async on the PostToolUse / Stop hooks - fire-and-forget, never
 blocks Codex.
 
 Configuration:
-    Uses resolved session ID from SessionStart hook (via ~/.cognee-plugin/codex/resolved.json).
-    Falls back to COGNEE_SESSION_ID / COGNEE_PLUGIN_DATASET env vars.
+    Resolves session state via Cognee HTTP endpoints.
 """
 
 import asyncio
@@ -32,6 +31,7 @@ from _plugin_common import (
     quiet_hook_output,
     remember_entry_via_http,
     resolve_user,
+    set_session_key,
     touch_activity,
 )
 from config import (
@@ -308,6 +308,10 @@ def main():
     except json.JSONDecodeError:
         hook_log("invalid_payload_json")
         return
+
+    payload_session_id = str(payload.get("session_id", "") or "").strip()
+    if payload_session_id:
+        set_session_key(payload_session_id)
 
     is_stop = "--stop" in sys.argv
     try:

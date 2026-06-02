@@ -6,8 +6,7 @@ Runs the integration's explicit session bridge:
   2. Sync graph knowledge back into the session cache for recall
 
 Configuration:
-    Uses resolved session ID and dataset from SessionStart hook
-    (via ~/.cognee-plugin/codex/resolved.json). Falls back to env vars.
+    Resolves session identity from Cognee endpoints via API auth.
 """
 
 import asyncio
@@ -22,10 +21,12 @@ from pathlib import Path
 # Add scripts dir to path for config/_plugin_common imports
 sys.path.insert(0, os.path.dirname(__file__))
 from _plugin_common import (
+    get_session_key,
     hook_log,
+    load_resolved,
     persist_session_cache_to_graph_via_http,
     resolve_user,
-    set_agent_registration,
+    set_session_key,
     sync_lock,
     unregister_agent_via_http,
 )
@@ -41,7 +42,6 @@ from config import (
 )
 
 _STATE_DIR = Path.home() / ".cognee-plugin" / "codex"
-_RESOLVED_CACHE = _STATE_DIR / "resolved.json"
 _WATCHER_PID = _STATE_DIR / "watcher.pid"
 _WATCHER_STOP = _STATE_DIR / "watcher.stop"
 _DETACHED_ARG = "--detached-final"
@@ -120,25 +120,54 @@ def _is_session_end_payload(payload_raw: str) -> bool:
 
 
 def _load_resolved() -> tuple:
-    """Load session ID, dataset, user ID, registration marker, and API key marker."""
-    if _RESOLVED_CACHE.exists():
-        try:
-            data = json.loads(_RESOLVED_CACHE.read_text(encoding="utf-8"))
-            return (
-                data.get("session_id", ""),
-                data.get("dataset", ""),
-                data.get("user_id", ""),
-                bool(data.get("registered", False)),
-                bool(data.get("api_key", "")),
-            )
-        except Exception as exc:
-            hook_log("sync_resolved_load_failed", {"error": str(exc)[:200]})
+    """
+    Load session ID, dataset, user ID,
+    agent session name, registration marker, and API key marker.
+    """
+    session_key = set_session_key(get_session_key())
+    env_session_id = str(os.environ.get("COGNEE_SYNC_SESSION_ID", "") or "").strip()
+    env_dataset = str(os.environ.get("COGNEE_SYNC_DATASET", "") or "").strip()
+    env_agent_session_name = str(os.environ.get("COGNEE_AGENT_SESSION_NAME", "") or "").strip()
+    env_api_key = str(os.environ.get("COGNEE_API_KEY", "") or "").strip()
+    env_service_url = str(os.environ.get("COGNEE_SERVICE_URL", "") or "").strip()
+
+    data = load_resolved(session_key=session_key)
+    if data:
+        service_url = env_service_url or str(data.get("service_url", "") or "").strip()
+        if service_url:
+            os.environ["COGNEE_SERVICE_URL"] = service_url
+        if data.get("user_id"):
+            os.environ["COGNEE_USER_ID"] = str(data.get("user_id"))
+        return (
+            env_session_id or data.get("session_id", ""),
+            env_dataset or data.get("dataset", ""),
+            data.get("user_id", ""),
+            env_agent_session_name or data.get("agent_session_name", ""),
+            bool(data.get("registered", False)),
+            bool(env_api_key or data.get("api_key", "")),
+            session_key,
+        )
+
     config = load_config()
-    return get_session_id(config), get_dataset(config), "", False, False
+    fallback_session_id = get_session_id(config)
+    fallback_agent_session_name = session_key or ""
+    if env_service_url:
+        os.environ["COGNEE_SERVICE_URL"] = env_service_url
+    return (
+        env_session_id or fallback_session_id,
+        env_dataset or get_dataset(config),
+        "",
+        env_agent_session_name or fallback_agent_session_name,
+        False,
+        bool(env_api_key),
+        session_key,
+    )
 
 
 async def _sync(stop_watcher: bool, unregister_on_finish: bool = False):
-    session_id, dataset, user_id, was_registered, has_api_key = _load_resolved()
+    session_id, dataset, user_id, agent_session_name, was_registered, has_api_key, session_key = (
+        _load_resolved()
+    )
     hook_log(
         "sync_start",
         {
@@ -209,25 +238,39 @@ async def _sync(stop_watcher: bool, unregister_on_finish: bool = False):
                     {"session": session_id, "dataset": dataset},
                 )
             else:
-                ok, active = unregister_agent_via_http()
+                unregister_name = str(agent_session_name or session_id or "").strip()
+                if not unregister_name:
+                    hook_log(
+                        "agent_unregister_skipped_no_session_name",
+                        {"session": session_id, "dataset": dataset},
+                    )
+                    return
+                ok, active = unregister_agent_via_http(agent_session_name=unregister_name)
                 hook_log(
                     "agent_unregister_result",
                     {
                         "session": session_id,
                         "dataset": dataset,
+                        "agent_session_name": unregister_name,
                         "ok": ok,
                         "active_agents": active,
                         "cached_registered": was_registered,
                     },
                 )
-                if ok:
-                    set_agent_registration(False)
 
 
 def main():
     detached_final = _DETACHED_ARG in sys.argv
     forced_session_end = _SESSION_END_ARG in sys.argv
     payload_raw = "" if detached_final else sys.stdin.read()
+    if not detached_final and payload_raw.strip():
+        try:
+            payload = json.loads(payload_raw)
+        except json.JSONDecodeError:
+            payload = {}
+        session_key_candidate = str(payload.get("session_id", "") or "").strip()
+        if session_key_candidate:
+            set_session_key(session_key_candidate)
     is_session_end = forced_session_end or _is_session_end_payload(payload_raw)
     hook_log(
         "sync_payload",

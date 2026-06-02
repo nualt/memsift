@@ -90,9 +90,13 @@ async def _improve_once(session_id: str, dataset: str, config: dict) -> bool:
             load_resolved,
             persist_session_cache_to_graph_via_http,
             resolve_user,
+            set_session_key,
             sync_lock,
         )
 
+        session_key = str(config.get("session_key") or "").strip()
+        if session_key:
+            set_session_key(session_key)
         lock = sync_lock("idle-watcher")
     except Exception as exc:
         _log("sync_lock_import_error", error=str(exc)[:200])
@@ -238,6 +242,7 @@ def main():
     session_id = bootstrap.get("session_id", "")
     dataset = bootstrap.get("dataset", "codex_sessions")
     user_id = bootstrap.get("user_id", "")
+    session_key = str(bootstrap.get("session_key", "") or "").strip()
     try:
         from config import load_config  # type: ignore
 
@@ -251,6 +256,10 @@ def main():
         sys.exit(1)
     if user_id:
         config["user_id"] = user_id
+        os.environ["COGNEE_USER_ID"] = user_id
+    if session_key:
+        config["session_key"] = session_key
+        os.environ["COGNEE_SESSION_KEY"] = session_key
 
     try:
         _PIDFILE.write_text(str(os.getpid()), encoding="utf-8")

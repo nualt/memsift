@@ -6,16 +6,13 @@ Runs on the SessionStart hook. Responsibilities:
   2. Compute per-directory session ID
   3. Connect to Cognee Cloud if configured
   4. Configure local LLM if local mode
-  5. Write resolved session ID to env cache for other hooks
-
-The resolved session ID and dataset are written to a cache file
-so that the other hook scripts (which run in separate processes)
-can pick them up without re-computing.
+  5. Register the current Codex thread as an active agent connection
 """
 
 import asyncio
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -27,7 +24,12 @@ from pathlib import Path
 
 # Add scripts dir to path for config import
 sys.path.insert(0, os.path.dirname(__file__))
-from _plugin_common import hook_log, quiet_hook_output, touch_activity
+from _plugin_common import (
+    hook_log,
+    quiet_hook_output,
+    set_session_key,
+    touch_activity,
+)
 from config import (
     ensure_cognee_ready,
     ensure_dataset_ready,
@@ -41,11 +43,9 @@ from config import (
 )
 
 _STATE_DIR = Path.home() / ".cognee-plugin" / "codex"
-_RESOLVED_CACHE = _STATE_DIR / "resolved.json"
 _WATCHER_PID = _STATE_DIR / "watcher.pid"
 _WATCHER_STOP = _STATE_DIR / "watcher.stop"
 _WATCHER_SCRIPT = Path(__file__).with_name("idle-watcher.py")
-_EXIT_WATCHER_PID = _STATE_DIR / "exit-watcher.pid"
 _EXIT_WATCHER_SCRIPT = Path(__file__).with_name("exit-watcher.py")
 _EXIT_WATCHERS_DIR = _STATE_DIR / "exit-watchers"
 _AGENT_KEYS_CACHE = _STATE_DIR / "agent_keys.json"
@@ -70,7 +70,6 @@ def _ensure_local_server_running(config: dict) -> None:
         return
 
     server_env = os.environ.copy()
-    server_env.setdefault("COGNEE_AGENT_MODE", "true")
     subprocess.Popen(
         ["uvicorn", "cognee.api.client:app", "--port", "8011"],
         env=server_env,
@@ -122,12 +121,12 @@ def _utc_iso_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-async def _login_default_user_for_owner_api_key(service_url: str) -> str:
+async def _login_default_user_for_owner_api_key(service_url: str, config: dict) -> str:
     import aiohttp
 
     base = _normalize_service_url(service_url)
-    email = os.environ.get("DEFAULT_USER_EMAIL", "default_user@example.com")
-    password = os.environ.get("DEFAULT_USER_PASSWORD", "default_password")
+    email = config.get("user_email", "")
+    password = config.get("user_password", "")
 
     async with aiohttp.ClientSession() as session:
         async with session.post(
@@ -140,7 +139,7 @@ async def _login_default_user_for_owner_api_key(service_url: str) -> str:
                 raise RuntimeError(
                     "default-user login failed "
                     f"({resp.status}: {body[:200]}). "
-                    "Set DEFAULT_USER_EMAIL/DEFAULT_USER_PASSWORD correctly."
+                    "Set COGNEE_USER_EMAIL/COGNEE_USER_PASSWORD correctly."
                 )
             login_data = await resp.json()
             jwt = str(login_data.get("access_token", "") or "")
@@ -190,31 +189,75 @@ async def _create_agent_with_bootstrap_key(
 ) -> tuple[str, str]:
     import aiohttp
 
+    async def _delete_agent_by_name(
+        session: aiohttp.ClientSession, base_url: str, name: str
+    ) -> bool:
+        async with session.get(f"{base_url}/api/v1/agents/list") as list_resp:
+            if list_resp.status != 200:
+                body = await list_resp.text()
+                raise RuntimeError(f"list agents failed ({list_resp.status}: {body[:200]})")
+            agents = await list_resp.json()
+
+        target_id = ""
+        for item in agents if isinstance(agents, list) else []:
+            if not isinstance(item, dict):
+                continue
+            email = str(item.get("agentEmail", "") or "").strip()
+            short_name = email[:-13] if email.endswith("@cognee.agent") else email
+            if short_name == name:
+                target_id = str(item.get("agentId", "") or "").strip()
+                break
+
+        if not target_id:
+            return False
+
+        async with session.delete(f"{base_url}/api/v1/agents/{target_id}") as del_resp:
+            if del_resp.status not in (200, 204):
+                body = await del_resp.text()
+                raise RuntimeError(f"delete agent failed ({del_resp.status}: {body[:200]})")
+        return True
+
+    def _parse_create_payload(payload: dict) -> tuple[str, str]:
+        return (
+            str(payload.get("agentId", "") or ""),
+            str(payload.get("agentApiKey", "") or ""),
+        )
+
     headers = {"Content-Type": "application/json"}
     if bootstrap_key:
         headers["X-Api-Key"] = bootstrap_key
 
     base = service_url.rstrip("/")
     async with aiohttp.ClientSession(headers=headers) as session:
-        # Use the canonical trailing-slash route to avoid a 307 redirect
-        # that can drop auth headers in some clients/environments.
-        async with session.post(f"{base}/api/v1/agents/", params={"name": agent_name}) as resp:
+        async with session.post(
+            f"{base}/api/v1/agents/create", params={"name": agent_name}
+        ) as resp:
             if resp.status == 200:
                 payload = await resp.json()
-                return str(payload.get("agentId", "") or ""), str(
-                    payload.get("agentApiKey", "") or ""
-                )
+                return _parse_create_payload(payload)
             if resp.status == 409:
-                raise RuntimeError(
-                    f"Agent '{agent_name}' already exists on {base}, "
-                    "but no cached API key was found. Delete and recreate the agent."
-                )
+                deleted = await _delete_agent_by_name(session, base, agent_name)
+                if not deleted:
+                    raise RuntimeError(
+                        f"Agent '{agent_name}' already exists on {base}, "
+                        "but it could not be resolved for deletion."
+                    )
+                async with session.post(
+                    f"{base}/api/v1/agents/create", params={"name": agent_name}
+                ) as retry_resp:
+                    if retry_resp.status == 200:
+                        payload = await retry_resp.json()
+                        return _parse_create_payload(payload)
+                    text = await retry_resp.text()
+                    raise RuntimeError(
+                        f"create_agent retry failed ({retry_resp.status}: {text[:200]})"
+                    )
             text = await resp.text()
             raise RuntimeError(f"create_agent failed ({resp.status}: {text[:200]})")
 
 
 async def _ensure_agent_credentials_and_register(
-    config: dict, cwd: str, session_id: str
+    config: dict, cwd: str, session_id: str, agent_session_name: str, session_key: str
 ) -> tuple[str, str, str, bool]:
     service_url = _normalize_service_url(str(config.get("service_url", "") or ""))
     if not service_url:
@@ -228,37 +271,12 @@ async def _ensure_agent_credentials_and_register(
     agent_id = str(cached.get("agent_id", "") or "")
     agent_api_key = str(cached.get("api_key", "") or "")
 
-    try:
-        previous = (
-            json.loads(_RESOLVED_CACHE.read_text(encoding="utf-8"))
-            if _RESOLVED_CACHE.exists()
-            else {}
-        )
-    except Exception:
-        previous = {}
-    if (
-        previous.get("session_id") == session_id
-        and _normalize_service_url(previous.get("service_url", "")) == service_url
-        and previous.get("agent_name") == agent_name
-        and bool(previous.get("registered", False))
-        and previous.get("api_key")
-    ):
-        existing_key = str(previous.get("api_key") or "")
-        os.environ["COGNEE_API_KEY"] = existing_key
-        config["api_key"] = existing_key
-        return (
-            str(previous.get("agent_id", "") or agent_id),
-            existing_key,
-            agent_name,
-            True,
-        )
-
     if not agent_api_key:
         bootstrap_key = str(
             config.get("api_key", "") or os.environ.get("COGNEE_API_KEY", "")
         ).strip()
         if not bootstrap_key:
-            bootstrap_key = await _login_default_user_for_owner_api_key(service_url)
+            bootstrap_key = await _login_default_user_for_owner_api_key(service_url, config)
         created_agent_id, created_key = await _create_agent_with_bootstrap_key(
             service_url, agent_name, bootstrap_key
         )
@@ -289,7 +307,11 @@ async def _ensure_agent_credentials_and_register(
 
     from _plugin_common import register_agent_via_http
 
-    registered, active = register_agent_via_http()
+    registered, registration = register_agent_via_http(
+        agent_session_name=agent_session_name,
+        session_id=session_id,
+        dataset_names=[str(config.get("dataset", "") or "").strip()],
+    )
     if not registered:
         raise RuntimeError(
             f"Failed to register agent '{agent_name}' on {service_url}. "
@@ -300,8 +322,9 @@ async def _ensure_agent_credentials_and_register(
         {
             "agent_name": agent_name,
             "agent_id": agent_id,
+            "agent_session_name": agent_session_name,
             "registered": registered,
-            "active_agents": active,
+            "connection_id": str(registration.get("id", "")),
             "session_id": session_id,
         },
     )
@@ -320,7 +343,9 @@ def _watcher_alive() -> bool:
         return False
 
 
-def _spawn_idle_watcher(session_id: str, dataset: str, user_id: str, config: dict) -> None:
+def _spawn_idle_watcher(
+    session_id: str, dataset: str, user_id: str, config: dict, session_key: str
+) -> None:
     """Launch the idle watcher as a detached background process.
 
     Idempotent: if a watcher is already alive (from an earlier session
@@ -348,6 +373,7 @@ def _spawn_idle_watcher(session_id: str, dataset: str, user_id: str, config: dic
         "session_id": session_id,
         "dataset": dataset,
         "user_id": user_id,
+        "session_key": session_key,
         "config": {
             "service_url": config.get("service_url", ""),
             "llm_model": config.get("llm_model", ""),
@@ -364,11 +390,15 @@ def _spawn_idle_watcher(session_id: str, dataset: str, user_id: str, config: dic
         log_fh = subprocess.DEVNULL
 
     try:
+        env = os.environ.copy()
+        if session_key:
+            env["COGNEE_SESSION_KEY"] = session_key
         subprocess.Popen(
             [sys.executable, str(_WATCHER_SCRIPT), json.dumps(bootstrap)],
             stdin=subprocess.DEVNULL,
             stdout=log_fh,
             stderr=log_fh,
+            env=env,
             start_new_session=True,
             close_fds=True,
         )
@@ -414,7 +444,15 @@ def _find_codex_parent_pid() -> int:
     return fallback
 
 
-def _spawn_exit_watcher(session_id: str, dataset: str) -> None:
+def _spawn_exit_watcher(
+    session_id: str,
+    dataset: str,
+    *,
+    session_key: str = "",
+    agent_session_name: str = "",
+    api_key: str = "",
+    service_url: str = "",
+) -> None:
     """Launch a detached watcher that syncs only after Codex exits."""
 
     def _pid_alive(pid: int) -> bool:
@@ -461,6 +499,10 @@ def _spawn_exit_watcher(session_id: str, dataset: str) -> None:
         "parent_pid": parent_pid,
         "session_id": session_id,
         "dataset": dataset,
+        "session_key": session_key,
+        "agent_session_name": agent_session_name,
+        "api_key": api_key,
+        "service_url": service_url,
         "pidfile": str(watcher_pidfile),
     }
     log_path = _STATE_DIR / "exit-watcher.log"
@@ -473,11 +515,15 @@ def _spawn_exit_watcher(session_id: str, dataset: str) -> None:
         log_fh = subprocess.DEVNULL
 
     try:
+        env = os.environ.copy()
+        if session_key:
+            env["COGNEE_SESSION_KEY"] = session_key
         subprocess.Popen(
             [sys.executable, str(_EXIT_WATCHER_SCRIPT), json.dumps(bootstrap)],
             stdin=subprocess.DEVNULL,
             stdout=log_fh,
             stderr=log_fh,
+            env=env,
             start_new_session=True,
             close_fds=True,
         )
@@ -494,48 +540,88 @@ def _spawn_exit_watcher(session_id: str, dataset: str) -> None:
         hook_log("exit_watcher_launch_failed", {"error": str(e)[:300]})
 
 
-def _write_resolved(
-    session_id: str,
-    dataset: str,
-    user_id: str,
-    cwd: str,
-    service_url: str = "",
-    api_key: str = "",
-    agent_id: str = "",
-    agent_name: str = "",
-    registered: bool = False,
-) -> None:
-    """Cache resolved session ID, dataset, user ID, and API key for other hook scripts."""
-    _RESOLVED_CACHE.parent.mkdir(parents=True, exist_ok=True)
-    data = {
-        "session_id": session_id,
-        "dataset": dataset,
-        "user_id": user_id,
-        "cwd": cwd,
-        "registered": bool(registered),
-    }
-    if service_url:
-        data["service_url"] = _normalize_service_url(service_url)
-    if api_key:
-        data["api_key"] = api_key
-    if agent_id:
-        data["agent_id"] = agent_id
-    if agent_name:
-        data["agent_name"] = agent_name
-    _RESOLVED_CACHE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+def _purge_legacy_resolved_files() -> None:
+    legacy = _STATE_DIR / "resolved.json"
+    scoped_dir = _STATE_DIR / "resolved"
+    try:
+        if legacy.exists():
+            legacy.unlink()
+    except Exception as exc:
+        hook_log("legacy_resolved_unlink_failed", {"error": str(exc)[:200]})
+    try:
+        if scoped_dir.exists():
+            shutil.rmtree(scoped_dir)
+    except Exception as exc:
+        hook_log("legacy_resolved_dir_remove_failed", {"error": str(exc)[:200]})
+
+
+def _resolve_codex_session_name(payload: dict) -> str:
+    # Session identifier comes from SessionStart payload.
+    if isinstance(payload, dict):
+        payload_value = str(payload.get("session_id", "") or "").strip()
+        if payload_value:
+            return payload_value
+    return ""
 
 
 async def _start(payload: dict | None = None) -> dict:
     config = load_config()
     payload = payload or {}
     cwd = str(payload.get("cwd") or os.environ.get("CODEX_CWD") or os.getcwd())
+    explicit_service_url = str(config.get("service_url", "") or "").strip()
+    explicit_api_key = str(config.get("api_key", "") or "").strip()
+    managed_endpoint = bool(explicit_service_url and explicit_api_key)
 
-    try:
-        _ensure_local_server_running(config)
-    except Exception as exc:
-        hook_log("server_bootstrap_warning", {"error": str(exc)[:200]})
+    if managed_endpoint:
+        os.environ["COGNEE_AGENT_MODE"] = "false"
+        os.environ["COGNEE_SERVICE_URL"] = explicit_service_url
+        os.environ["COGNEE_API_KEY"] = explicit_api_key
+        hook_log(
+            "endpoint_mode_selected",
+            {"mode": "managed_endpoint", "service_url": explicit_service_url},
+        )
+    else:
+        os.environ["COGNEE_AGENT_MODE"] = "true"
+        try:
+            _ensure_local_server_running(config)
+        except Exception as exc:
+            hook_log("server_bootstrap_warning", {"error": str(exc)[:200]})
+        hook_log(
+            "endpoint_mode_selected",
+            {
+                "mode": "integration_local",
+                "service_url": str(config.get("service_url", "") or ""),
+            },
+        )
 
     session_id = get_session_id(config, cwd)
+    payload_session_id = (
+        str(payload.get("session_id", "") or "").strip() if isinstance(payload, dict) else ""
+    )
+    session_key = set_session_key(_resolve_codex_session_name(payload))
+    session_key_source = ""
+    if session_key:
+        if session_key == payload_session_id and payload_session_id:
+            session_key_source = "payload.session_id"
+        else:
+            session_key_source = "unknown"
+    hook_log(
+        "session_key_resolved",
+        {
+            "source": session_key_source,
+            "session_key": session_key,
+            "payload_session_id_present": bool(payload_session_id),
+        },
+    )
+    if not session_key:
+        hook_log("missing_payload_session_id", {"session_id": session_id, "cwd": cwd})
+        print(
+            "cognee-plugin: missing payload session_id; refusing to register",
+            file=sys.stderr,
+        )
+        return {}
+    agent_session_name = session_key
+    os.environ["COGNEE_SESSION_KEY"] = session_key
     dataset = get_dataset(config)
 
     # Configure cognee (cloud or local)
@@ -549,6 +635,7 @@ async def _start(payload: dict | None = None) -> dict:
     agent_api_key = ""
     agent_id = ""
     agent_name = _resolve_agent_name(config, cwd)
+    os.environ["COGNEE_AGENT_NAME"] = agent_name
     registered = False
 
     # Preferred HTTP path: create/get named agent, use its API key,
@@ -560,7 +647,9 @@ async def _start(payload: dict | None = None) -> dict:
                 agent_api_key,
                 agent_name,
                 registered,
-            ) = await _ensure_agent_credentials_and_register(config, cwd, session_id)
+            ) = await _ensure_agent_credentials_and_register(
+                config, cwd, session_id, agent_session_name, session_key
+            )
             if agent_id:
                 user_id = agent_id
         except Exception as exc:
@@ -594,19 +683,11 @@ async def _start(payload: dict | None = None) -> dict:
             await ensure_dataset_ready(dataset, user)
     except Exception as e:
         print(f"cognee-plugin: dataset warning ({e})", file=sys.stderr)
+    if user_id:
+        os.environ["COGNEE_USER_ID"] = user_id
 
-    # Write resolved values for other hooks
-    _write_resolved(
-        session_id,
-        dataset,
-        user_id,
-        cwd,
-        service_url=str(config.get("service_url", "") or ""),
-        api_key=agent_api_key,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        registered=registered,
-    )
+    # Remove legacy resolved cache files. Runtime state now comes from HTTP endpoints.
+    _purge_legacy_resolved_files()
 
     # Create config file on first run if it doesn't exist
     config_file = Path.home() / ".cognee-plugin" / "config.json"
@@ -624,9 +705,16 @@ async def _start(payload: dict | None = None) -> dict:
         "true",
         "yes",
     ):
-        _spawn_idle_watcher(session_id, dataset, user_id, config)
+        _spawn_idle_watcher(session_id, dataset, user_id, config, session_key)
 
-    _spawn_exit_watcher(session_id, dataset)
+    _spawn_exit_watcher(
+        session_id,
+        dataset,
+        session_key=session_key,
+        agent_session_name=agent_session_name,
+        api_key=agent_api_key,
+        service_url=str(config.get("service_url", "") or ""),
+    )
 
     mode = "cloud" if config.get("service_url") else "local"
     print(

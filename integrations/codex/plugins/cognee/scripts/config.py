@@ -34,6 +34,8 @@ _DEFAULTS = {
     "session_prefix": "codex",
     "top_k": 3,
     "backend": "auto",
+    "user_email": "default_user@example.com",
+    "user_password": "default_password",
     # Cloud / remote
     "service_url": "",
     "api_key": "",
@@ -74,6 +76,8 @@ _ENV_MAP = {
     "COGNEE_SERVICE_URL": "service_url",
     "COGNEE_API_KEY": "api_key",
     "COGNEE_BASE_URL": "base_url",
+    "COGNEE_USER_EMAIL": "user_email",
+    "COGNEE_USER_PASSWORD": "user_password",
     "LLM_API_KEY": "llm_api_key",
     "LLM_MODEL": "llm_model",
     # Legacy compat
@@ -84,7 +88,6 @@ _ENV_MAP = {
 def load_config() -> dict:
     """Load merged config: defaults → file → env vars."""
     config = dict(_DEFAULTS)
-    env_has_service_url = bool(os.environ.get("COGNEE_SERVICE_URL", ""))
 
     # Layer 2: config file
     if _CONFIG_FILE.exists():
@@ -107,13 +110,15 @@ def load_config() -> dict:
         config["service_url"] = ""
         config["api_key"] = ""
         config["base_url"] = ""
-    elif backend not in ("http", "api", "cloud", "server") and not env_has_service_url:
-        # Auto mode defaults to native local SDK mode. A service_url saved
-        # from an earlier HTTP run must not keep forcing HTTP mode after the
-        # user has unset the environment.
-        config["service_url"] = ""
-        config["api_key"] = ""
-        config["base_url"] = ""
+    elif backend not in ("http", "api", "cloud", "server"):
+        # Auto mode enters managed-endpoint mode only when both values are present.
+        # Partial endpoint config is ignored to avoid ambiguous routing.
+        has_service_url = bool(str(config.get("service_url") or "").strip())
+        has_api_key = bool(str(config.get("api_key") or "").strip())
+        if has_service_url != has_api_key:
+            config["service_url"] = ""
+            config["api_key"] = ""
+            config["base_url"] = ""
 
     return config
 
@@ -362,7 +367,6 @@ async def _ensure_identity_via_sdk() -> str:
         return ""
 
 
-_RESOLVED_CACHE_PATH = _STATE_DIR / "resolved.json"
 _LOCAL_SETUP_DONE = False
 
 
@@ -380,10 +384,6 @@ async def _ensure_local_databases() -> None:
 
 async def ensure_cognee_ready(config: dict) -> None:
     """Configure cognee for the active mode (cloud or local).
-
-    In cloud mode, loads the cached API key from resolved.json (written
-    by SessionStart) so that hooks running in separate processes can
-    authenticate against the server.
 
     In local SDK mode, also runs Cognee's setup() so a fresh machine or
     fresh virtualenv has its databases/tables before identity, recall, or
