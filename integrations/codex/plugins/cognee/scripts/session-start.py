@@ -19,6 +19,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,6 +50,10 @@ _WATCHER_SCRIPT = Path(__file__).with_name("idle-watcher.py")
 _EXIT_WATCHER_SCRIPT = Path(__file__).with_name("exit-watcher.py")
 _EXIT_WATCHERS_DIR = _STATE_DIR / "exit-watchers"
 _AGENT_KEYS_CACHE = _STATE_DIR / "agent_keys.json"
+_AGENT_KEYS_LOCK = _STATE_DIR / "agent_keys.lock"
+_AGENT_KEYS_LOCK_STALE_SECONDS = 120
+_AGENT_KEYS_LOCK_WAIT_SECONDS = 4.0
+_AGENT_KEYS_LOCK_POLL_SECONDS = 0.05
 _LOCAL_SERVICE_URL = "http://localhost:8011"
 _HEALTH_URL = f"{_LOCAL_SERVICE_URL}/health"
 _HEALTH_TIMEOUT_SECONDS = 30
@@ -101,10 +106,71 @@ def _load_agent_keys_cache() -> dict:
     return empty
 
 
+def _pid_alive(pid: int) -> bool:
+    if pid <= 1:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+@contextmanager
+def _agent_keys_lock(owner: str):
+    acquired = False
+    deadline = time.monotonic() + _AGENT_KEYS_LOCK_WAIT_SECONDS
+    try:
+        _AGENT_KEYS_LOCK.parent.mkdir(parents=True, exist_ok=True)
+        while True:
+            now = time.time()
+            if _AGENT_KEYS_LOCK.exists():
+                stale = False
+                try:
+                    raw = json.loads(_AGENT_KEYS_LOCK.read_text(encoding="utf-8"))
+                    pid = int(raw.get("pid", 0) or 0)
+                    created_at = float(raw.get("created_at", 0) or 0)
+                    stale = (not _pid_alive(pid)) or (
+                        now - created_at > _AGENT_KEYS_LOCK_STALE_SECONDS
+                    )
+                except Exception:
+                    stale = True
+                if stale:
+                    try:
+                        _AGENT_KEYS_LOCK.unlink()
+                    except Exception as exc:
+                        hook_log("agent_keys_lock_unlink_failed", {"error": str(exc)[:200]})
+
+            try:
+                fd = os.open(str(_AGENT_KEYS_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump({"owner": owner, "pid": os.getpid(), "created_at": now}, fh)
+                acquired = True
+                break
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("agent keys lock timeout")
+                time.sleep(_AGENT_KEYS_LOCK_POLL_SECONDS)
+
+        yield
+    finally:
+        if acquired:
+            try:
+                _AGENT_KEYS_LOCK.unlink()
+            except Exception as exc:
+                hook_log("agent_keys_lock_release_failed", {"error": str(exc)[:200]})
+
+
 def _save_agent_keys_cache(data: dict) -> None:
     try:
         _AGENT_KEYS_CACHE.parent.mkdir(parents=True, exist_ok=True)
-        _AGENT_KEYS_CACHE.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        tmp = _AGENT_KEYS_CACHE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, _AGENT_KEYS_CACHE)
     except Exception as exc:
         hook_log("agent_keys_cache_save_failed", {"error": str(exc)[:200]})
 
@@ -264,13 +330,32 @@ async def _ensure_agent_credentials_and_register(
         return "", "", "", False
 
     agent_name = _resolve_agent_name(config, cwd)
-    cache = _load_agent_keys_cache()
-    entries = cache.get("entries", {})
     cache_key = _agent_cache_key(service_url, agent_name)
-    cached = entries.get(cache_key, {}) if isinstance(entries, dict) else {}
-    agent_id = str(cached.get("agent_id", "") or "")
-    agent_api_key = str(cached.get("api_key", "") or "")
+    agent_id = ""
+    agent_api_key = ""
 
+    try:
+        with _agent_keys_lock("session-start:read"):
+            cache = _load_agent_keys_cache()
+            entries = cache.get("entries", {}) if isinstance(cache, dict) else {}
+            cached = entries.get(cache_key, {}) if isinstance(entries, dict) else {}
+            agent_id = str(cached.get("agent_id", "") or "")
+            agent_api_key = str(cached.get("api_key", "") or "")
+            if agent_api_key:
+                cached["last_used_at"] = _utc_iso_now()
+                entries[cache_key] = cached
+                cache["entries"] = entries
+                _save_agent_keys_cache(cache)
+    except RuntimeError:
+        hook_log("agent_keys_lock_busy", {"stage": "read", "agent_name": agent_name})
+        cache = _load_agent_keys_cache()
+        entries = cache.get("entries", {}) if isinstance(cache, dict) else {}
+        cached = entries.get(cache_key, {}) if isinstance(entries, dict) else {}
+        agent_id = str(cached.get("agent_id", "") or "")
+        agent_api_key = str(cached.get("api_key", "") or "")
+
+    created_agent_id = ""
+    created_key = ""
     if not agent_api_key:
         bootstrap_key = str(
             config.get("api_key", "") or os.environ.get("COGNEE_API_KEY", "")
@@ -283,21 +368,30 @@ async def _ensure_agent_credentials_and_register(
         if created_key:
             agent_id = created_agent_id
             agent_api_key = created_key
-            entries[cache_key] = {
-                "agent_id": agent_id,
-                "agent_name": agent_name,
-                "api_key": agent_api_key,
-                "service_url": service_url,
-                "created_at": _utc_iso_now(),
-                "last_used_at": _utc_iso_now(),
-            }
-            cache["entries"] = entries
-            _save_agent_keys_cache(cache)
-    else:
-        cached["last_used_at"] = _utc_iso_now()
-        entries[cache_key] = cached
-        cache["entries"] = entries
-        _save_agent_keys_cache(cache)
+            try:
+                with _agent_keys_lock("session-start:write"):
+                    cache = _load_agent_keys_cache()
+                    entries = cache.get("entries", {}) if isinstance(cache, dict) else {}
+                    latest = entries.get(cache_key, {}) if isinstance(entries, dict) else {}
+                    latest_key = str(latest.get("api_key", "") or "")
+                    if latest_key:
+                        agent_id = str(latest.get("agent_id", "") or "") or agent_id
+                        agent_api_key = latest_key
+                        latest["last_used_at"] = _utc_iso_now()
+                        entries[cache_key] = latest
+                    else:
+                        entries[cache_key] = {
+                            "agent_id": agent_id,
+                            "agent_name": agent_name,
+                            "api_key": agent_api_key,
+                            "service_url": service_url,
+                            "created_at": _utc_iso_now(),
+                            "last_used_at": _utc_iso_now(),
+                        }
+                    cache["entries"] = entries
+                    _save_agent_keys_cache(cache)
+            except RuntimeError:
+                hook_log("agent_keys_lock_busy", {"stage": "write", "agent_name": agent_name})
 
     if not agent_api_key:
         return "", "", agent_name, False

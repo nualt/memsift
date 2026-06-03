@@ -7,7 +7,6 @@
 set -u
 
 PLUGIN_DIR="${HOME}/.cognee-plugin/codex"
-SESSION_KEY="${COGNEE_SESSION_KEY:-}"
 LAST_RECALL="${PLUGIN_DIR}/last_recall.json"
 SAVE_COUNTER="${PLUGIN_DIR}/save_counter.json"
 
@@ -37,46 +36,40 @@ except Exception:
 PY
 }
 
-runtime_json="$(python3 - <<'PY' "${PLUGIN_DIR}" "${SESSION_KEY}" 2>/dev/null || true
+runtime_json="$(python3 - <<'PY' "${PLUGIN_DIR}" 2>/dev/null || true
 import json
 import os
 import pathlib
 import sys
 import urllib.error
-import urllib.parse
 import urllib.request
 
 plugin_dir = pathlib.Path(sys.argv[1])
-session_key = (sys.argv[2] or "").strip()
-service_url = (os.environ.get("COGNEE_SERVICE_URL") or os.environ.get("COGNEE_LOCAL_API_URL") or "").strip()
+service_url = (os.environ.get("COGNEE_SERVICE_URL") or os.environ.get("COGNEE_LOCAL_API_URL") or "http://localhost:8011").strip()
 api_key = (os.environ.get("COGNEE_API_KEY") or "").strip()
 agent_name = (os.environ.get("COGNEE_AGENT_NAME") or "").strip()
 
-if not (service_url and api_key):
+if not api_key and service_url and agent_name:
     cache_path = plugin_dir / "agent_keys.json"
     if cache_path.exists():
         try:
             cache = json.loads(cache_path.read_text())
             entries = cache.get("entries", {}) if isinstance(cache, dict) else {}
-            chosen = None
             if isinstance(entries, dict):
-                if agent_name:
-                    for entry in entries.values():
-                        if isinstance(entry, dict) and str(entry.get("agent_name") or "").strip() == agent_name:
-                            chosen = entry
-                            break
-                if chosen is None:
-                    latest_ts = ""
+                normalized_url = service_url.rstrip("/")
+                key = f"{normalized_url}::{agent_name}"
+                chosen = entries.get(key)
+                if isinstance(chosen, dict):
+                    api_key = str(chosen.get("api_key") or "").strip()
+                else:
                     for entry in entries.values():
                         if not isinstance(entry, dict):
                             continue
-                        ts = str(entry.get("last_used_at") or entry.get("created_at") or "")
-                        if ts >= latest_ts:
-                            latest_ts = ts
-                            chosen = entry
-            if isinstance(chosen, dict):
-                service_url = service_url or str(chosen.get("service_url") or "").strip()
-                api_key = api_key or str(chosen.get("api_key") or "").strip()
+                        name = str(entry.get("agent_name") or "").strip()
+                        url = str(entry.get("service_url") or "").strip().rstrip("/")
+                        if name == agent_name and url == normalized_url:
+                            api_key = str(entry.get("api_key") or "").strip()
+                            break
         except Exception:
             pass
 
@@ -84,11 +77,8 @@ session_id = ""
 dataset = ""
 if service_url and api_key:
     try:
-        query = ""
-        if session_key:
-            query = "?agent_session_name=" + urllib.parse.quote(session_key, safe="")
         req = urllib.request.Request(
-            service_url.rstrip("/") + "/api/v1/agents/connections/me" + query,
+            service_url.rstrip("/") + "/api/v1/agents/connections/me",
             headers={"X-Api-Key": api_key},
         )
         with urllib.request.urlopen(req, timeout=3.0) as resp:

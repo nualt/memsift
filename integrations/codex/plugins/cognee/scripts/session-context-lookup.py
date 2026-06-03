@@ -19,6 +19,7 @@ import sys
 # Add scripts dir to path for helper imports
 sys.path.insert(0, os.path.dirname(__file__))
 from _plugin_common import (
+    get_session_key,
     hook_log,
     load_resolved,
     notify,
@@ -333,6 +334,9 @@ def main():
     payload_session_id = str(payload.get("session_id", "") or "").strip()
     if payload_session_id:
         set_session_key(payload_session_id)
+    if not get_session_key():
+        hook_log("context_lookup_missing_session_key")
+        return
 
     prompt = payload.get("prompt", "")
     if not prompt or len(prompt) < 5:

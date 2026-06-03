@@ -10,7 +10,6 @@ import json
 import os
 import sys
 import urllib.error
-import urllib.parse
 import urllib.request
 import uuid
 from contextlib import contextmanager
@@ -40,6 +39,7 @@ _LOG_LINE_CAP = 600
 # Default auto-improve threshold (tool calls + stops). Env override.
 AUTO_IMPROVE_EVERY_DEFAULT = 30
 SYNC_LOCK_STALE_SECONDS = 15 * 60
+_DEFAULT_LOCAL_SERVICE_URL = "http://localhost:8011"
 
 
 def _sanitize_session_key(value: str) -> str:
@@ -70,6 +70,22 @@ def set_session_key(session_key: str) -> str:
     return normalized
 
 
+def _resolve_agent_name() -> str:
+    env_name = str(os.environ.get("COGNEE_AGENT_NAME") or "").strip()
+    if env_name:
+        return env_name
+    try:
+        from config import load_config  # type: ignore
+
+        configured = str(load_config().get("agent_name") or "").strip()
+        if configured:
+            os.environ["COGNEE_AGENT_NAME"] = configured
+            return configured
+    except Exception:
+        pass
+    return "codex-agent"
+
+
 def load_resolved(session_key: str = "") -> dict:
     """Load runtime state from Cognee HTTP endpoints (no file cache)."""
     resolved: dict = {}
@@ -96,13 +112,10 @@ def load_resolved(session_key: str = "") -> dict:
     except Exception as exc:
         hook_log("runtime_state_users_me_failed", {"error": str(exc)[:200]})
 
-    # Resolve active connection details for this Codex session.
-    query = ""
-    if active_session_key:
-        query = f"?agent_session_name={urllib.parse.quote(active_session_key, safe='')}"
+    # Resolve active connection details for the authenticated agent key.
     try:
         conn = _json_http_request(
-            f"/api/v1/agents/connections/me{query}",
+            "/api/v1/agents/connections/me",
             method="GET",
             timeout=10.0,
         )
@@ -484,64 +497,65 @@ def _local_api_url() -> str:
     ).strip()
     if direct:
         return direct
+    return _DEFAULT_LOCAL_SERVICE_URL
 
-    cache = _load_json_file(_AGENT_KEYS_CACHE)
-    entries = cache.get("entries", {}) if isinstance(cache, dict) else {}
-    if not isinstance(entries, dict):
-        return "http://localhost:8011"
 
-    desired_name = str(os.environ.get("COGNEE_AGENT_NAME") or "").strip()
-    selected: dict | None = None
-    if desired_name:
-        for entry in entries.values():
-            if (
-                isinstance(entry, dict)
-                and str(entry.get("agent_name") or "").strip() == desired_name
-            ):
-                selected = entry
-                break
-    if selected is None:
-        selected = max(
-            (entry for entry in entries.values() if isinstance(entry, dict)),
-            key=lambda item: str(item.get("last_used_at") or item.get("created_at") or ""),
-            default=None,
-        )
-    if isinstance(selected, dict):
-        url = str(selected.get("service_url") or "").strip()
-        if url:
-            return url
-    return "http://localhost:8011"
+def _normalize_service_url(value: str) -> str:
+    return str(value or "").strip().rstrip("/")
 
 
 def _api_key() -> str:
-    env_key = str(os.environ.get("COGNEE_API_KEY", "") or "").strip()
-    if env_key:
-        return env_key
+    service_url = _normalize_service_url(_local_api_url())
+    agent_name = _resolve_agent_name()
+    if not service_url:
+        return str(os.environ.get("COGNEE_API_KEY", "") or "").strip()
 
     cache = _load_json_file(_AGENT_KEYS_CACHE)
     entries = cache.get("entries", {}) if isinstance(cache, dict) else {}
-    if not isinstance(entries, dict):
-        return ""
+    if isinstance(entries, dict) and agent_name:
+        selected: dict | None = None
+        cache_key = f"{service_url}::{agent_name}"
+        entry = entries.get(cache_key)
+        if isinstance(entry, dict):
+            selected = entry
+        else:
+            # Backward compatibility for older cache formats where keys may differ.
+            for value in entries.values():
+                if not isinstance(value, dict):
+                    continue
+                url = _normalize_service_url(str(value.get("service_url") or ""))
+                name = str(value.get("agent_name") or "").strip()
+                if url == service_url and name == agent_name:
+                    selected = value
+                    break
+        if isinstance(selected, dict):
+            key = str(selected.get("api_key") or "").strip()
+            if key:
+                os.environ["COGNEE_API_KEY"] = key
+                return key
 
-    desired_name = str(os.environ.get("COGNEE_AGENT_NAME") or "").strip()
-    selected: dict | None = None
-    if desired_name:
-        for entry in entries.values():
-            if (
-                isinstance(entry, dict)
-                and str(entry.get("agent_name") or "").strip() == desired_name
-            ):
-                selected = entry
-                break
-    if selected is None:
-        selected = max(
-            (entry for entry in entries.values() if isinstance(entry, dict)),
-            key=lambda item: str(item.get("last_used_at") or item.get("created_at") or ""),
-            default=None,
-        )
-    if isinstance(selected, dict):
-        return str(selected.get("api_key") or "").strip()
-    return ""
+    # Fallback for bootstrap paths before an agent key is available.
+    return str(os.environ.get("COGNEE_API_KEY", "") or "").strip()
+
+
+def resolved_http_endpoint_auth() -> tuple[str, str]:
+    """Return (service_url, api_key) for runtime HTTP calls.
+
+    Service URL always falls back to localhost. API key is resolved from env
+    first, then from agent_keys cache by (service_url, agent_name).
+    """
+    service_url = _normalize_service_url(_local_api_url())
+    api_key = _api_key().strip()
+    if service_url:
+        os.environ["COGNEE_SERVICE_URL"] = service_url
+    if api_key:
+        os.environ["COGNEE_API_KEY"] = api_key
+    return service_url, api_key
+
+
+def http_api_ready() -> bool:
+    service_url, api_key = resolved_http_endpoint_auth()
+    return bool(service_url and api_key)
 
 
 def set_agent_registration(registered: bool, session_key: str = "") -> None:

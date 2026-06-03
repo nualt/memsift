@@ -19,6 +19,7 @@ from pathlib import Path
 # Add scripts dir to path for helper imports
 sys.path.insert(0, os.path.dirname(__file__))
 from _plugin_common import (
+    get_session_key,
     hook_log,
     load_resolved,
     quiet_hook_output,
@@ -43,6 +44,9 @@ _SYNC_START_DELAY_SECONDS = "2"
 
 def _load_resolved_fields() -> tuple[str, str, str]:
     """Return (session_id, dataset, user_id) from runtime endpoint state or config."""
+    if not get_session_key():
+        hook_log("precompact_missing_session_key")
+        return "", "", ""
     resolved = load_resolved()
     session_id = resolved.get("session_id", "")
     dataset = resolved.get("dataset", "")

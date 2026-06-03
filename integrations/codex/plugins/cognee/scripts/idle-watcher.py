@@ -87,6 +87,7 @@ async def _improve_once(session_id: str, dataset: str, config: dict) -> bool:
     sys.path.insert(0, os.path.dirname(__file__))
     try:
         from _plugin_common import (  # type: ignore
+            http_api_ready,
             load_resolved,
             persist_session_cache_to_graph_via_http,
             resolve_user,
@@ -97,9 +98,11 @@ async def _improve_once(session_id: str, dataset: str, config: dict) -> bool:
         session_key = str(config.get("session_key") or "").strip()
         if session_key:
             set_session_key(session_key)
-        lock = sync_lock("idle-watcher")
+        api_mode = http_api_ready()
+        lock = nullcontext(True) if api_mode else sync_lock("idle-watcher")
     except Exception as exc:
         _log("sync_lock_import_error", error=str(exc)[:200])
+        api_mode = False
         lock = nullcontext(True)
 
     with lock as acquired:
@@ -112,12 +115,11 @@ async def _improve_once(session_id: str, dataset: str, config: dict) -> bool:
                 ensure_cognee_ready,
                 ensure_dataset_ready,
                 ensure_identity,
-                is_cloud_mode,
                 persist_session_cache_to_graph,
                 sync_graph_context_to_session,
             )
 
-            if is_cloud_mode(config):
+            if api_mode:
                 wrote = persist_session_cache_to_graph_via_http(dataset, session_id)
                 _log(
                     "session_bridge_done",

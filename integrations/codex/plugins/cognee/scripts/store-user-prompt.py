@@ -20,7 +20,9 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(__file__))
 from _plugin_common import (
     bump_save_counter,
+    get_session_key,
     hook_log,
+    http_api_ready,
     load_resolved,
     notify,
     quiet_hook_output,
@@ -29,7 +31,7 @@ from _plugin_common import (
     set_session_key,
     touch_activity,
 )
-from config import ensure_cognee_ready, get_dataset, get_session_id, is_cloud_mode, load_config
+from config import ensure_cognee_ready, get_dataset, get_session_id, load_config
 
 MAX_TEXT = 4000
 _STATE_DIR = Path.home() / ".cognee-plugin" / "codex"
@@ -135,7 +137,7 @@ async def _store(prompt: str, payload: dict):
     # identities, and datasets are ready before the paired Stop write arrives.
     try:
         await ensure_cognee_ready(config)
-        if not is_cloud_mode(config):
+        if not http_api_ready():
             await resolve_user(user_id)
     except Exception as exc:
         hook_log("prompt_prepare_warning", {"error": str(exc)[:200]})
@@ -165,6 +167,9 @@ def main():
     payload_session_id = str(payload.get("session_id", "") or "").strip()
     if payload_session_id:
         set_session_key(payload_session_id)
+    if not get_session_key():
+        hook_log("prompt_missing_session_key")
+        return
 
     prompt = payload.get("prompt", "")
     if not prompt or len(prompt) < 5:

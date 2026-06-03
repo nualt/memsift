@@ -16,6 +16,7 @@ import signal
 import subprocess
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 # Add scripts dir to path for config/_plugin_common imports
@@ -23,9 +24,11 @@ sys.path.insert(0, os.path.dirname(__file__))
 from _plugin_common import (
     get_session_key,
     hook_log,
+    http_api_ready,
     load_resolved,
     persist_session_cache_to_graph_via_http,
     resolve_user,
+    resolved_http_endpoint_auth,
     set_session_key,
     sync_lock,
     unregister_agent_via_http,
@@ -35,7 +38,6 @@ from config import (
     ensure_dataset_ready,
     get_dataset,
     get_session_id,
-    is_cloud_mode,
     load_config,
     persist_session_cache_to_graph,
     sync_graph_context_to_session,
@@ -130,7 +132,12 @@ def _load_resolved() -> tuple:
     env_agent_session_name = str(os.environ.get("COGNEE_AGENT_SESSION_NAME", "") or "").strip()
     env_api_key = str(os.environ.get("COGNEE_API_KEY", "") or "").strip()
     env_service_url = str(os.environ.get("COGNEE_SERVICE_URL", "") or "").strip()
+    resolved_service_url, resolved_api_key = resolved_http_endpoint_auth()
+    env_api_key = env_api_key or resolved_api_key
+    env_service_url = env_service_url or resolved_service_url
 
+    if not session_key:
+        hook_log("sync_missing_session_key")
     data = load_resolved(session_key=session_key)
     if data:
         service_url = env_service_url or str(data.get("service_url", "") or "").strip()
@@ -179,18 +186,20 @@ async def _sync(stop_watcher: bool, unregister_on_finish: bool = False):
     )
 
     try:
-        with sync_lock("sync-session-to-graph") as acquired:
+        if stop_watcher:
+            _stop_idle_watcher()
+            hook_log("sync_stopped_watcher", {"session": session_id, "dataset": dataset})
+
+        config = load_config()
+        api_mode = http_api_ready()
+        lock = nullcontext(True) if api_mode else sync_lock("sync-session-to-graph")
+        with lock as acquired:
             if not acquired:
                 hook_log("sync_skipped_lock_busy", {"session": session_id, "dataset": dataset})
                 print("cognee-sync: skipped, another sync is running", file=sys.stderr)
                 return
 
-            if stop_watcher:
-                _stop_idle_watcher()
-                hook_log("sync_stopped_watcher", {"session": session_id, "dataset": dataset})
-
-            config = load_config()
-            if is_cloud_mode(config):
+            if api_mode:
                 wrote = persist_session_cache_to_graph_via_http(dataset, session_id)
                 hook_log(
                     "sync_bridge_done",
@@ -238,7 +247,7 @@ async def _sync(stop_watcher: bool, unregister_on_finish: bool = False):
                     {"session": session_id, "dataset": dataset},
                 )
             else:
-                unregister_name = str(agent_session_name or session_id or "").strip()
+                unregister_name = str(agent_session_name or session_key or "").strip()
                 if not unregister_name:
                     hook_log(
                         "agent_unregister_skipped_no_session_name",
