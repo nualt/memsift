@@ -322,6 +322,25 @@ async def _create_agent_with_bootstrap_key(
             raise RuntimeError(f"create_agent failed ({resp.status}: {text[:200]})")
 
 
+async def _agent_api_key_is_valid(service_url: str, api_key: str) -> bool:
+    import aiohttp
+
+    base = _normalize_service_url(service_url)
+    if not base or not str(api_key or "").strip():
+        return False
+    try:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(
+            timeout=timeout,
+            headers={"X-Api-Key": str(api_key).strip()},
+        ) as session:
+            async with session.get(f"{base}/api/v1/users/me") as resp:
+                return resp.status == 200
+    except Exception as exc:
+        hook_log("agent_key_validation_failed", {"error": str(exc)[:200]})
+        return False
+
+
 async def _ensure_agent_credentials_and_register(
     config: dict, cwd: str, session_id: str, agent_session_name: str, session_key: str
 ) -> tuple[str, str, str, bool]:
@@ -353,6 +372,41 @@ async def _ensure_agent_credentials_and_register(
         cached = entries.get(cache_key, {}) if isinstance(entries, dict) else {}
         agent_id = str(cached.get("agent_id", "") or "")
         agent_api_key = str(cached.get("api_key", "") or "")
+
+    if agent_api_key:
+        key_valid = await _agent_api_key_is_valid(service_url, agent_api_key)
+        if not key_valid:
+            hook_log(
+                "agent_key_stale_detected",
+                {"agent_name": agent_name, "service_url": service_url},
+            )
+            agent_id = ""
+            agent_api_key = ""
+            try:
+                with _agent_keys_lock("session-start:invalidate-stale"):
+                    cache = _load_agent_keys_cache()
+                    entries = cache.get("entries", {}) if isinstance(cache, dict) else {}
+                    if isinstance(entries, dict):
+                        entries.pop(cache_key, None)
+                        cache["entries"] = entries
+                        _save_agent_keys_cache(cache)
+            except RuntimeError:
+                hook_log("agent_keys_lock_busy", {"stage": "invalidate", "agent_name": agent_name})
+        else:
+            try:
+                with _agent_keys_lock("session-start:touch-last-used"):
+                    cache = _load_agent_keys_cache()
+                    entries = cache.get("entries", {}) if isinstance(cache, dict) else {}
+                    latest = entries.get(cache_key, {}) if isinstance(entries, dict) else {}
+                    if isinstance(latest, dict):
+                        latest["last_used_at"] = _utc_iso_now()
+                        entries[cache_key] = latest
+                        cache["entries"] = entries
+                        _save_agent_keys_cache(cache)
+            except RuntimeError:
+                hook_log(
+                    "agent_keys_lock_busy", {"stage": "touch-last-used", "agent_name": agent_name}
+                )
 
     created_agent_id = ""
     created_key = ""
