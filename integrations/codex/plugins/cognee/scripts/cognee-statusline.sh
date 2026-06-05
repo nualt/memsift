@@ -42,6 +42,7 @@ import os
 import pathlib
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 plugin_dir = pathlib.Path(sys.argv[1])
@@ -77,8 +78,12 @@ session_id = ""
 dataset = ""
 if service_url and api_key:
     try:
+        query = ""
+        session_key = (os.environ.get("COGNEE_SESSION_KEY") or "").strip()
+        if session_key:
+            query = "?agent_session_name=" + urllib.parse.quote(session_key, safe="")
         req = urllib.request.Request(
-            service_url.rstrip("/") + "/api/v1/agents/connections/me",
+            service_url.rstrip("/") + "/api/v1/agents/connections/me" + query,
             headers={"X-Api-Key": api_key},
         )
         with urllib.request.urlopen(req, timeout=3.0) as resp:

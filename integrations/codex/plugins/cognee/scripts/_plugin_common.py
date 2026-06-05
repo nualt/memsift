@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from contextlib import contextmanager
@@ -112,10 +113,13 @@ def load_resolved(session_key: str = "") -> dict:
     except Exception as exc:
         hook_log("runtime_state_users_me_failed", {"error": str(exc)[:200]})
 
-    # Resolve active connection details for the authenticated agent key.
+    # Resolve active connection details for this session when possible.
     try:
+        query = ""
+        if active_session_key:
+            query = f"?agent_session_name={urllib.parse.quote(active_session_key, safe='')}"
         conn = _json_http_request(
-            "/api/v1/agents/connections/me",
+            f"/api/v1/agents/connections/me{query}",
             method="GET",
             timeout=10.0,
         )
@@ -556,6 +560,17 @@ def resolved_http_endpoint_auth() -> tuple[str, str]:
 def http_api_ready() -> bool:
     service_url, api_key = resolved_http_endpoint_auth()
     return bool(service_url and api_key)
+
+
+def resolve_runtime_mode() -> dict:
+    """Resolve hook runtime mode from effective endpoint auth."""
+    service_url, api_key = resolved_http_endpoint_auth()
+    mode = "http" if (service_url and api_key) else "local_sdk"
+    return {
+        "mode": mode,
+        "service_url": service_url,
+        "api_key_present": bool(api_key),
+    }
 
 
 def set_agent_registration(registered: bool, session_key: str = "") -> None:

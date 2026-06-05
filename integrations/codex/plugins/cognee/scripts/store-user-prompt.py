@@ -22,11 +22,11 @@ from _plugin_common import (
     bump_save_counter,
     get_session_key,
     hook_log,
-    http_api_ready,
     load_resolved,
     notify,
     quiet_hook_output,
     remember_pending_prompt,
+    resolve_runtime_mode,
     resolve_user,
     set_session_key,
     touch_activity,
@@ -133,14 +133,15 @@ async def _store(prompt: str, payload: dict):
     touch_activity()
     _ensure_idle_watcher(session_id, dataset, user_id, config)
 
-    # Keep Cognee initialization parity with Claude so fresh local databases,
-    # identities, and datasets are ready before the paired Stop write arrives.
-    try:
-        await ensure_cognee_ready(config)
-        if not http_api_ready():
+    runtime = resolve_runtime_mode()
+    if runtime["mode"] == "local_sdk":
+        # Keep Cognee initialization parity with Claude so fresh local
+        # databases, identities, and datasets are ready before Stop writes.
+        try:
+            await ensure_cognee_ready(config)
             await resolve_user(user_id)
-    except Exception as exc:
-        hook_log("prompt_prepare_warning", {"error": str(exc)[:200]})
+        except Exception as exc:
+            hook_log("prompt_prepare_warning", {"error": str(exc)[:200]})
 
     remember_pending_prompt(
         session_id,

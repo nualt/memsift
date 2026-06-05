@@ -26,10 +26,11 @@ from _plugin_common import (
     quiet_hook_output,
     read_and_reset_save_counter,
     recall_via_http,
+    resolve_runtime_mode,
     resolve_user,
     set_session_key,
 )
-from config import ensure_cognee_ready, get_session_id, is_cloud_mode, load_config
+from config import ensure_cognee_ready, get_session_id, load_config
 
 TOP_K = 5
 TRUNCATE_ANSWER = 500
@@ -138,7 +139,10 @@ async def _recent_trace_fallback(session_id: str, user_id: str, top_k: int) -> l
 
 async def _run(prompt: str) -> dict | None:
     config = load_config()
-    await ensure_cognee_ready(config)
+    runtime = resolve_runtime_mode()
+    cloud_mode = runtime["mode"] == "http"
+    if not cloud_mode:
+        await ensure_cognee_ready(config)
 
     session_id = _load_session_id()
     if not session_id:
@@ -158,7 +162,6 @@ async def _run(prompt: str) -> dict | None:
         (["graph_context"], None),
         (["graph"], "GRAPH_COMPLETION"),
     ]
-    cloud_mode = is_cloud_mode(config)
     if not cloud_mode:
         import cognee
         from cognee.modules.search.types import SearchType

@@ -32,6 +32,7 @@ from _plugin_common import (
     pop_pending_prompt,
     quiet_hook_output,
     remember_entry_via_http,
+    resolve_runtime_mode,
     resolve_user,
     set_session_key,
     touch_activity,
@@ -155,7 +156,10 @@ async def _store_tool_call(payload: dict) -> None:
         return
 
     config = load_config()
-    await ensure_cognee_ready(config)
+    runtime = resolve_runtime_mode()
+    use_http = runtime["mode"] == "http"
+    if not use_http:
+        await ensure_cognee_ready(config)
 
     entry = {
         "type": "trace",
@@ -171,7 +175,6 @@ async def _store_tool_call(payload: dict) -> None:
     }
 
     try:
-        use_http = http_api_ready()
         if use_http:
             result = remember_entry_via_http(dataset, session_id, entry)
             user = None
@@ -242,7 +245,10 @@ async def _store_assistant_stop(payload: dict) -> None:
         return
 
     config = load_config()
-    await ensure_cognee_ready(config)
+    runtime = resolve_runtime_mode()
+    use_http = runtime["mode"] == "http"
+    if not use_http:
+        await ensure_cognee_ready(config)
 
     pending = pop_pending_prompt(session_id, turn_id=str(payload.get("turn_id") or ""))
 
@@ -257,7 +263,6 @@ async def _store_assistant_stop(payload: dict) -> None:
     }
 
     try:
-        use_http = http_api_ready()
         if use_http:
             result = remember_entry_via_http(dataset, session_id, entry)
             user = None
