@@ -27,9 +27,11 @@ _SAVE_COUNTER = _PLUGIN_DIR / "save_counter.json"
 _SERVER_READY_MARKER = Path.home() / ".cognee-plugin" / "server-ready.json"
 _SERVER_READY_TTL_SECONDS = 30
 _SYNC_LOCK = _PLUGIN_DIR / "sync.lock"
-_HTTP_BRIDGE_CACHE = _PLUGIN_DIR / "http_bridge_cache.json"
-_HTTP_BRIDGE_STATE = _PLUGIN_DIR / "http_bridge_state.json"
-_PENDING_PROMPTS = _PLUGIN_DIR / "pending_prompts.json"
+# Per-agent-session buffer dirs. Each agent session (one Claude/Codex terminal)
+# owns its own file under these dirs, so two concurrent agents never
+# read-modify-write the same file — no locks needed, no lost-update races.
+_BRIDGE_DIR = _PLUGIN_DIR / "bridge"
+_PENDING_DIR = _PLUGIN_DIR / "pending"
 _SUBPROCESS_LOG = _PLUGIN_DIR / "subprocess.log"
 _AGENT_KEYS_CACHE = _PLUGIN_DIR / "agent_keys.json"
 
@@ -215,7 +217,11 @@ def _load_json_file(path: Path) -> dict:
 def _write_json_file(path: Path, data: dict) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        # Atomic write: a concurrent reader never sees a half-written file.
+        # Per-pid tmp name so two writers can't collide on the tmp path.
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, path)
     except Exception as exc:
         hook_log("json_write_failed", {"path": str(path), "error": str(exc)[:200]})
 
@@ -229,6 +235,26 @@ def _bridge_cache_key(dataset: str, session_id: str) -> str:
     # still targets the resolved dataset. Avoiding user_id also removes a
     # blocking load_resolved() HTTP call from this hot path.
     return f"{dataset}:{session_id}"
+
+
+def _agent_session_scope(fallback: str = "") -> str:
+    """Filesystem-safe identity of the current agent session.
+
+    Each agent session (one Claude/Codex terminal) owns its own pending and
+    bridge files keyed by this scope, so concurrent agents never share a file
+    (no locks, no lost-update races). Falls back to the cognee session_id, then
+    a constant, so the path is always defined.
+    """
+    scope = _sanitize_session_key(get_session_key()) or _sanitize_session_key(fallback)
+    return scope or "default"
+
+
+def _pending_file(session_id: str = "") -> Path:
+    return _PENDING_DIR / f"{_agent_session_scope(session_id)}.json"
+
+
+def _bridge_file(session_id: str = "") -> Path:
+    return _BRIDGE_DIR / f"{_agent_session_scope(session_id)}.json"
 
 
 def append_http_bridge_entry(
@@ -250,14 +276,14 @@ def append_http_bridge_entry(
     if not (question or answer or trace):
         return
 
-    cache = _load_json_file(_HTTP_BRIDGE_CACHE)
+    cache = _load_json_file(_bridge_file(session_id))
     key = _bridge_cache_key(dataset, session_id)
     session_cache = cache.setdefault(key, {"qa": [], "trace": []})
     if question or answer:
         session_cache.setdefault("qa", []).append({"question": question, "answer": answer})
     if trace:
         session_cache.setdefault("trace", []).append(trace)
-    _write_json_file(_HTTP_BRIDGE_CACHE, cache)
+    _write_json_file(_bridge_file(session_id), cache)
 
 
 async def resolve_user(user_id: str):
@@ -410,8 +436,13 @@ def read_and_reset_save_counter(session_id: str) -> dict:
 
 
 def _pending_keys(session_id: str, turn_id: str = "") -> tuple[str, str]:
-    session_key = f"{session_id}:"
-    turn_key = f"{session_id}:{turn_id}" if turn_id else session_key
+    # Scope by the host-provided session key (COGNEE_SESSION_KEY, unique per
+    # Claude/Codex session) rather than the cwd-derived cognee session_id, so
+    # two concurrent agents in the same project don't collide on one pending
+    # slot and scramble each other's prompts. Falls back to session_id.
+    scope = get_session_key() or session_id
+    session_key = f"{scope}:"
+    turn_key = f"{scope}:{turn_id}" if turn_id else session_key
     return turn_key, session_key
 
 
@@ -421,7 +452,7 @@ def remember_pending_prompt(
     """Store the current prompt until Codex Stop provides the assistant answer."""
     if not session_id or not prompt.strip():
         return
-    data = _load_json_file(_PENDING_PROMPTS)
+    data = _load_json_file(_pending_file(session_id))
     turn_key, session_key = _pending_keys(session_id, turn_id)
     entry = {
         "prompt": prompt[:8000],
@@ -430,18 +461,18 @@ def remember_pending_prompt(
     }
     data[turn_key] = entry
     data[session_key] = entry
-    _write_json_file(_PENDING_PROMPTS, data)
+    _write_json_file(_pending_file(session_id), data)
 
 
 def pop_pending_prompt(session_id: str, *, turn_id: str = "") -> dict:
     """Return and remove the prompt saved for this Codex turn."""
     if not session_id:
         return {"prompt": "", "context": ""}
-    data = _load_json_file(_PENDING_PROMPTS)
+    data = _load_json_file(_pending_file(session_id))
     turn_key, session_key = _pending_keys(session_id, turn_id)
     entry = data.pop(turn_key, None) or data.get(session_key) or {}
     data.pop(session_key, None)
-    _write_json_file(_PENDING_PROMPTS, data)
+    _write_json_file(_pending_file(session_id), data)
     if not isinstance(entry, dict):
         return {"prompt": "", "context": ""}
     return {
@@ -882,7 +913,7 @@ def _multipart_body(
 
 
 def _format_cached_bridge_document(dataset: str, session_id: str) -> tuple[str, str]:
-    cache = _load_json_file(_HTTP_BRIDGE_CACHE)
+    cache = _load_json_file(_bridge_file(session_id))
     key = _bridge_cache_key(dataset, session_id)
     session_cache = cache.get(key, {})
 
@@ -964,7 +995,9 @@ def persist_session_cache_to_graph_via_http(
         hook_log("http_bridge_skipped_empty_cache", {"dataset": dataset, "session": session_id})
         return False
 
-    state = _load_json_file(_HTTP_BRIDGE_STATE)
+    bridge_path = _bridge_file(session_id)
+    bridge_cache = _load_json_file(bridge_path)
+    state = bridge_cache.get("_state", {}) if isinstance(bridge_cache, dict) else {}
     wrote = False
     try:
         for kind, node_set, document in (
@@ -980,7 +1013,9 @@ def persist_session_cache_to_graph_via_http(
             if _post_remember_document(base_url, api_key, dataset, document, node_set, timeout):
                 state[state_key] = digest
                 wrote = True
-        _write_json_file(_HTTP_BRIDGE_STATE, state)
+        if isinstance(bridge_cache, dict):
+            bridge_cache["_state"] = state
+            _write_json_file(bridge_path, bridge_cache)
         hook_log(
             "http_bridge_done",
             {"dataset": dataset, "session": session_id, "wrote": wrote},
