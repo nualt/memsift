@@ -28,6 +28,14 @@ from pathlib import Path
 # Add scripts dir to path for config import
 sys.path.insert(0, os.path.dirname(__file__))
 from _plugin_common import (
+    _COGNEE_CACHE_DIR,
+    _COGNEE_DATA_DIR,
+    _COGNEE_SYSTEM_DIR,
+    _VENV_DIR,
+    _VENV_PYTHON,
+    _VENV_READY_MARKER,
+    _reexec_into_venv,
+    apply_cognee_env,
     hook_log,
     mark_server_ready,
     quiet_hook_output,
@@ -84,6 +92,214 @@ _LAZY_BOOTSTRAP = os.environ.get("COGNEE_LAZY_BOOTSTRAP", "1").strip().lower() n
     "false",
     "no",
 )
+
+# --- Self-managed cognee install (SHARED with the Claude Code plugin) --------
+# uv + a uv-managed Python guarantee a cognee-compatible runtime (3.10-3.14)
+# regardless of what's on the machine. All paths sit under the shared
+# ~/.cognee-plugin root so the two plugins install once and reuse one venv.
+_UV_DIR = _GLOBAL_STATE_DIR / "uv"
+_UV_BIN = _UV_DIR / ("uv.exe" if os.name == "nt" else "uv")
+_UV_PYTHON_DIR = _GLOBAL_STATE_DIR / "python"
+_UV_INSTALL_URL = "https://astral.sh/uv/install.sh"
+_PINNED_PYTHON = os.environ.get("COGNEE_PLUGIN_PYTHON", "") or "3.12"
+_INSTALL_TIMEOUT_SECONDS = float(os.environ.get("COGNEE_INSTALL_TIMEOUT", "") or 600.0)
+
+# Install single-flight. Distinct from the server boot lock (which is short): a
+# cold cognee install can take minutes, so concurrent sessions — across BOTH
+# plugins, since the lock path is shared — must NOT install into the venv at once.
+_VENV_INSTALL_LOCK = _GLOBAL_STATE_DIR / "venv-install.lock"
+_VENV_INSTALL_LOCK_STALE_SECONDS = _INSTALL_TIMEOUT_SECONDS + 60.0
+_VENV_INSTALL_WAIT_SECONDS = _INSTALL_TIMEOUT_SECONDS + 60.0
+_VENV_INSTALL_POLL_SECONDS = 0.5
+
+
+def _find_uv() -> str:
+    """Locate uv: prefer our self-managed copy, then anything on PATH."""
+    if _UV_BIN.exists():
+        return str(_UV_BIN)
+    found = shutil.which("uv")
+    return found or ""
+
+
+def _install_uv() -> str:
+    """Install the standalone uv binary into ~/.cognee-plugin/uv (no PATH edits)."""
+    try:
+        _UV_DIR.mkdir(parents=True, exist_ok=True)
+        env = os.environ.copy()
+        # UV_UNMANAGED_INSTALL drops the binary in the given dir without editing
+        # shell profiles or managing updates — exactly what we want.
+        env["UV_UNMANAGED_INSTALL"] = str(_UV_DIR)
+        subprocess.run(
+            ["sh", "-c", f"curl -LsSf {_UV_INSTALL_URL} | sh"],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if _UV_BIN.exists():
+            return str(_UV_BIN)
+    except Exception as exc:
+        hook_log("uv_install_failed", {"error": str(exc)[:300]})
+    return ""
+
+
+def _venv_cognee_version() -> str:
+    """Installed cognee version inside the plugin venv, or '' if unimportable."""
+    if not _VENV_PYTHON.exists():
+        return ""
+    try:
+        out = subprocess.run(
+            [
+                str(_VENV_PYTHON),
+                "-c",
+                "import importlib.metadata as m; print(m.version('cognee'))",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except Exception as exc:
+        hook_log("cognee_version_probe_failed", {"error": str(exc)[:200]})
+    return ""
+
+
+def _write_venv_ready(version: str) -> None:
+    try:
+        payload = {
+            "cognee_version": version,
+            "python": str(_VENV_PYTHON),
+            "updated_at": time.time(),
+        }
+        tmp = _VENV_READY_MARKER.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp, _VENV_READY_MARKER)
+    except Exception as exc:
+        hook_log("venv_ready_write_failed", {"error": str(exc)[:200]})
+
+
+def ensure_cognee_installed(timeout: float = _INSTALL_TIMEOUT_SECONDS) -> bool:
+    """Ensure the shared plugin venv exists and holds the latest cognee.
+
+    Called from the server-boot critical section (so it is already
+    single-flighted) and only at boot points — i.e. when no healthy server is
+    serving. Always tries to upgrade to the latest cognee BEFORE the server
+    boots, so the server's FastAPI lifespan migrations run on the new code.
+
+    Fails soft: if the upgrade can't run (e.g. offline) but a usable cognee is
+    already installed, returns True with whatever version is present. Returns
+    False only when no importable cognee venv exists afterwards.
+    """
+    apply_cognee_env()
+    for directory in (_COGNEE_SYSTEM_DIR, _COGNEE_DATA_DIR, _COGNEE_CACHE_DIR):
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            hook_log(
+                "cognee_data_dir_mkdir_failed", {"dir": str(directory), "error": str(exc)[:200]}
+            )
+
+    owner = f"install:{os.getpid()}"
+    acquired = False
+    deadline = time.monotonic() + _VENV_INSTALL_WAIT_SECONDS
+    try:
+        _VENV_INSTALL_LOCK.parent.mkdir(parents=True, exist_ok=True)
+        while True:
+            now = time.time()
+            if _VENV_INSTALL_LOCK.exists():
+                stale = False
+                try:
+                    raw = json.loads(_VENV_INSTALL_LOCK.read_text(encoding="utf-8"))
+                    pid = int(raw.get("pid", 0) or 0)
+                    created_at = float(raw.get("created_at", 0) or 0)
+                    stale = (not _pid_alive(pid)) or (
+                        now - created_at > _VENV_INSTALL_LOCK_STALE_SECONDS
+                    )
+                except Exception:
+                    stale = True
+                if stale:
+                    try:
+                        _VENV_INSTALL_LOCK.unlink()
+                    except Exception as exc:
+                        hook_log("venv_install_lock_unlink_failed", {"error": str(exc)[:200]})
+
+            try:
+                fd = os.open(str(_VENV_INSTALL_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump({"owner": owner, "pid": os.getpid(), "created_at": now}, fh)
+                acquired = True
+                break
+            except FileExistsError:
+                # Another process owns the install. Don't install concurrently —
+                # wait for it to produce a usable venv, then reuse it.
+                if _venv_cognee_version():
+                    return True
+                if time.monotonic() >= deadline:
+                    return bool(_venv_cognee_version())
+                time.sleep(_VENV_INSTALL_POLL_SECONDS)
+
+        uv = _find_uv() or _install_uv()
+        venv_present = _VENV_PYTHON.exists()
+
+        if uv:
+            env = os.environ.copy()
+            env.setdefault("UV_PYTHON_INSTALL_DIR", str(_UV_PYTHON_DIR))
+            try:
+                if not venv_present:
+                    subprocess.run(
+                        [uv, "venv", str(_VENV_DIR), "--python", _PINNED_PYTHON],
+                        env=env,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                    )
+                subprocess.run(
+                    [uv, "pip", "install", "--upgrade", "--python", str(_VENV_PYTHON), "cognee"],
+                    env=env,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+            except Exception as exc:
+                hook_log("cognee_install_failed", {"via": "uv", "error": str(exc)[:300]})
+        elif not venv_present:
+            # Last-resort fallback: stdlib venv + pip. Slower, and relies on the
+            # system python3 being a cognee-compatible version (3.10-3.14).
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "venv", str(_VENV_DIR)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                subprocess.run(
+                    [str(_VENV_PYTHON), "-m", "pip", "install", "--upgrade", "cognee"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+            except Exception as exc:
+                hook_log("cognee_install_failed", {"via": "venv_pip", "error": str(exc)[:300]})
+
+        version = _venv_cognee_version()
+        if not version:
+            hook_log("cognee_venv_unusable", {"venv_python": str(_VENV_PYTHON)})
+            return False
+        _write_venv_ready(version)
+        hook_log("cognee_install_ready", {"version": version})
+        return True
+    finally:
+        if acquired:
+            try:
+                _VENV_INSTALL_LOCK.unlink()
+            except Exception as exc:
+                hook_log("venv_install_lock_release_failed", {"error": str(exc)[:200]})
 
 
 def _parse_host_port(url: str) -> tuple[str, int]:
@@ -150,6 +366,14 @@ def _ensure_local_server_running(
         _ready()
         return
 
+    # No server is serving and we're at a boot point: ensure the shared venv
+    # holds the latest cognee BEFORE booting, so the server's lifespan
+    # migrations run on the upgraded code. Single-flighted on its own (long)
+    # lock, separate from the short boot lock below, since a cold install can
+    # take minutes.
+    if not ensure_cognee_installed():
+        raise RuntimeError("cognee runtime unavailable (install/upgrade failed)")
+
     owner = f"session-start:{os.getpid()}"
     acquired = False
     deadline = time.monotonic() + _SERVER_BOOT_LOCK_WAIT_SECONDS
@@ -195,11 +419,13 @@ def _ensure_local_server_running(
             return
 
         server_env = os.environ.copy()
+        # Data-dir pins + CACHING are already in os.environ via apply_cognee_env(),
+        # so the copy carries them to the server process.
         # We are spawning the server, so run it in agent mode: it tears itself
         # down once all registered agents disconnect.
         server_env["COGNEE_AGENT_MODE"] = "true"
         subprocess.Popen(
-            ["uvicorn", "cognee.api.client:app", "--port", str(port)],
+            [str(_VENV_PYTHON), "-m", "uvicorn", "cognee.api.client:app", "--port", str(port)],
             env=server_env,
             start_new_session=True,
         )
@@ -982,6 +1208,13 @@ async def _run_heavy(
             _ensure_local_server_running(config, health_timeout=boot_timeout)
         except Exception as exc:
             hook_log("server_bootstrap_warning", {"error": str(exc)[:200]})
+
+    # On a cold start this worker began under the host python3, so the
+    # _plugin_common import-time guard could not re-exec us. The boot above
+    # (via ensure_cognee_installed) has now built the shared venv, so flip into
+    # it before any cognee/aiohttp import below resolves against the host. No-op
+    # when the venv is absent (connect/managed mode) or already inside it.
+    _reexec_into_venv()
 
     # Configure cognee (cloud or local)
     try:
