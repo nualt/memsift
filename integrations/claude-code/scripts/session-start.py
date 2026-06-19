@@ -689,13 +689,18 @@ def _find_claude_parent_pid() -> int:
             continue
         table[pid] = (ppid, parts[2])
 
+    import re
+
+    # Match "claude" as an executable basename anywhere in the command line,
+    # tolerant of spaces in the executable path (a naive split()[0] mis-tokenizes
+    # paths like "/…/Application Support/…/claude").
+    host_re = re.compile(r"(?:^|/)claude(?:-[\w.]+)?(?:\s|$)")
     pid = fallback
     seen: set[int] = set()
     while pid > 1 and pid not in seen:
         seen.add(pid)
         ppid, command = table.get(pid, (0, ""))
-        executable = Path(command.split()[0]).name if command else ""
-        if executable == "claude" or executable.startswith("claude-"):
+        if command and host_re.search(command):
             return pid
         pid = ppid
     return fallback

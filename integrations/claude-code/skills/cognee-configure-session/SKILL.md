@@ -33,12 +33,19 @@ past session", "what sessions exist", "/cognee-configure-session").
    ```bash
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cognee-session-set.py" "<chosen-session-id>"
    ```
-   It prints `{ "ok": true, "old_session", "new_session", "synced_previous" }`.
+   It prints `{ "ok": true, "old_session", "new_session", "switched", "existed",
+   "created", "synced_previous" }`. Note `new_session` may be a sanitized form of
+   what the user typed — report the value the script returns.
 
-5. **Confirm.** Tell the user the active session is now `<new_session>`. If
-   `synced_previous` is true, mention the previous session's memory was flushed to
-   the graph. From the next message on, recall and saving happen in the new
-   session — no restart needed.
+5. **Confirm.** Tell the user the active session is now `<new_session>`:
+   - If `created` is true (the id didn't exist), say you **started a new session**
+     named `<new_session>` — a typed name that doesn't match an existing session
+     creates a fresh one.
+   - Otherwise say you **resumed** `<new_session>`.
+   - If `synced_previous` is true, mention the previous session's memory was
+     flushed to the graph.
+   From the next message on, recall and saving happen in the new session — no
+   restart needed.
 
 ## Notes
 

@@ -689,13 +689,18 @@ def _find_codex_parent_pid() -> int:
             continue
         table[pid] = (ppid, parts[2])
 
+    import re
+
+    # Match "codex" as an executable basename anywhere in the command line,
+    # tolerant of spaces in the executable path (a naive split()[0] mis-tokenizes
+    # paths like "/…/Application Support/…/codex").
+    host_re = re.compile(r"(?:^|/)codex(?:-[\w.]+)?(?:\s|$)")
     pid = fallback
     seen: set[int] = set()
     while pid > 1 and pid not in seen:
         seen.add(pid)
         ppid, command = table.get(pid, (0, ""))
-        executable = Path(command.split()[0]).name if command else ""
-        if executable == "codex" or executable.startswith("codex-"):
+        if command and host_re.search(command):
             return pid
         pid = ppid
     return fallback

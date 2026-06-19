@@ -176,6 +176,32 @@ def _write_map_record(host_key: str, record: dict) -> None:
     _write_json_file(_session_map_path(host_key), record)
 
 
+def _create_map_record_if_absent(host_key: str, record: dict) -> dict:
+    """Atomically create the launch record, first-writer-wins.
+
+    Uses O_CREAT|O_EXCL so exactly one concurrent creator wins; losers read back
+    the winner's record instead of clobbering it. This is what makes concurrent
+    launches/hooks for the same host_key converge on a single session id rather
+    than diverge. Returns the record now on disk.
+    """
+    if not host_key:
+        return record
+    path = _session_map_path(host_key)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(record, fh, indent=2, sort_keys=True)
+        return record
+    except FileExistsError:
+        return _read_map_record(host_key) or record
+    except Exception as exc:
+        hook_log("map_create_failed", {"error": str(exc)[:200]})
+        # Best-effort fallback: plain write, then read back whatever landed.
+        _write_map_record(host_key, record)
+        return _read_map_record(host_key) or record
+
+
 def resolve_cognee_session_id(host_key: str = "", cwd: str = "") -> str:
     """Resolve the Cognee session id that scopes all saves/recalls this launch.
 
@@ -195,18 +221,18 @@ def resolve_cognee_session_id(host_key: str = "", cwd: str = "") -> str:
         return _sanitize_session_key(str(rec["session_id"]))
 
     new_id = _generate_session_id(cwd)
-    if host_key and not _session_map_path(host_key).exists():
-        _write_map_record(
-            host_key,
-            {
-                "session_id": new_id,
-                "host_key": host_key,
-                "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "touched": [new_id],
-            },
-        )
-    # Re-read so concurrent first-writers converge on the persisted winner.
-    return (_read_map_record(host_key).get("session_id") or new_id) if host_key else new_id
+    if not host_key:
+        return new_id
+    winner = _create_map_record_if_absent(
+        host_key,
+        {
+            "session_id": new_id,
+            "host_key": host_key,
+            "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "touched": [new_id],
+        },
+    )
+    return str(winner.get("session_id") or new_id)
 
 
 def ensure_launch_record(host_key: str = "", cwd: str = "") -> tuple[str, str]:
@@ -231,11 +257,19 @@ def ensure_launch_record(host_key: str = "", cwd: str = "") -> tuple[str, str]:
         or datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "touched": rec.get("touched") or [session_id],
     }
-    if host_key:
-        _write_map_record(host_key, record)
-        rec2 = _read_map_record(host_key)
-        return str(rec2.get("session_id") or session_id), str(rec2.get("conn_uuid") or conn_uuid)
-    return session_id, conn_uuid
+    if not host_key:
+        return session_id, conn_uuid
+    winner = _create_map_record_if_absent(host_key, record)
+    # If a prior resolve() created a session-only record (no handle), graft our
+    # conn_uuid onto it. SessionStart is the sole writer of conn_uuid, so this
+    # merge isn't contended in practice.
+    if not winner.get("conn_uuid"):
+        merged = dict(winner)
+        merged["conn_uuid"] = conn_uuid
+        merged.setdefault("host_key", host_key)
+        _write_map_record(host_key, merged)
+        winner = _read_map_record(host_key) or merged
+    return str(winner.get("session_id") or session_id), str(winner.get("conn_uuid") or conn_uuid)
 
 
 def resolve_conn_uuid(host_key: str = "") -> str:
@@ -291,6 +325,17 @@ def mapped_touched_sessions(host_key: str = "") -> list:
     return out
 
 
+def sanitize_session_id(value: str) -> str:
+    """Public: normalize a user-supplied session id the same way the map does."""
+    return _sanitize_session_key(value)
+
+
+def mapped_session_id(host_key: str = "") -> str:
+    """Public: current Cognee session id for a launch, or '' (no map write)."""
+    host_key = _sanitize_session_key(host_key) or get_session_key()
+    return str(_read_map_record(host_key).get("session_id") or "")
+
+
 # --- Launch <-> host-pid bridge (for model-invoked commands) -----------------
 # A skill/command's shell has no session id in its environment, so it discovers
 # its launch by walking the process tree to the host (claude/codex) pid, then
@@ -323,7 +368,14 @@ def read_host_key_for_pid(host_pid: int) -> str:
 
 
 def find_host_pid(names: tuple = _HOST_EXECUTABLE_HINTS) -> int:
-    """Walk up from this process to the host (claude/codex) pid. 0 if not found."""
+    """Walk up from this process to the host (claude/codex) pid. 0 if not found.
+
+    Matches the host name as the executable basename anywhere in the command
+    line via a path-boundary regex, so it is robust to spaces in the executable
+    path (e.g. ``/…/Application Support/…/claude``), which a naive
+    ``command.split()[0]`` would mis-tokenize.
+    """
+    import re
     import subprocess
 
     try:
@@ -333,6 +385,9 @@ def find_host_pid(names: tuple = _HOST_EXECUTABLE_HINTS) -> int:
     except Exception as exc:
         hook_log("find_host_pid_ps_failed", {"error": str(exc)[:200]})
         return 0
+    name_alt = "|".join(re.escape(n) for n in names)
+    # Name preceded by start-or-"/", optional "-<version>" suffix, then ws/end.
+    host_re = re.compile(rf"(?:^|/)(?:{name_alt})(?:-[\w.]+)?(?:\s|$)")
     table: dict = {}
     for line in raw.splitlines():
         parts = line.strip().split(None, 2)
@@ -349,8 +404,7 @@ def find_host_pid(names: tuple = _HOST_EXECUTABLE_HINTS) -> int:
     while pid > 1 and pid not in seen:
         seen.add(pid)
         ppid, command = table.get(pid, (0, ""))
-        exe = Path(command.split()[0]).name if command else ""
-        if any(exe == n or exe.startswith(f"{n}-") for n in names):
+        if command and host_re.search(command):
             return pid
         pid = ppid
     return 0

@@ -23,7 +23,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 from _plugin_common import (  # noqa: E402
     find_host_pid,
     hook_log,
+    list_sessions_via_http,
+    mapped_session_id,
     read_host_key_for_pid,
+    sanitize_session_id,
     set_mapped_session,
 )
 
@@ -65,21 +68,42 @@ def _spawn_switch_sync(old_session_id: str, host_key: str, dataset: str) -> None
         hook_log("switch_sync_spawn_failed", {"error": str(exc)[:200]})
 
 
+def _session_exists(session_id: str):
+    """True/False if ``session_id`` is among the principal's sessions; None if the
+    listing call failed (existence unknown)."""
+    try:
+        data = list_sessions_via_http(limit=500, range_="all")
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    ids = {
+        str(s.get("session_id") or s.get("id") or "")
+        for s in data.get("sessions", [])
+        if isinstance(s, dict)
+    }
+    return session_id in ids
+
+
 def main() -> None:
-    chosen = sys.argv[1].strip() if len(sys.argv) > 1 else ""
+    raw = sys.argv[1].strip() if len(sys.argv) > 1 else ""
+    chosen = sanitize_session_id(raw)
     if not chosen:
-        print(json.dumps({"ok": False, "error": "no session id provided"}))
+        print(json.dumps({"ok": False, "error": "no valid session id provided"}))
         return
 
-    host_key = read_host_key_for_pid(find_host_pid())
+    # Scope the host-pid walk to this tree's host so it can't match a foreign one.
+    host_key = read_host_key_for_pid(find_host_pid(("claude",)))
     if not host_key:
         print(json.dumps({"ok": False, "error": "could not determine current launch"}))
         return
 
-    old, new = set_mapped_session(host_key, chosen)
-    if not new:
-        print(json.dumps({"ok": False, "error": "invalid session id"}))
-        return
+    old = mapped_session_id(host_key)
+    switched = bool(old and old != chosen)
+
+    # Existence is informational: a non-existent id is created lazily (sessions
+    # are opaque strings that become real on first save). None = couldn't check.
+    existed = _session_exists(chosen)
 
     dataset = ""
     try:
@@ -88,17 +112,27 @@ def main() -> None:
     except Exception:
         pass
 
-    switched = bool(old and old != new)
+    # Flush the OUTGOING session to the graph BEFORE committing the switch, so a
+    # crash mid-switch can't strand it. touched[] + the exit-watcher final sweep
+    # are the durable backstop regardless of ordering.
     if switched:
         _spawn_switch_sync(old, host_key, dataset)
 
-    hook_log("session_switched", {"host_key": host_key, "old": old, "new": new})
+    old_committed, new = set_mapped_session(host_key, chosen)
+
+    hook_log(
+        "session_switched",
+        {"host_key": host_key, "old": old_committed, "new": new, "existed": existed},
+    )
     print(
         json.dumps(
             {
                 "ok": True,
-                "old_session": old,
+                "old_session": old_committed,
                 "new_session": new,
+                "switched": switched,
+                "existed": existed,
+                "created": existed is False,
                 "synced_previous": switched,
             }
         )
