@@ -63,11 +63,11 @@ Each terminal launch maintains a small map file:
 
 ```
 ~/.cognee-plugin/sessions/<host_session_id>.json
-  → { "conn_uuid": "...", "session_id": "...", "host_key": "...", "touched": [...] }
+  → { "conn_uuid": "...", "session_id": "...", "host_key": "..." }
 ```
 
-- **`session_id`** — which Cognee session this terminal writes to and recalls from. Switchable without restarting.
-- **`conn_uuid`** — per-launch liveness handle used for agent registration and server shutdown counting. Never changes mid-launch.
+- **`session_id`** — which Cognee session this terminal writes to and recalls from. Fixed at launch.
+- **`conn_uuid`** — per-launch liveness handle used for agent registration and server shutdown counting.
 
 By default a new `session_id` is generated each launch. Set `COGNEE_SESSION_ID` to resume a specific session:
 
@@ -76,18 +76,6 @@ export COGNEE_SESSION_ID="my-project"
 ```
 
 Two terminals can deliberately share a session by setting the same `COGNEE_SESSION_ID`.
-
-### Session switching
-
-Use the `/cognee-configure-session` skill to list and switch sessions without restarting:
-
-```
-/cognee-configure-session
-```
-
-This lists all Cognee sessions, shows which one is current, and prompts you to pick one. When you switch, the outgoing session is flushed to the graph before the switch commits. The new session takes effect immediately — recall and saving happen in the new session from the next message on.
-
-The switch affects only the current terminal. Other running agents keep their own sessions.
 
 ## Hooks
 
@@ -121,19 +109,17 @@ Final detached sync also performs unregister-on-finish when applicable.
 - `/cognee-memory:cognee-remember`
 - `/cognee-memory:cognee-search`
 - `/cognee-memory:cognee-sync`
-- `/cognee-memory:cognee-configure-session`
 
 ## Status line
 
-The status line displays `cognee: <session-id> (+N more)` for the current terminal's active session.
+The status line displays `cognee: <dataset>` — the name of the active dataset.
 
 It is configured automatically on first launch — no manual steps needed. SessionStart writes the correct path into `~/.claude/settings.json` and Claude Code hot-reloads it, so the status line appears from your first interaction onward.
 
-The status line reads only local files — no network calls on every refresh:
-- `~/.cognee-plugin/sessions/<host_id>.json` — current session for this terminal
-- `~/.cognee-plugin/sessions_count.json` — total session count (TTL-refreshed by the plugin)
-
-Shows `cognee: starting...` until SessionStart completes.
+The status line reads only local state — no network calls on every refresh:
+1. `COGNEE_PLUGIN_DATASET` env var (if set in the terminal that launched Claude Code)
+2. `~/.cognee-plugin/config.json` → `dataset` key
+3. Default: `cognee_sessions`
 
 ## Auto-clear demo hook
 
@@ -159,10 +145,6 @@ This clears the transcript file on `Stop` after memory capture.
 **Session not resolving / wrong session shown**
 - Check `~/.cognee-plugin/sessions/<host_session_id>.json` — this is the map file for your terminal.
 - If it's missing, SessionStart may not have completed; check `~/.cognee-plugin/hook.log`.
-
-**Picker reports "could not determine current launch"**
-- The session-set script walks the process tree to find the host pid and reads `~/.cognee-plugin/launches/<host_pid>.json`.
-- Check that `launches/` contains a file for the current Claude pid. Missing bridge = SessionStart didn't complete.
 
 **Unauthorized / key errors**
 - Check `~/.cognee-plugin/api_key.json`. Delete it to force a re-mint.
