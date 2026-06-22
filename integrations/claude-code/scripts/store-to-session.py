@@ -165,13 +165,13 @@ async def _store_tool_call(payload: dict) -> None:
         {
             "hook": "store-to-session:tool",
             "mode": runtime["mode"],
-            "service_url": runtime.get("service_url", ""),
+            "base_url": runtime.get("base_url", ""),
             "url_source": runtime.get("url_source", ""),
             "key_source": runtime.get("key_source", ""),
             "api_key_present": runtime.get("api_key_present", False),
         },
     )
-    if not server_ready_hint(runtime.get("service_url", "")):
+    if not server_ready_hint(runtime.get("base_url", "")):
         # Server still warming: don't block the tool call and don't lose the
         # trace. Mirror it into the local bridge shadow; the session->graph
         # sync drains it once the server is ready.
@@ -278,13 +278,13 @@ async def _store_assistant_stop(payload: dict) -> None:
         {
             "hook": "store-to-session:stop",
             "mode": runtime["mode"],
-            "service_url": runtime.get("service_url", ""),
+            "base_url": runtime.get("base_url", ""),
             "url_source": runtime.get("url_source", ""),
             "key_source": runtime.get("key_source", ""),
             "api_key_present": runtime.get("api_key_present", False),
         },
     )
-    if not server_ready_hint(runtime.get("service_url", "")):
+    if not server_ready_hint(runtime.get("base_url", "")):
         # Server still warming: buffer the prompt+answer into the local bridge
         # shadow instead of dropping it; the session->graph sync drains it once
         # the server is ready.

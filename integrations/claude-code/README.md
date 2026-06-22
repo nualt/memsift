@@ -28,7 +28,7 @@ You can also set config in `~/.cognee-plugin/config.json`:
 
 ```json
 {
-  "service_url": "https://your-instance.cognee.ai",
+  "base_url": "https://your-instance.cognee.ai",
   "dataset": "claude_sessions"
 }
 ```
@@ -185,11 +185,11 @@ Config precedence:
 
 | Key | Env var(s) | Default | Notes |
 |---|---|---|---|
-| `dataset` | `COGNEE_CLAUDE_DATASET`, `COGNEE_PLUGIN_DATASET` | `claude_sessions` | Dataset name |
+| `dataset` | `COGNEE_PLUGIN_DATASET` | `cognee_sessions` | Dataset name |
 | `session_id` | `COGNEE_SESSION_ID` | auto-generated per launch | Override to resume a named session |
 | `session_strategy` | `COGNEE_SESSION_STRATEGY` | `per-directory` | `per-directory`, `git-branch`, `static` |
 | `session_prefix` | `COGNEE_SESSION_PREFIX` | `cc` | Prefix for auto-generated session IDs |
-| `service_url` | `COGNEE_BASE_URL` | unset | Set to enable managed endpoint mode |
+| `base_url` | `COGNEE_BASE_URL` | unset | Set to enable managed endpoint mode |
 | `api_key` | `COGNEE_API_KEY` | unset | API key; auto-minted if absent in local mode |
 | local URL override | `COGNEE_LOCAL_API_URL` | `http://localhost:8011` | Local API base URL |
 | local LLM | `LLM_API_KEY`, `LLM_MODEL` | unset | Required for local mode runtime |

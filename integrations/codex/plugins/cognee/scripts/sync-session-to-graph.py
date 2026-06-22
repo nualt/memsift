@@ -209,7 +209,7 @@ def _load_resolved() -> tuple:
         hook_log("sync_missing_session_key")
     data = load_resolved(session_key=session_key)
     if data:
-        service_url = env_service_url or str(data.get("service_url", "") or "").strip()
+        service_url = env_service_url or str(data.get("base_url", "") or "").strip()
         if service_url:
             os.environ["COGNEE_BASE_URL"] = service_url
         if data.get("user_id"):

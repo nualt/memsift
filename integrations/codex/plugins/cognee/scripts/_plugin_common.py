@@ -137,7 +137,9 @@ def _generate_session_id(cwd: str = "") -> str:
     the random token guarantees a new session per launch. No host/Codex session
     id is embedded — the host id is only a local correlation key (see below).
     """
-    prefix = _sanitize_session_key(os.environ.get("COGNEE_SESSION_PREFIX", "") or "cc") or "cc"
+    prefix = (
+        _sanitize_session_key(os.environ.get("COGNEE_SESSION_PREFIX", "") or "codex") or "codex"
+    )
     cwd = cwd or os.environ.get("CODEX_CWD") or os.getcwd()
     dir_name = _sanitize_session_key(Path(cwd).name) or "session"
     return f"{prefix}_{dir_name}_{uuid.uuid4().hex[:12]}"
@@ -540,7 +542,7 @@ def load_resolved(session_key: str = "") -> dict:
 
     service_url = _local_api_url().strip()
     if service_url:
-        resolved["service_url"] = service_url
+        resolved["base_url"] = service_url
 
     api_key = _api_key().strip()
     if api_key:
@@ -581,13 +583,6 @@ def load_resolved(session_key: str = "") -> dict:
                     resolved["user_id"] = agent_user_id
                 status = str(agent.get("status") or "").strip().lower()
                 resolved["registered"] = status == "active"
-                datasets = agent.get("datasets") if isinstance(agent.get("datasets"), list) else []
-                for item in datasets:
-                    if isinstance(item, dict):
-                        name = str(item.get("name") or "").strip()
-                        if name:
-                            resolved["dataset"] = name
-                            break
     except Exception as exc:
         hook_log("runtime_state_connection_lookup_failed", {"error": str(exc)[:200]})
 
@@ -1031,7 +1026,7 @@ def load_cached_api_key(service_url: str = "") -> str:
     key = str(data.get("api_key") or "").strip()
     if not key:
         return ""
-    cached_url = _normalize_service_url(str(data.get("service_url") or ""))
+    cached_url = _normalize_service_url(str(data.get("base_url") or ""))
     wanted = _normalize_service_url(service_url)
     if wanted and cached_url and cached_url != wanted:
         return ""
@@ -1045,7 +1040,7 @@ def save_cached_api_key(service_url: str, key: str) -> None:
     _write_json_file(
         _API_KEY_CACHE,
         {
-            "service_url": _normalize_service_url(service_url),
+            "base_url": _normalize_service_url(service_url),
             "api_key": str(key).strip(),
             "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         },
@@ -1121,7 +1116,7 @@ def mark_server_ready(service_url: str, version: str = "") -> None:
     try:
         _SERVER_READY_MARKER.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "service_url": _normalize_service_url(service_url),
+            "base_url": _normalize_service_url(service_url),
             "ready_at": datetime.now(timezone.utc).timestamp(),
             "version": str(version or ""),
         }
@@ -1159,7 +1154,7 @@ def server_ready_hint(service_url: str = "") -> bool:
     if datetime.now(timezone.utc).timestamp() - ready_at > _SERVER_READY_TTL_SECONDS:
         return False
     if service_url:
-        marked = _normalize_service_url(raw.get("service_url", ""))
+        marked = _normalize_service_url(raw.get("base_url", ""))
         if marked and marked != _normalize_service_url(service_url):
             return False
     return True
@@ -1173,7 +1168,7 @@ def resolve_runtime_mode() -> dict:
     mode = "http" if service_url else "local_sdk"
     return {
         "mode": mode,
-        "service_url": service_url,
+        "base_url": service_url,
         "api_key_present": bool(api_key),
     }
 

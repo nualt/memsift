@@ -160,7 +160,7 @@ async def _store_tool_call(payload: dict) -> None:
     config = load_config()
     runtime = resolve_runtime_mode()
     use_http = runtime["mode"] == "http"
-    if not server_ready_hint(runtime.get("service_url", "")):
+    if not server_ready_hint(runtime.get("base_url", "")):
         # Server still warming: don't block the tool call and don't lose the
         # trace. Mirror it into the local bridge shadow; the session->graph
         # sync drains it once the server is ready.
@@ -262,7 +262,7 @@ async def _store_assistant_stop(payload: dict) -> None:
     config = load_config()
     runtime = resolve_runtime_mode()
     use_http = runtime["mode"] == "http"
-    if not server_ready_hint(runtime.get("service_url", "")):
+    if not server_ready_hint(runtime.get("base_url", "")):
         # Server still warming: buffer the prompt+answer into the local bridge
         # shadow instead of dropping it; the session->graph sync drains it once
         # the server is ready.

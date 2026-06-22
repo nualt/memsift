@@ -28,7 +28,7 @@ _BRIDGE_STATE_FILE = _STATE_DIR / "bridge_state.json"
 _HOOK_LOG = _STATE_DIR / "hook.log"
 
 _DEFAULTS = {
-    "dataset": "claude_sessions",
+    "dataset": "cognee_sessions",
     "agent_name": "claude-code-agent",
     "session_strategy": "per-directory",  # per-directory | git-branch | static
     "session_prefix": "cc",
@@ -37,13 +37,11 @@ _DEFAULTS = {
     "user_email": "default_user@example.com",
     "user_password": "default_password",
     # Cloud / remote
-    "service_url": "",
+    "base_url": "",
     "api_key": "",
     # Local mode
     "llm_api_key": "",
     "llm_model": "",
-    # Legacy server mode
-    "base_url": "",
 }
 
 
@@ -69,15 +67,12 @@ def _config_log(event: str, detail: dict | None = None) -> None:
 _ENV_MAP = {
     "COGNEE_CLAUDE_BACKEND": "backend",
     "COGNEE_CODEX_BACKEND": "backend",
-    "COGNEE_CLAUDE_DATASET": "dataset",
-    "COGNEE_CODEX_DATASET": "dataset",
     "COGNEE_AGENT_NAME": "agent_name",
     "COGNEE_PLUGIN_DATASET": "dataset",
     "COGNEE_SESSION_STRATEGY": "session_strategy",
     "COGNEE_SESSION_PREFIX": "session_prefix",
-    "COGNEE_BASE_URL": "service_url",
-    "COGNEE_API_KEY": "api_key",
     "COGNEE_BASE_URL": "base_url",
+    "COGNEE_API_KEY": "api_key",
     "COGNEE_USER_EMAIL": "user_email",
     "COGNEE_USER_PASSWORD": "user_password",
     "LLM_API_KEY": "llm_api_key",
@@ -109,7 +104,7 @@ def load_config() -> dict:
 
     backend = str(config.get("backend") or "auto").lower()
     if backend in ("native", "local", "sdk"):
-        config["service_url"] = ""
+        config["base_url"] = ""
         config["api_key"] = ""
         config["base_url"] = ""
     elif backend not in ("http", "api", "cloud", "server"):
@@ -117,7 +112,7 @@ def load_config() -> dict:
         # instruction (connect to it, or boot it if local; auth falls back to
         # the default user when no key is given). A key with no URL has nothing
         # to point at, so drop it and fall back to the local default.
-        if not str(config.get("service_url") or "").strip():
+        if not str(config.get("base_url") or "").strip():
             config["api_key"] = ""
             config["base_url"] = ""
 
@@ -128,7 +123,7 @@ def save_config(config: dict) -> None:
     """Write config to disk. Creates directory if needed."""
     _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     # Only save non-secret, non-default values
-    transient_keys = {"api_key", "llm_api_key", "service_url", "base_url", "backend"}
+    transient_keys = {"api_key", "llm_api_key", "base_url", "backend"}
     to_save = {
         k: v
         for k, v in config.items()
@@ -159,12 +154,12 @@ def get_session_id(config: dict, cwd: Optional[str] = None) -> str:
 
 def get_dataset(config: dict) -> str:
     """Get the dataset name from config."""
-    return config.get("dataset", "claude_sessions")
+    return config.get("dataset", "cognee_sessions")
 
 
 def is_cloud_mode(config: dict) -> bool:
     """Check if cloud/remote mode is configured."""
-    return bool(config.get("service_url"))
+    return bool(config.get("base_url"))
 
 
 def is_local_mode(config: dict) -> bool:
@@ -185,7 +180,7 @@ async def ensure_identity(config: dict):
 
     Returns (user_id, api_key) tuple. api_key may be empty in local mode.
     """
-    service_url = config.get("service_url", "")
+    service_url = config.get("base_url", "")
 
     if service_url:
         from _plugin_common import _api_key
@@ -281,7 +276,7 @@ async def ensure_cognee_ready(config: dict) -> None:
     session writes touch them.
     """
     if is_cloud_mode(config):
-        url = config["service_url"]
+        url = config["base_url"]
         import aiohttp
 
         async with aiohttp.ClientSession() as session:
