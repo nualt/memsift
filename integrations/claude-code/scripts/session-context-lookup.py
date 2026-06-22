@@ -159,7 +159,7 @@ async def _run(prompt: str) -> dict | None:
         {
             "hook": "session-context-lookup",
             "mode": runtime["mode"],
-            "service_url": runtime.get("service_url", ""),
+            "base_url": runtime.get("base_url", ""),
             "url_source": runtime.get("url_source", ""),
             "key_source": runtime.get("key_source", ""),
             "api_key_present": runtime.get("api_key_present", False),
@@ -169,12 +169,12 @@ async def _run(prompt: str) -> dict | None:
     # backend. Trust a fresh readiness marker (zero-network); on a miss, do one
     # short /health probe and record the result. If still not ready, skip recall
     # entirely so the prompt is answered at full speed (memory turns on later).
-    service_url = runtime.get("service_url", "")
+    service_url = runtime.get("base_url", "")
     if not server_ready_hint(service_url):
         if server_health_ok(service_url, timeout=_float_env("COGNEE_READY_PROBE_TIMEOUT", 1.0)):
             mark_server_ready(service_url)
         else:
-            hook_log("recall_skipped_warming", {"service_url": service_url})
+            hook_log("recall_skipped_warming", {"base_url": service_url})
             return None
 
     if not cloud_mode:

@@ -51,7 +51,7 @@ if not api_key and service_url and agent_name:
                         if not isinstance(entry, dict):
                             continue
                         name = str(entry.get("agent_name") or "").strip()
-                        url = str(entry.get("service_url") or "").strip().rstrip("/")
+                        url = str(entry.get("base_url") or "").strip().rstrip("/")
                         if name == agent_name and url == normalized_url:
                             api_key = str(entry.get("api_key") or "").strip()
                             break

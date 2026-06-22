@@ -347,12 +347,12 @@ def _ensure_local_server_running(
 ) -> None:
     # Target the configured local URL (any port) or the default; boot uvicorn on
     # that URL's port if it's not already serving.
-    service_url = _with_scheme(config.get("service_url", "") or _LOCAL_SERVICE_URL)
+    service_url = _with_scheme(config.get("base_url", "") or _LOCAL_SERVICE_URL)
     health_url = _health_url(service_url)
     _, port = _parse_host_port(service_url)
 
     def _ready() -> None:
-        config["service_url"] = service_url
+        config["base_url"] = service_url
         os.environ["COGNEE_BASE_URL"] = service_url
 
     if _health_ok(health_url):
@@ -550,7 +550,7 @@ async def _resolve_single_principal_key(service_url: str, config: dict) -> str:
 async def _ensure_agent_credentials_and_register(
     config: dict, cwd: str, session_id: str, agent_session_name: str, session_key: str
 ) -> tuple[str, str, str, bool]:
-    service_url = _normalize_service_url(str(config.get("service_url", "") or ""))
+    service_url = _normalize_service_url(str(config.get("base_url", "") or ""))
     if not service_url:
         return "", "", "", False
 
@@ -633,7 +633,7 @@ def _spawn_idle_watcher(
         "user_id": user_id,
         "session_key": session_key,
         "config": {
-            "service_url": config.get("service_url", ""),
+            "base_url": config.get("base_url", ""),
             "llm_model": config.get("llm_model", ""),
             "dataset": dataset,
         },
@@ -765,7 +765,7 @@ def _spawn_exit_watcher(
         "session_key": session_key,
         "agent_session_name": agent_session_name,
         "api_key": api_key,
-        "service_url": service_url,
+        "base_url": service_url,
         "pidfile": str(watcher_pidfile),
     }
     log_path = _STATE_DIR / "exit-watcher.log"
@@ -874,7 +874,7 @@ def _spawn_bootstrap(
         "session_key": session_key,
         "dataset": dataset,
         "agent_session_name": agent_session_name,
-        "service_url": str(config.get("service_url", "") or _LOCAL_SERVICE_URL),
+        "base_url": str(config.get("base_url", "") or _LOCAL_SERVICE_URL),
     }
     log_path = _STATE_DIR / "bootstrap.log"
     try:
@@ -978,7 +978,7 @@ async def _run_heavy(
     try:
         if user_id and is_cloud_mode(config):
             await ensure_dataset_ready_via_api(
-                config.get("service_url", ""),
+                config.get("base_url", ""),
                 agent_api_key or config.get("api_key", ""),
                 dataset,
             )
@@ -996,7 +996,7 @@ async def _run_heavy(
 
     # Mark the server ready so hot-path recall can engage — only once it is
     # actually serving (or managed) so we never advertise a half-migrated DB.
-    service_url = _normalize_service_url(str(config.get("service_url", "") or ""))
+    service_url = _normalize_service_url(str(config.get("base_url", "") or ""))
     if not service_url and not managed_endpoint:
         service_url = _LOCAL_SERVICE_URL
     if service_url and server_health_ok(service_url, timeout=1.5):
@@ -1034,9 +1034,9 @@ async def _run_bootstrap(bootstrap: dict) -> None:
         os.environ["COGNEE_SESSION_KEY"] = session_key
     if session_id:
         os.environ["COGNEE_SESSION_ID"] = session_id
-    service_url = _with_scheme(bootstrap.get("service_url", "") or _LOCAL_SERVICE_URL)
+    service_url = _with_scheme(bootstrap.get("base_url", "") or _LOCAL_SERVICE_URL)
     health_url = _health_url(service_url)
-    config["service_url"] = service_url
+    config["base_url"] = service_url
     os.environ["COGNEE_BASE_URL"] = service_url
 
     # 1. Ensure the server is up. Only the single-flight winner spawns uvicorn;
@@ -1116,7 +1116,9 @@ def _ensure_statusline_configured() -> None:
         statusline_sh = Path(__file__).resolve().parent / "cognee-statusline.sh"
 
     if not statusline_sh.exists():
-        hook_log("statusline_setup_skipped", {"reason": "script_not_found", "path": str(statusline_sh)})
+        hook_log(
+            "statusline_setup_skipped", {"reason": "script_not_found", "path": str(statusline_sh)}
+        )
         return
 
     settings_path = Path.home() / ".claude" / "settings.json"
@@ -1161,10 +1163,10 @@ async def _start(payload: dict | None = None) -> dict:
     # here: it's set only when we actually boot a server (in
     # _ensure_local_server_running), so connecting to an already-running server
     # never claims ownership of its teardown.
-    configured_url = _with_scheme(str(config.get("service_url", "") or "").strip())
+    configured_url = _with_scheme(str(config.get("base_url", "") or "").strip())
     api_key = str(config.get("api_key", "") or "").strip()
     target_url = configured_url or _LOCAL_SERVICE_URL
-    config["service_url"] = target_url
+    config["base_url"] = target_url
     os.environ["COGNEE_BASE_URL"] = target_url
     if api_key:
         os.environ["COGNEE_API_KEY"] = api_key
@@ -1223,7 +1225,7 @@ async def _start(payload: dict | None = None) -> dict:
     will_boot = (not server_live) and _is_local_url(target_url)
     hook_log(
         "endpoint_mode_selected",
-        {"service_url": target_url, "server_live": server_live, "will_boot": will_boot},
+        {"base_url": target_url, "server_live": server_live, "will_boot": will_boot},
     )
     if will_boot and _LAZY_BOOTSTRAP:
         _spawn_bootstrap(config, cwd, session_id, agent_session_name, session_key, dataset)
@@ -1275,17 +1277,17 @@ async def _start(payload: dict | None = None) -> dict:
         session_key=session_key,
         agent_session_name=agent_session_name,
         api_key=agent_api_key,
-        service_url=str(config.get("service_url", "") or ""),
+        service_url=str(config.get("base_url", "") or ""),
     )
 
-    mode = "cloud" if config.get("service_url") else "local"
+    mode = "cloud" if config.get("base_url") else "local"
     print(
         f"cognee-plugin: session ready (mode={mode}, "
         f"session={session_id}, dataset={dataset}, user={user_id[:8]}...)",
         file=sys.stderr,
     )
 
-    ready = server_live or server_ready_hint(str(config.get("service_url", "") or ""))
+    ready = server_live or server_ready_hint(str(config.get("base_url", "") or ""))
     return _session_start_guidance(mode, dataset, session_id, ready)
 
 

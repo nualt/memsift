@@ -86,7 +86,7 @@ def _ensure_idle_watcher(session_id: str, dataset: str, user_id: str, config: di
         "user_id": user_id,
         "session_key": os.environ.get("COGNEE_SESSION_KEY", ""),
         "config": {
-            "service_url": config.get("service_url", ""),
+            "base_url": config.get("base_url", ""),
             "llm_model": config.get("llm_model", ""),
             "dataset": dataset,
         },
@@ -142,13 +142,13 @@ async def _store(prompt: str, payload: dict):
         {
             "hook": "store-user-prompt",
             "mode": runtime["mode"],
-            "service_url": runtime.get("service_url", ""),
+            "base_url": runtime.get("base_url", ""),
             "url_source": runtime.get("url_source", ""),
             "key_source": runtime.get("key_source", ""),
             "api_key_present": runtime.get("api_key_present", False),
         },
     )
-    if runtime["mode"] == "local_sdk" and server_ready_hint(runtime.get("service_url", "")):
+    if runtime["mode"] == "local_sdk" and server_ready_hint(runtime.get("base_url", "")):
         # Keep Cognee initialization parity with Claude so fresh local
         # databases, identities, and datasets are ready before Stop writes.
         # Skipped while the server is still warming so this hook never blocks;
