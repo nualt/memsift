@@ -2,77 +2,46 @@
 """Render the Cognee status line.
 
 Invoked by Claude Code's ``statusLine`` (via ``cognee-statusline.sh``), which
-pipes a JSON context on stdin that includes ``session_id`` (the host session id).
+pipes a JSON context on stdin. Deliberately standalone and pure-local: reads
+only env vars and ``~/.cognee-plugin/config.json`` — no network calls, no
+``_plugin_common`` import.
 
-Deliberately standalone and pure-local: it reads only small JSON files under
-``~/.cognee-plugin`` and never imports the plugin's ``_plugin_common`` (whose
-import re-execs into the cognee venv) or makes any network call, so it stays
-instant and runs safely on every status refresh.
-
-Output: ``cognee: <cognee-session-id> (+N more)``.
+Output: ``cognee: <dataset-name>``
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
-_PLUGIN_DIR = Path.home() / ".cognee-plugin"
-_SESSIONS_DIR = _PLUGIN_DIR / "sessions"
-_COUNT_CACHE = _PLUGIN_DIR / "sessions_count.json"
+_CONFIG_PATH = Path.home() / ".cognee-plugin" / "config.json"
+_DEFAULT_DATASET = "cognee_sessions"
 
 
-def _sanitize(value: str) -> str:
-    safe = []
-    for ch in str(value or ""):
-        safe.append(ch if (ch.isalnum() or ch in ("-", "_", ".")) else "_")
-    return "".join(safe).strip("._")[:120]
-
-
-def _current_session(host_id: str) -> str:
-    if not host_id:
-        return ""
-    path = _SESSIONS_DIR / f"{_sanitize(host_id)}.json"
+def _active_dataset() -> str:
+    # 1. env var (inherited from the shell that launched Claude Code)
+    v = os.environ.get("COGNEE_PLUGIN_DATASET", "").strip()
+    if v:
+        return v
+    # 2. config file
     try:
-        if path.exists():
-            rec = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(rec, dict):
-                return str(rec.get("session_id") or "").strip()
+        data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            v = str(data.get("dataset") or "").strip()
+            if v:
+                return v
     except Exception:
         pass
-    return ""
-
-
-def _total_sessions() -> int | None:
-    try:
-        if _COUNT_CACHE.exists():
-            data = json.loads(_COUNT_CACHE.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and "total" in data:
-                return int(data["total"])
-    except Exception:
-        pass
-    return None
+    # 3. default
+    return _DEFAULT_DATASET
 
 
 def main() -> None:
     try:
-        payload = json.load(sys.stdin)
+        json.load(sys.stdin)  # consume stdin as required by Claude Code
     except Exception:
-        payload = {}
-    host_id = str(payload.get("session_id") or "").strip() if isinstance(payload, dict) else ""
-
-    session_id = _current_session(host_id)
-    if not session_id:
-        # No mapped session yet (server still warming / not registered).
-        sys.stdout.write("cognee: starting...")
-        return
-
-    total = _total_sessions()
-    extra = ""
-    if total is not None:
-        others = total - 1 if total > 0 else 0
-        if others > 0:
-            extra = f" (+{others} more)"
-    sys.stdout.write(f"cognee: {session_id}{extra}")
+        pass
+    sys.stdout.write(f"cognee: {_active_dataset()}")
 
 
 if __name__ == "__main__":

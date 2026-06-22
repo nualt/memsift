@@ -44,7 +44,6 @@ from _plugin_common import (
     server_ready_hint,
     set_session_key,
     touch_activity,
-    write_launch_pid_map,
 )
 from config import (
     _user_id_via_api,
@@ -1002,14 +1001,6 @@ async def _run_heavy(
     if service_url and server_health_ok(service_url, timeout=1.5):
         mark_server_ready(service_url)
 
-    # Seed the status line's session count so "(+N more)" shows from the start.
-    try:
-        from _plugin_common import sessions_count_refresh
-
-        sessions_count_refresh(force=True)
-    except Exception as exc:
-        hook_log("sessions_count_seed_failed", {"error": str(exc)[:200]})
-
     return user_id, agent_api_key, True
 
 
@@ -1190,19 +1181,12 @@ async def _start(payload: dict | None = None) -> dict:
         }
     os.environ["COGNEE_SESSION_KEY"] = session_key
 
-    # Resolve (and persist) this launch's record: session_id (data scoping, new
-    # per launch, switchable by the picker) + conn_uuid (liveness handle for
-    # registration/counting, never switched). Written synchronously here so
-    # prompt hooks read back the identical ids before any of them run.
+    # Resolve (and persist) this launch's record: session_id (data scoping, unique
+    # per launch) + conn_uuid (liveness handle for registration/counting). Written
+    # synchronously here so prompt hooks read back the identical ids before any run.
     session_id, conn_uuid = ensure_launch_record(session_key, cwd)
     os.environ["COGNEE_SESSION_ID"] = session_id
     agent_session_name = conn_uuid
-    # Record host_pid -> host_key so the picker command can find this launch by
-    # walking the process tree (it has no session id in its env).
-    try:
-        write_launch_pid_map(_find_claude_parent_pid(), session_key)
-    except Exception as exc:
-        hook_log("launch_pid_map_write_failed", {"error": str(exc)[:200]})
     hook_log(
         "session_resolved",
         {
