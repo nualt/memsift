@@ -200,7 +200,7 @@ def _load_resolved() -> tuple:
     env_dataset = str(os.environ.get("COGNEE_SYNC_DATASET", "") or "").strip()
     env_agent_session_name = str(os.environ.get("COGNEE_AGENT_SESSION_NAME", "") or "").strip()
     env_api_key = str(os.environ.get("COGNEE_API_KEY", "") or "").strip()
-    env_service_url = str(os.environ.get("COGNEE_SERVICE_URL", "") or "").strip()
+    env_service_url = str(os.environ.get("COGNEE_BASE_URL", "") or "").strip()
     resolved_service_url, resolved_api_key = resolved_http_endpoint_auth()
     env_api_key = env_api_key or resolved_api_key
     env_service_url = env_service_url or resolved_service_url
@@ -211,7 +211,7 @@ def _load_resolved() -> tuple:
     if data:
         service_url = env_service_url or str(data.get("service_url", "") or "").strip()
         if service_url:
-            os.environ["COGNEE_SERVICE_URL"] = service_url
+            os.environ["COGNEE_BASE_URL"] = service_url
         if data.get("user_id"):
             os.environ["COGNEE_USER_ID"] = str(data.get("user_id"))
         return (
@@ -228,7 +228,7 @@ def _load_resolved() -> tuple:
     fallback_session_id = get_session_id(config)
     fallback_agent_session_name = session_key or ""
     if env_service_url:
-        os.environ["COGNEE_SERVICE_URL"] = env_service_url
+        os.environ["COGNEE_BASE_URL"] = env_service_url
     return (
         env_session_id or fallback_session_id,
         env_dataset or get_dataset(config),

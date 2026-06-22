@@ -14,11 +14,11 @@ Install via the Claude Code marketplace, then set environment variables for your
 **Cognee Cloud or a remote server** — set both:
 
 ```bash
-export COGNEE_SERVICE_URL="https://your-instance.cognee.ai"
+export COGNEE_BASE_URL="https://your-instance.cognee.ai"
 export COGNEE_API_KEY="ck_..."
 ```
 
-**Local mode** (default when `COGNEE_SERVICE_URL` is not set) — the plugin bootstraps a local Cognee API at `http://localhost:8011`. Only `LLM_API_KEY` is required; `COGNEE_API_KEY` is auto-minted if absent:
+**Local mode** (default when `COGNEE_BASE_URL` is not set) — the plugin bootstraps a local Cognee API at `http://localhost:8011`. Only `LLM_API_KEY` is required; `COGNEE_API_KEY` is auto-minted if absent:
 
 ```bash
 export LLM_API_KEY="sk-..."
@@ -47,7 +47,7 @@ Key resolution order:
 ## Mode selection rules
 
 At startup (`SessionStart`):
-- `COGNEE_SERVICE_URL` set → `managed_endpoint`
+- `COGNEE_BASE_URL` set → `managed_endpoint`
 - otherwise → `integration_local` (local API bootstrap)
 
 At hook runtime:
@@ -123,17 +123,11 @@ Final detached sync also performs unregister-on-finish when applicable.
 - `/cognee-memory:cognee-sync`
 - `/cognee-memory:cognee-configure-session`
 
-## Status line (optional)
+## Status line
 
 The status line displays `cognee: <session-id> (+N more)` for the current terminal's active session.
 
-Enable it by running the setup script once after installing the plugin:
-
-```bash
-python3 ~/.claude/plugins/marketplaces/cognee/integrations/claude-code/scripts/setup-statusline.py
-```
-
-This writes the correct absolute path into `~/.claude/settings.json` automatically and preserves all other settings. Restart Claude Code after running it.
+It is configured automatically on first launch — no manual steps needed. SessionStart writes the correct path into `~/.claude/settings.json` and Claude Code hot-reloads it, so the status line appears from your first interaction onward.
 
 The status line reads only local files — no network calls on every refresh:
 - `~/.cognee-plugin/sessions/<host_id>.json` — current session for this terminal
@@ -195,7 +189,7 @@ Config precedence:
 | `session_id` | `COGNEE_SESSION_ID` | auto-generated per launch | Override to resume a named session |
 | `session_strategy` | `COGNEE_SESSION_STRATEGY` | `per-directory` | `per-directory`, `git-branch`, `static` |
 | `session_prefix` | `COGNEE_SESSION_PREFIX` | `cc` | Prefix for auto-generated session IDs |
-| `service_url` | `COGNEE_SERVICE_URL` | unset | Set to enable managed endpoint mode |
+| `service_url` | `COGNEE_BASE_URL` | unset | Set to enable managed endpoint mode |
 | `api_key` | `COGNEE_API_KEY` | unset | API key; auto-minted if absent in local mode |
 | local URL override | `COGNEE_LOCAL_API_URL` | `http://localhost:8011` | Local API base URL |
 | local LLM | `LLM_API_KEY`, `LLM_MODEL` | unset | Required for local mode runtime |

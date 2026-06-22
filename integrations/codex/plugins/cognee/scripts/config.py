@@ -73,7 +73,7 @@ _ENV_MAP = {
     "COGNEE_PLUGIN_DATASET": "dataset",
     "COGNEE_SESSION_STRATEGY": "session_strategy",
     "COGNEE_SESSION_PREFIX": "session_prefix",
-    "COGNEE_SERVICE_URL": "service_url",
+    "COGNEE_BASE_URL": "service_url",
     "COGNEE_API_KEY": "api_key",
     "COGNEE_BASE_URL": "base_url",
     "COGNEE_USER_EMAIL": "user_email",

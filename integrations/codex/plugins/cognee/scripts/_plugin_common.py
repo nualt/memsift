@@ -1012,7 +1012,7 @@ def sync_lock(owner: str):
 
 def _local_api_url() -> str:
     direct = (
-        os.environ.get("COGNEE_LOCAL_API_URL") or os.environ.get("COGNEE_SERVICE_URL") or ""
+        os.environ.get("COGNEE_LOCAL_API_URL") or os.environ.get("COGNEE_BASE_URL") or ""
     ).strip()
     if direct:
         return direct
@@ -1083,7 +1083,7 @@ def resolved_http_endpoint_auth() -> tuple[str, str]:
     service_url = _normalize_service_url(_local_api_url())
     api_key = _api_key().strip()
     if service_url:
-        os.environ["COGNEE_SERVICE_URL"] = service_url
+        os.environ["COGNEE_BASE_URL"] = service_url
     if api_key:
         os.environ["COGNEE_API_KEY"] = api_key
     return service_url, api_key

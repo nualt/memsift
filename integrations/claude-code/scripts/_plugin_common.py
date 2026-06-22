@@ -1012,7 +1012,7 @@ def _local_api_url_with_source() -> tuple[str, str]:
     local_env = str(os.environ.get("COGNEE_LOCAL_API_URL", "") or "").strip()
     if local_env:
         return local_env, "env_local_api_url"
-    service_env = str(os.environ.get("COGNEE_SERVICE_URL", "") or "").strip()
+    service_env = str(os.environ.get("COGNEE_BASE_URL", "") or "").strip()
     if service_env:
         return service_env, "env_service_url"
     return _DEFAULT_LOCAL_SERVICE_URL, "default_local"
@@ -1090,7 +1090,7 @@ def resolved_http_endpoint_auth() -> tuple[str, str]:
     service_url = _normalize_service_url(_local_api_url())
     api_key = _api_key().strip()
     if service_url:
-        os.environ["COGNEE_SERVICE_URL"] = service_url
+        os.environ["COGNEE_BASE_URL"] = service_url
     if api_key:
         os.environ["COGNEE_API_KEY"] = api_key
     return service_url, api_key
@@ -1181,7 +1181,7 @@ def resolve_runtime_mode() -> dict:
     # required to decide whether to talk to a server (it's still sent when present).
     mode = "http" if service_url else "local_sdk"
     if service_url:
-        os.environ["COGNEE_SERVICE_URL"] = service_url
+        os.environ["COGNEE_BASE_URL"] = service_url
     if api_key:
         os.environ["COGNEE_API_KEY"] = api_key
     return {
