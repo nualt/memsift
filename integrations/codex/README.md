@@ -1,133 +1,125 @@
 # Cognee Codex Plugin
 
-This directory is a local Codex plugin marketplace for Cognee. The plugin uses
-the installed `cognee` Python package, captures Codex session events into
-Cognee session memory, recalls relevant memory on each prompt, and syncs
-session memory into Cognee's graph during compaction, supported session-end
-events, idle periods, or after the owning Codex process exits.
+Adds persistent Cognee memory to Codex CLI.
 
-The setup below is for **Codex CLI**: the terminal-based `codex` command.
-Start `codex` from the same shell where the Cognee virtual environment and LLM
-API key are active.
+The integration:
+- captures prompts, tool traces, and assistant responses into Cognee session memory
+- recalls relevant memory on each prompt
+- syncs session memory into graph memory during compaction, idle/final exit paths, and supported session-end flows
 
-## Install
+## Install From GitHub Marketplace
 
-Create or activate the Python environment where `cognee` is installed:
-
-```bash
-cd /path/to/your/project
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install cognee
-```
-
-Enable Codex hooks in `~/.codex/config.toml`:
+1. Ensure Codex hooks are enabled in `~/.codex/config.toml`:
 
 ```toml
 [features]
 hooks = true
-plugin_hooks = true
 ```
 
-Add this local marketplace and install the plugin:
+2. Add the Cognee marketplace from GitHub and install the plugin:
 
 ```bash
-cd /path/to/cognee-integrations/integrations/codex
-codex plugin marketplace add .
-codex plugin add cognee@cognee-local
+codex plugin marketplace add topoteretes/cognee-integrations --ref main
+codex plugin add cognee@cognee
 ```
 
-Start Codex from the same environment where `cognee` is installed:
+3. Optional: verify install:
 
 ```bash
-cd /path/to/your/project
-source .venv/bin/activate
-export LLM_API_KEY="your-key"
+codex plugin list --marketplace cognee --available --json
+```
+
+## Required Environment (Minimal)
+
+For local/integration-managed mode, only this is required:
+
+```bash
+export LLM_API_KEY="your-llm-api-key"
+```
+
+Then start Codex from the same shell:
+
+```bash
 codex
 ```
 
-## Configuration
+## Session Model
 
-The integration now runs in API mode and chooses endpoint mode at SessionStart.
+- Each new Codex terminal launch starts a new Cognee session by default.
+- Codex host `session_id` and Cognee `session_id` are different:
+  - Codex host session id is a local correlation key.
+  - Cognee session id is the memory scope (what recall/save uses).
+- Session switching is per terminal. Other terminals keep their own active session unless you intentionally choose the same one.
 
-Mode selection in `backend=auto`:
+## Choose Session At Startup (Optional Override)
 
+If you want a specific Cognee session at launch time:
+
+```bash
+export COGNEE_SESSION_ID="my-session-id"
+codex
+```
+
+This is an optional override. If not set, the plugin mints a fresh Cognee session for the new Codex launch.
+
+## Switch Session During Use
+
+You can switch without restarting Codex.
+
+Ask Codex in natural language, for example:
+- `Use cognee-configure-session and show my available sessions.`
+- `Switch Cognee session to <session-id>.`
+- `Create a new Cognee session named <name> and switch to it.`
+
+Behavior:
+- Existing id: resumes that session.
+- New id/name: creates a new session and switches to it.
+- From the next message onward, recall/save use the new session.
+
+If your Codex build exposes skills in `/skills`, you can also invoke `cognee-configure-session` from there, but do not rely on `/skills` availability.
+
+## Status Visibility
+
+Cognee session status is shown in plugin messages as:
+
+`cognee: <current_session> (+N more)`
+
+It appears on:
+- session startup message
+- prompt memory recall header
+- session switch result
+
+Codex footer/status line can show native Codex items (including host session id), but Cognee custom status is not a persistent custom footer segment.
+
+## Runtime Modes
+
+For cloud/managed endpoint mode, set both `COGNEE_SERVICE_URL` and `COGNEE_API_KEY`.
+
+Mode selection at SessionStart:
 - If both `COGNEE_SERVICE_URL` and `COGNEE_API_KEY` are set:
-  - Uses that endpoint (`managed_endpoint`).
-  - The integration does not auto-start a local server.
-- If one or both are missing:
-  - Uses integration-managed local endpoint (`integration_local`).
-  - Starts/uses local Cognee API on `http://localhost:8011`.
+  - plugin targets that endpoint
+- If either value is missing:
+  - plugin uses integration-managed local endpoint (`http://localhost:8011`)
+  - local bootstrap/install path is used as needed
 
-You can still force HTTP-style behavior explicitly:
+## Hooks
 
-```bash
-export COGNEE_CODEX_BACKEND=http
-```
-
-`COGNEE_CODEX_BACKEND` is still supported for backward compatibility, but in
-current integration logic the effective runtime endpoint selection is primarily
-driven by whether both `COGNEE_SERVICE_URL` and `COGNEE_API_KEY` are present.
-Treat `COGNEE_CODEX_BACKEND` as a legacy/override flag.
-
-### Important Environment Variables
-
-```bash
-# Endpoint selection
-export COGNEE_SERVICE_URL="http://localhost:8011"   # or cloud URL
-export COGNEE_API_KEY="your-owner-or-tenant-key"
-export COGNEE_CODEX_BACKEND="auto"                  # default
-
-# Agent identity
-export COGNEE_AGENT_NAME="codex-agent"
-
-# Bootstrap owner credentials (used only when owner API key is missing and
-# integration needs to create one to create/recreate the named agent)
-export COGNEE_USER_EMAIL="default_user@example.com"
-export COGNEE_USER_PASSWORD="default_password"
-```
-
-### Agent Lifecycle At Session Start
-
-In API mode, `SessionStart` now:
-
-1. Resolves Codex session key from SessionStart payload `session_id`.
-2. Picks endpoint mode (`managed_endpoint` or `integration_local`).
-3. Resolves/creates named agent credentials.
-4. Registers this session via `/api/v1/agents/register`.
-5. Stores per-agent API keys in:
-   - `~/.cognee-plugin/codex/agent_keys.json`
-
-Key cache entries are keyed by:
-
-- `service_url::agent_name`
-
-## Update Or Remove
-
-After editing this plugin, reinstall it so Codex refreshes the cached copy:
-
-```bash
-cd /path/to/cognee-integrations/integrations/codex
-codex plugin remove cognee@cognee-local
-codex plugin add cognee@cognee-local
-```
-
-To remove the marketplace too:
-
-```bash
-codex plugin remove cognee@cognee-local
-codex plugin marketplace remove cognee-local
-```
+- `SessionStart`: resolve session mapping, initialize runtime, register/start watchers
+- `UserPromptSubmit`: recall context and stage user prompt
+- `PostToolUse`: store tool trace
+- `Stop`: store assistant response
+- `PreCompact`: build memory anchor and begin sync path
+- `SessionEnd`: trigger session-end sync path
 
 ## Logs And State
 
-Plugin state and hook logs are written under:
+Plugin state/logs are written under:
 
 ```bash
 ~/.cognee-plugin/codex/
 ```
 
-Useful files:
+Useful logs:
 
 ```bash
 tail -f ~/.cognee-plugin/codex/hook.log
@@ -137,49 +129,38 @@ tail -f ~/.cognee-plugin/codex/exit-watcher.log
 tail -f ~/.cognee-plugin/codex/watcher.log
 ```
 
-Important state files:
+## Update Or Remove
+
+Reinstall plugin after marketplace/plugin changes:
 
 ```bash
-~/.cognee-plugin/codex/agent_keys.json
-~/.cognee-plugin/codex/exit-watchers/*.pid
+codex plugin remove cognee@cognee
+codex plugin add cognee@cognee
 ```
 
-Note: runtime state is resolved from Cognee HTTP endpoints (`/api/v1/users/me`
-and `/api/v1/agents/connections/me`), not from `resolved.json` files.
+Remove plugin and marketplace:
 
-## What The Hooks Do
-
-- `SessionStart`: resolves session key, selects endpoint mode, ensures/creates agent credentials, registers active connection, starts idle and exit watchers.
-- `UserPromptSubmit`: recalls session, trace, graph context, and graph memory.
-- `PostToolUse`: stores tool calls as Cognee trace entries.
-- `Stop`: stores the assistant response paired with the pending user prompt.
-- `PreCompact`: emits a compact session/trace memory anchor and starts graph sync.
-- `SessionEnd`: starts graph sync when the Codex client dispatches this hook.
-- Detached sync on final exit can unregister the agent connection.
+```bash
+codex plugin remove cognee@cognee
+codex plugin marketplace remove cognee
+```
 
 ## Troubleshooting
 
-### `401 Unauthorized` After Agent Setup
+### SessionStart hook invalid JSON output
 
-Common causes:
+If Codex reports SessionStart hook JSON output errors, the SessionStart hook output schema is invalid for the current Codex hook contract. Check `hook.log` and confirm the installed plugin version.
 
-- Stale cached API key in `~/.cognee-plugin/codex/agent_keys.json`.
-- Reused `COGNEE_AGENT_NAME` against a different endpoint with mismatched key.
+### No new behavior after local edits
 
-Suggested recovery:
+Codex may still be running a cached Git marketplace copy, not your local plugin checkout. Confirm installed marketplace/plugin source, then reinstall from the intended source.
 
-```bash
-rm ~/.cognee-plugin/codex/agent_keys.json
-```
+### Startup/local endpoint issues
 
-Then restart Codex so SessionStart recreates and registers the agent.
-
-### SessionStart Timeout While Starting Local API
-
-If hooks time out on startup, verify local API health and logs:
+Check:
 
 ```bash
-curl -sS http://localhost:8011/health
 tail -f ~/.cognee-plugin/codex/hook.log
 tail -f ~/.cognee-plugin/codex/subprocess.log
+curl -sS http://localhost:8011/health
 ```
