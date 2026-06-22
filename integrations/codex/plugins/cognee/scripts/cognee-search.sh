@@ -25,7 +25,7 @@ import urllib.request
 
 plugin_dir = pathlib.Path(sys.argv[1])
 import os
-service_url = (os.environ.get("COGNEE_SERVICE_URL") or os.environ.get("COGNEE_LOCAL_API_URL") or "http://localhost:8011").strip()
+service_url = (os.environ.get("COGNEE_BASE_URL") or os.environ.get("COGNEE_LOCAL_API_URL") or "http://localhost:8011").strip()
 api_key = (os.environ.get("COGNEE_API_KEY") or "").strip()
 agent_name = (os.environ.get("COGNEE_AGENT_NAME") or "").strip()
 if agent_name:

@@ -16,6 +16,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -352,7 +353,7 @@ def _ensure_local_server_running(
 
     def _ready() -> None:
         config["service_url"] = service_url
-        os.environ["COGNEE_SERVICE_URL"] = service_url
+        os.environ["COGNEE_BASE_URL"] = service_url
 
     if _health_ok(health_url):
         _ready()
@@ -1036,7 +1037,7 @@ async def _run_bootstrap(bootstrap: dict) -> None:
     service_url = _with_scheme(bootstrap.get("service_url", "") or _LOCAL_SERVICE_URL)
     health_url = _health_url(service_url)
     config["service_url"] = service_url
-    os.environ["COGNEE_SERVICE_URL"] = service_url
+    os.environ["COGNEE_BASE_URL"] = service_url
 
     # 1. Ensure the server is up. Only the single-flight winner spawns uvicorn;
     #    everyone else waits for /health (the winner may still be migrating).
@@ -1102,7 +1103,56 @@ def _session_start_guidance(mode: str, dataset: str, session_id: str, ready: boo
     }
 
 
+def _ensure_statusline_configured() -> None:
+    """Write the statusLine entry to ~/.claude/settings.json if not already set.
+
+    Claude Code hot-reloads settings.json, so the status line becomes active on
+    the next status refresh without requiring a restart.
+    """
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    if plugin_root:
+        statusline_sh = Path(plugin_root) / "scripts" / "cognee-statusline.sh"
+    else:
+        statusline_sh = Path(__file__).resolve().parent / "cognee-statusline.sh"
+
+    if not statusline_sh.exists():
+        hook_log("statusline_setup_skipped", {"reason": "script_not_found", "path": str(statusline_sh)})
+        return
+
+    settings_path = Path.home() / ".claude" / "settings.json"
+    desired = {"type": "command", "command": str(statusline_sh)}
+
+    try:
+        settings: dict = {}
+        if settings_path.exists():
+            text = settings_path.read_text(encoding="utf-8").strip()
+            if text:
+                settings = json.loads(text)
+
+        if settings.get("statusLine") == desired:
+            return
+
+        settings["statusLine"] = desired
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=settings_path.parent, prefix=".settings-", suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=2)
+                f.write("\n")
+            os.replace(tmp, settings_path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        hook_log("statusline_configured", {"path": str(statusline_sh)})
+    except Exception as exc:
+        hook_log("statusline_setup_failed", {"error": str(exc)[:200]})
+
+
 async def _start(payload: dict | None = None) -> dict:
+    _ensure_statusline_configured()
     config = load_config()
     payload = payload or {}
     cwd = str(payload.get("cwd") or os.environ.get("CLAUDE_CWD") or os.getcwd())
@@ -1115,7 +1165,7 @@ async def _start(payload: dict | None = None) -> dict:
     api_key = str(config.get("api_key", "") or "").strip()
     target_url = configured_url or _LOCAL_SERVICE_URL
     config["service_url"] = target_url
-    os.environ["COGNEE_SERVICE_URL"] = target_url
+    os.environ["COGNEE_BASE_URL"] = target_url
     if api_key:
         os.environ["COGNEE_API_KEY"] = api_key
 

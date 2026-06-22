@@ -352,7 +352,7 @@ def _ensure_local_server_running(
 
     def _ready() -> None:
         config["service_url"] = service_url
-        os.environ["COGNEE_SERVICE_URL"] = service_url
+        os.environ["COGNEE_BASE_URL"] = service_url
 
     if _health_ok(health_url):
         _ready()
@@ -1036,7 +1036,7 @@ async def _run_bootstrap(bootstrap: dict) -> None:
     service_url = _with_scheme(bootstrap.get("service_url", "") or _LOCAL_SERVICE_URL)
     health_url = _health_url(service_url)
     config["service_url"] = service_url
-    os.environ["COGNEE_SERVICE_URL"] = service_url
+    os.environ["COGNEE_BASE_URL"] = service_url
 
     # 1. Ensure the server is up. Only the single-flight winner spawns uvicorn;
     #    everyone else waits for /health (the winner may still be migrating).
@@ -1087,7 +1087,7 @@ async def _start(payload: dict | None = None) -> dict:
     api_key = str(config.get("api_key", "") or "").strip()
     target_url = configured_url or _LOCAL_SERVICE_URL
     config["service_url"] = target_url
-    os.environ["COGNEE_SERVICE_URL"] = target_url
+    os.environ["COGNEE_BASE_URL"] = target_url
     if api_key:
         os.environ["COGNEE_API_KEY"] = api_key
 

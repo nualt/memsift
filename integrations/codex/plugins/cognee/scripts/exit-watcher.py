@@ -83,7 +83,7 @@ def _spawn_sync(
         if api_key:
             env["COGNEE_API_KEY"] = api_key
         if service_url:
-            env["COGNEE_SERVICE_URL"] = service_url
+            env["COGNEE_BASE_URL"] = service_url
         subprocess.Popen(
             [sys.executable, str(_SYNC_SCRIPT), _DETACHED_SYNC_ARG],
             cwd=os.getcwd(),
