@@ -9,28 +9,19 @@ The integration:
 
 ## Install
 
-### 1. Install Cognee
+Install via the Claude Code marketplace, then set environment variables for your runtime mode.
 
-```bash
-pip install cognee
-```
-
-### 2. Configure runtime mode
-
-The integration has two runtime modes.
-
-**`managed_endpoint`** — used when `COGNEE_SERVICE_URL` is set (Cognee Cloud or a remote server):
+**Cognee Cloud or a remote server** — set both:
 
 ```bash
 export COGNEE_SERVICE_URL="https://your-instance.cognee.ai"
 export COGNEE_API_KEY="ck_..."
 ```
 
-**`integration_local`** — used otherwise. The integration bootstraps a local Cognee API at `http://localhost:8011`. A `COGNEE_API_KEY` is optional: if not set, one is auto-minted from the default local user and cached at `~/.cognee-plugin/api_key.json`.
+**Local mode** (default when `COGNEE_SERVICE_URL` is not set) — the plugin bootstraps a local Cognee API at `http://localhost:8011`. Only `LLM_API_KEY` is required; `COGNEE_API_KEY` is auto-minted if absent:
 
 ```bash
-export LLM_API_KEY="sk-..."   # required for the local Cognee runtime
-export COGNEE_API_KEY="ck_..."  # optional; auto-minted if absent
+export LLM_API_KEY="sk-..."
 ```
 
 You can also set config in `~/.cognee-plugin/config.json`:
@@ -40,18 +31,6 @@ You can also set config in `~/.cognee-plugin/config.json`:
   "service_url": "https://your-instance.cognee.ai",
   "dataset": "claude_sessions"
 }
-```
-
-### 3. Enable plugin
-
-```bash
-claude --plugin-dir /path/to/cognee-integrations/integrations/claude-code
-```
-
-Optional alias:
-
-```bash
-alias claude="claude --plugin-dir /path/to/cognee-integrations/integrations/claude-code"
 ```
 
 On startup you should see a "Cognee Memory Connected" system message.
