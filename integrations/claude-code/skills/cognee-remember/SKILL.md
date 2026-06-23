@@ -23,32 +23,32 @@ Determine the category from the user's intent, then run:
 
 **User data** (preferences, corrections, personal context):
 ```bash
-cognee-cli remember "$ARGUMENTS" -d "${COGNEE_PLUGIN_DATASET:-claude_sessions}" --node-set user_context
+${CLAUDE_PLUGIN_ROOT}/scripts/cognee-remember.sh "$ARGUMENTS" --node-set user_context
 ```
 
 **Project data** (docs, code, company knowledge):
 ```bash
-cognee-cli remember "$ARGUMENTS" -d "${COGNEE_PLUGIN_DATASET:-claude_sessions}" --node-set project_docs
+${CLAUDE_PLUGIN_ROOT}/scripts/cognee-remember.sh "$ARGUMENTS" --node-set project_docs
 ```
 
 **Agent data** (explicit agent notes — routine tool logs are automatic):
 ```bash
-cognee-cli remember "$ARGUMENTS" -d "${COGNEE_PLUGIN_DATASET:-claude_sessions}" --node-set agent_actions
+${CLAUDE_PLUGIN_ROOT}/scripts/cognee-remember.sh "$ARGUMENTS" --node-set agent_actions
 ```
 
-If the category is unclear, default to **project**.
+The wrapper POSTs to the running Cognee server (`/api/v1/remember`). A `{"ok": true}` response means the server accepted the data. An error response means the server rejected or failed the request — check `COGNEE_API_KEY` and server logs; do **not** re-run or conclude the data wasn't stored without confirming against the server.
 
-The command outputs a summary after completion:
+**IMPORTANT**: The wrapper always runs in the foreground (`run_in_background=false`) to ensure the full pipeline completes before returning.
 
+## Fallback only — server unreachable
+
+`cognee-cli` is a thin client over the same server. Use it only when the server is genuinely down:
+
+```bash
+cognee-cli remember "$ARGUMENTS" -d "${COGNEE_PLUGIN_DATASET:-claude_sessions}" --node-set user_context
 ```
-Data ingested and knowledge graph built successfully!
-  Dataset ID: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
-  Items processed: 1
-  Content hash: a1b2c3d4...
-  Elapsed: 4.2s
-```
 
-**IMPORTANT**: Do NOT use the `-b` (background) flag. Always run in the foreground to ensure the full pipeline completes.
+**Empty or clean CLI output does NOT confirm the data was stored.** Verify via the server directly once it is back up.
 
 ## When to use
 

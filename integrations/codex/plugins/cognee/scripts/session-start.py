@@ -278,7 +278,14 @@ def ensure_cognee_installed(timeout: float = _INSTALL_TIMEOUT_SECONDS) -> bool:
                     timeout=timeout,
                 )
                 subprocess.run(
-                    [str(_VENV_PYTHON), "-m", "pip", "install", "--upgrade", f"cognee=={_PINNED_COGNEE_VERSION}"],
+                    [
+                        str(_VENV_PYTHON),
+                        "-m",
+                        "pip",
+                        "install",
+                        "--upgrade",
+                        f"cognee=={_PINNED_COGNEE_VERSION}",
+                    ],
                     check=True,
                     capture_output=True,
                     text=True,

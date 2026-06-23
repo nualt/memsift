@@ -57,7 +57,7 @@ from config import (
     save_config,
 )
 
-_STATE_DIR = Path.home() / ".cognee-plugin"
+_STATE_DIR = Path.home() / ".cognee-plugin" / "claude-code"
 _GLOBAL_STATE_DIR = Path.home() / ".cognee-plugin"
 _WATCHER_PID = _STATE_DIR / "watcher.pid"
 _WATCHER_STOP = _STATE_DIR / "watcher.stop"
@@ -279,7 +279,14 @@ def ensure_cognee_installed(timeout: float = _INSTALL_TIMEOUT_SECONDS) -> bool:
                     timeout=timeout,
                 )
                 subprocess.run(
-                    [str(_VENV_PYTHON), "-m", "pip", "install", "--upgrade", f"cognee=={_PINNED_COGNEE_VERSION}"],
+                    [
+                        str(_VENV_PYTHON),
+                        "-m",
+                        "pip",
+                        "install",
+                        "--upgrade",
+                        f"cognee=={_PINNED_COGNEE_VERSION}",
+                    ],
                     check=True,
                     capture_output=True,
                     text=True,
@@ -1245,7 +1252,7 @@ async def _start(payload: dict | None = None) -> dict:
     _purge_legacy_resolved_files()
 
     # Create config file on first run if it doesn't exist
-    config_file = Path.home() / ".cognee-plugin" / "config.json"
+    config_file = _STATE_DIR / "config.json"
     if not config_file.exists():
         save_config(config)
 

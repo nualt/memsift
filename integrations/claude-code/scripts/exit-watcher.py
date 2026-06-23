@@ -14,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-_PLUGIN_DIR = Path.home() / ".cognee-plugin"
+_PLUGIN_DIR = Path.home() / ".cognee-plugin" / "claude-code"
 _EXIT_WATCHERS_DIR = _PLUGIN_DIR / "exit-watchers"
 _PIDFILE = _PLUGIN_DIR / "exit-watcher.pid"
 _LOGFILE = _PLUGIN_DIR / "exit-watcher.log"

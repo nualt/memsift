@@ -280,7 +280,7 @@ async def _run(prompt: str) -> dict | None:
     try:
         from pathlib import Path as _Path
 
-        _state = _Path.home() / ".cognee-plugin" / "last_recall.json"
+        _state = _Path.home() / ".cognee-plugin" / "claude-code" / "last_recall.json"
         _state.parent.mkdir(parents=True, exist_ok=True)
         _state.write_text(
             json.dumps(
@@ -345,7 +345,7 @@ async def _run(prompt: str) -> dict | None:
         from datetime import timezone as _tz
         from pathlib import Path as _Path
 
-        _audit = _Path.home() / ".cognee-plugin" / "recall-audit.log"
+        _audit = _Path.home() / ".cognee-plugin" / "claude-code" / "recall-audit.log"
         _audit.parent.mkdir(parents=True, exist_ok=True)
         with _audit.open("a", encoding="utf-8") as fh:
             fh.write(

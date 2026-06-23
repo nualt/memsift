@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-_CONFIG_DIR = Path.home() / ".cognee-plugin"
+_CONFIG_DIR = Path.home() / ".cognee-plugin" / "claude-code"
 _STATE_DIR = _CONFIG_DIR
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
 _BRIDGE_STATE_FILE = _STATE_DIR / "bridge_state.json"

@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-PLUGIN_DIR="${HOME}/.cognee-plugin"
+PLUGIN_DIR="${HOME}/.cognee-plugin/claude-code"
 runtime_json="$(python3 - <<'PY' "${PLUGIN_DIR}" 2>/dev/null || true
 import json
 import pathlib
@@ -27,34 +27,16 @@ plugin_dir = pathlib.Path(sys.argv[1])
 import os
 service_url = (os.environ.get("COGNEE_BASE_URL") or os.environ.get("COGNEE_LOCAL_API_URL") or "http://localhost:8011").strip()
 api_key = (os.environ.get("COGNEE_API_KEY") or "").strip()
-agent_name = (os.environ.get("COGNEE_AGENT_NAME") or "").strip()
-if agent_name:
-    if agent_name.endswith("@cognee.agent"):
-        agent_name = agent_name[: -len("@cognee.agent")]
-    if not agent_name.endswith("_claude"):
-        agent_name = f"{agent_name}_claude"
-
-if not api_key and service_url and agent_name:
-    cache_path = plugin_dir / "agent_keys.json"
+if not api_key:
+    cache_path = plugin_dir.parent / "api_key.json"
     if cache_path.exists():
         try:
             cache = json.loads(cache_path.read_text())
-            entries = cache.get("entries", {}) if isinstance(cache, dict) else {}
-            if isinstance(entries, dict):
-                normalized_url = service_url.rstrip("/")
-                key = f"{normalized_url}::{agent_name}"
-                chosen = entries.get(key)
-                if isinstance(chosen, dict):
-                    api_key = str(chosen.get("api_key") or "").strip()
-                else:
-                    for entry in entries.values():
-                        if not isinstance(entry, dict):
-                            continue
-                        name = str(entry.get("agent_name") or "").strip()
-                        url = str(entry.get("base_url") or "").strip().rstrip("/")
-                        if name == agent_name and url == normalized_url:
-                            api_key = str(entry.get("api_key") or "").strip()
-                            break
+            if isinstance(cache, dict):
+                key = str(cache.get("api_key") or "").strip()
+                cached_url = str(cache.get("base_url") or "").strip().rstrip("/")
+                if key and (not cached_url or cached_url == service_url.rstrip("/")):
+                    api_key = key
         except Exception:
             pass
 
