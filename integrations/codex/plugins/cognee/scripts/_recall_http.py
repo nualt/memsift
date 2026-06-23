@@ -20,6 +20,7 @@ Contract — what gets printed to stdout:
 
 Diagnostics also go to stderr so the caller can surface them.
 """
+
 import json
 import sys
 import urllib.error

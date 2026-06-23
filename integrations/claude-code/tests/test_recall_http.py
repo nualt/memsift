@@ -12,6 +12,7 @@ Covers the contract from the PR reviews:
 Run: `pytest integrations/claude-code/tests/test_recall_http.py`
 (or `python integrations/claude-code/tests/test_recall_http.py` standalone).
 """
+
 import pathlib
 import sys
 import urllib.error
@@ -54,18 +55,21 @@ def test_empty_list_is_authoritative():
 
 
 def test_list_results_passthrough():
-    assert rh.do_recall("http://x", "", "q", "", '["graph"]', "5",
-                        opener=_returns('[{"text": "hit"}]')) == [{"text": "hit"}]
+    assert rh.do_recall(
+        "http://x", "", "q", "", '["graph"]', "5", opener=_returns('[{"text": "hit"}]')
+    ) == [{"text": "hit"}]
 
 
 def test_non_error_dict_is_wrapped():
-    assert rh.do_recall("http://x", "", "q", "", '["graph"]', "5",
-                        opener=_returns('{"answer": "x"}')) == [{"answer": "x"}]
+    assert rh.do_recall(
+        "http://x", "", "q", "", '["graph"]', "5", opener=_returns('{"answer": "x"}')
+    ) == [{"answer": "x"}]
 
 
 def test_error_dict_is_error_envelope_not_fallback():
-    out = rh.do_recall("http://x", "", "q", "", '["graph"]', "5",
-                       opener=_returns('{"error": "bad request"}'))
+    out = rh.do_recall(
+        "http://x", "", "q", "", '["graph"]', "5", opener=_returns('{"error": "bad request"}')
+    )
     assert isinstance(out, dict) and out.get("authoritative") is False
     assert out != rh.UNREACHABLE  # must NOT trigger CLI fallback
 
@@ -82,13 +86,24 @@ def test_http_401_403_auth_is_error_envelope_not_fallback():
         err = urllib.error.HTTPError("http://x", code, "denied", {}, None)
         out = rh.do_recall("http://x", "k", "q", "", '["graph"]', "5", opener=_raises(err))
         assert isinstance(out, dict) and out["status"] == code
-        assert out != rh.UNREACHABLE  # auth failure must NOT fall back (would bypass authz / wrong data)
+        # auth failure must NOT fall back to local CLI (would bypass authz / return wrong data)
+        assert out != rh.UNREACHABLE
 
 
 def test_connection_error_is_unreachable():
     # Only a genuine connection failure may fall back to the local CLI.
-    assert rh.do_recall("http://x", "", "q", "", '["graph"]', "5",
-                        opener=_raises(urllib.error.URLError("refused"))) == rh.UNREACHABLE
+    assert (
+        rh.do_recall(
+            "http://x",
+            "",
+            "q",
+            "",
+            '["graph"]',
+            "5",
+            opener=_raises(urllib.error.URLError("refused")),
+        )
+        == rh.UNREACHABLE
+    )
 
 
 def test_coerce_top_k():
