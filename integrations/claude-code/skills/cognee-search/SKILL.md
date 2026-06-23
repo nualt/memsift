@@ -40,10 +40,13 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/cognee-search.sh "$ARGUMENTS" 10 --session
 
 ### Filter by category (optional)
 
-Categories (`user_context` / `project_docs` / `agent_actions`) filter by `node_set`, currently exposed via the CLI (same server backend):
+Categories (`user_context` / `project_docs` / `agent_actions`) filter by node set. `cognee-cli recall` does **not** expose this — pass `node_name` to the server directly:
 
 ```bash
-cognee-cli recall "$ARGUMENTS" --node-set project_docs -k 5 -f json
+curl -s -X POST "${COGNEE_BASE_URL:-http://localhost:8011}/api/v1/recall" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: ${COGNEE_API_KEY:-}" \
+  -d '{"query": "...", "top_k": 5, "only_context": true, "scope": ["graph"], "node_name": ["project_docs"]}'
 ```
 
 ### Ground-truth a suspicious result (debugging)
@@ -52,9 +55,12 @@ The server is authoritative. If a search returns empty but you expect content, c
 
 ```bash
 curl -s -X POST "${COGNEE_BASE_URL:-http://localhost:8011}/api/v1/recall" \
-  -H "Content-Type: application/json" ${COGNEE_API_KEY:+-H "X-Api-Key: $COGNEE_API_KEY"} \
-  -d "{\"query\": \"$ARGUMENTS\", \"top_k\": 5, \"only_context\": true, \"scope\": [\"graph\"]}"
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: ${COGNEE_API_KEY:-}" \
+  -d '{"query": "...", "top_k": 5, "only_context": true, "scope": ["graph"]}'
 ```
+
+(An authed/cloud server needs `COGNEE_API_KEY`; a local single-user server ignores an empty key. If the response is an `{"error": ...}` object rather than a list, the server was reachable but rejected/failed the request — that's an error, **not** "no results".)
 
 ### Fallback only — server unreachable
 
@@ -79,6 +85,6 @@ Session entries tagged with `[category:agent]` are automatic tool call logs.
 | Need current session context | Already automatic, no action needed |
 | User explicitly says "search cognee" | `cognee-search.sh "<query>"` (server-first) |
 | "what does the codebase do" / "what did we do last time" | `cognee-search.sh "<query>" 10 --graph` |
-| Need a specific category | add `--node-set {user_context\|project_docs\|agent_actions}` via the CLI form |
+| Need a specific category | use the `node_name` curl form above (`["user_context"\|"project_docs"\|"agent_actions"]`) |
 | Auto context insufficient | `cognee-search.sh "<query>" 10 --session` |
 | **Result empty but you expect content** | **Ground-truth via the `curl` above before concluding "not found"** |

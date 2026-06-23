@@ -94,6 +94,7 @@ files before editing code.
 
 ```bash
 curl -s -X POST "${COGNEE_BASE_URL:-http://localhost:8011}/api/v1/recall" \
-  -H "Content-Type: application/json" ${COGNEE_API_KEY:+-H "X-Api-Key: $COGNEE_API_KEY"} \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: ${COGNEE_API_KEY:-}" \
   -d '{"query": "<question>", "top_k": 10, "only_context": true, "scope": ["graph"]}'
 ```

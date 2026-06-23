@@ -40,15 +40,18 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/cognee-search.sh "<query>" 10 --graph
 **Ground-truth (if a result is empty but you expect content) — authoritative:**
 ```bash
 curl -s -X POST "${COGNEE_BASE_URL:-http://localhost:8011}/api/v1/recall" \
-  -H "Content-Type: application/json" ${COGNEE_API_KEY:+-H "X-Api-Key: $COGNEE_API_KEY"} \
-  -d "{\"query\": \"<query>\", \"top_k\": 10, \"only_context\": true, \"scope\": [\"graph\"]}"
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: ${COGNEE_API_KEY:-}" \
+  -d '{"query": "<query>", "top_k": 10, "only_context": true, "scope": ["graph"]}'
 ```
+
+Category filtering uses `node_name` on the same call (the CLI doesn't expose it): add `"node_name": ["project_docs"]` (or `user_context` / `agent_actions`).
 
 ## The server is the source of truth (read this before reporting "not found")
 
 - **An empty result is only valid if it came from the server.** `cognee-cli` is a thin client over the same server and can print empty stdout even when content exists. **Never conclude "not found" from an empty/clean CLI run** — confirm with the `curl` above first.
 - **Do not re-run the same search to "retry."** One server answer is authoritative — report it and stop. (Re-running the CLI and chasing async warnings is how a confident-but-wrong "nothing found" verdict gets produced.)
-- Category filtering (`--node-set user_context|project_docs|agent_actions`) is optional and hits the same server.
+- **If the output is an `{"error": ...}` object instead of a list**, the server was reachable but rejected/failed the request (e.g. auth) — report that error and check `COGNEE_API_KEY`. It is **not** "no results", and the wrapper deliberately does **not** fall back to the local CLI in that case.
 
 ## Output
 

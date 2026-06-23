@@ -1,8 +1,12 @@
 """Unit tests for the server-first recall helper (_recall_http.py).
 
-Covers the contract that the PR review flagged:
+Covers the contract from the PR reviews:
 - a 2xx empty list is AUTHORITATIVE (not a fallback trigger);
-- any non-2xx / error body / connection failure -> UNREACHABLE (fallback);
+- only a genuine connection failure -> UNREACHABLE (the *only* thing that lets
+  cognee-search.sh fall back to the local CLI);
+- any HTTP error (5xx/4xx, and especially 401/403 auth) -> an error envelope
+  (dict, authoritative=False), NOT UNREACHABLE, so the wrapper reports it and
+  does NOT fall back to a possibly-different local backend;
 - top_k / scope coercion never raises.
 
 Run: `pytest integrations/claude-code/tests/test_recall_http.py`
@@ -54,27 +58,35 @@ def test_list_results_passthrough():
                         opener=_returns('[{"text": "hit"}]')) == [{"text": "hit"}]
 
 
-def test_error_dict_is_unreachable():
-    assert rh.do_recall("http://x", "", "q", "", '["graph"]', "5",
-                        opener=_returns('{"error": "bad request"}')) == rh.UNREACHABLE
-
-
 def test_non_error_dict_is_wrapped():
     assert rh.do_recall("http://x", "", "q", "", '["graph"]', "5",
                         opener=_returns('{"answer": "x"}')) == [{"answer": "x"}]
 
 
-def test_http_500_is_unreachable():
+def test_error_dict_is_error_envelope_not_fallback():
+    out = rh.do_recall("http://x", "", "q", "", '["graph"]', "5",
+                       opener=_returns('{"error": "bad request"}'))
+    assert isinstance(out, dict) and out.get("authoritative") is False
+    assert out != rh.UNREACHABLE  # must NOT trigger CLI fallback
+
+
+def test_http_500_is_error_envelope():
     err = urllib.error.HTTPError("http://x", 500, "boom", {}, None)
-    assert rh.do_recall("http://x", "", "q", "", '["graph"]', "5", opener=_raises(err)) == rh.UNREACHABLE
+    out = rh.do_recall("http://x", "", "q", "", '["graph"]', "5", opener=_raises(err))
+    assert isinstance(out, dict) and out["status"] == 500 and out["authoritative"] is False
+    assert out != rh.UNREACHABLE  # reachable-but-erroring must NOT fall back to local CLI
 
 
-def test_http_403_is_unreachable():
-    err = urllib.error.HTTPError("http://x", 403, "forbidden", {}, None)
-    assert rh.do_recall("http://x", "k", "q", "", '["graph"]', "5", opener=_raises(err)) == rh.UNREACHABLE
+def test_http_401_403_auth_is_error_envelope_not_fallback():
+    for code in (401, 403):
+        err = urllib.error.HTTPError("http://x", code, "denied", {}, None)
+        out = rh.do_recall("http://x", "k", "q", "", '["graph"]', "5", opener=_raises(err))
+        assert isinstance(out, dict) and out["status"] == code
+        assert out != rh.UNREACHABLE  # auth failure must NOT fall back (would bypass authz / wrong data)
 
 
 def test_connection_error_is_unreachable():
+    # Only a genuine connection failure may fall back to the local CLI.
     assert rh.do_recall("http://x", "", "q", "", '["graph"]', "5",
                         opener=_raises(urllib.error.URLError("refused"))) == rh.UNREACHABLE
 

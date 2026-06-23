@@ -7,13 +7,18 @@ plugin venv (the same constraint ``cognee-search.sh`` already works under).
 Contract — what gets printed to stdout:
   * a JSON **list** on a 2xx response. An **empty list is authoritative**:
     the server searched and found nothing.
-  * the sentinel ``UNREACHABLE`` on ANY non-2xx status, an error-shaped
-    response body, or a connection failure. A server failure (5xx), a bad
-    request (4xx), or an auth rejection is **not** an authoritative "no
-    results" — the caller must fall back to the CLI and warn the user rather
-    than report a false negative.
+  * the sentinel ``UNREACHABLE`` ONLY when the server cannot be reached
+    (connection refused, timeout, DNS). The caller may then fall back to the
+    local CLI as a degraded path.
+  * a JSON **error object** ``{"error", "status", "authoritative": false}`` on
+    any HTTP error (5xx, 4xx, and especially **401/403** auth rejections) or an
+    error-shaped 2xx body. The caller MUST NOT fall back to the local CLI here:
+    the server was reachable and rejected/failed the request, so falling back to
+    a (possibly different / local) backend would return wrong data or bypass the
+    server-side authorization boundary. It is reported as an error, never as
+    "no results".
 
-Diagnostics go to stderr so the caller can surface them.
+Diagnostics also go to stderr so the caller can surface them.
 """
 import json
 import sys
@@ -42,6 +47,14 @@ def coerce_scope(value, default="auto"):
         return default
 
 
+def _error(status, message):
+    """An error envelope — reachable server, but the request was rejected/failed.
+
+    Distinct from UNREACHABLE so the caller does NOT fall back to the local CLI.
+    """
+    return {"error": message, "status": status, "authoritative": False}
+
+
 def do_recall(
     service_url,
     api_key,
@@ -53,7 +66,7 @@ def do_recall(
     opener=urllib.request.urlopen,
     timeout=20.0,
 ):
-    """Query the server. Return a list of results (possibly empty) or ``UNREACHABLE``."""
+    """Query the server. Return results (list), an error envelope (dict), or ``UNREACHABLE``."""
     url = service_url.rstrip("/") + "/api/v1/recall"
     body = {
         "query": query,
@@ -74,14 +87,15 @@ def do_recall(
         with opener(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8") or "[]")
     except urllib.error.HTTPError as e:
-        # Non-2xx (5xx outage, 4xx bad request, 401/403 auth) is a failure, NOT
-        # an authoritative empty result. Surface it and signal fallback.
-        sys.stderr.write(
-            "[cognee-search] server HTTP %s for /api/v1/recall — not authoritative, falling back\n"
-            % e.code
-        )
-        return UNREACHABLE
-    except Exception as e:  # URLError, timeout, JSON decode, etc.
+        # Reachable but rejected/failed. NOT an authoritative empty, and NOT a
+        # reason to query a different backend via the CLI — report the error.
+        if e.code in (401, 403):
+            msg = "unauthorized (HTTP %s) — check COGNEE_API_KEY / credentials" % e.code
+        else:
+            msg = "server returned HTTP %s for /api/v1/recall" % e.code
+        sys.stderr.write("[cognee-search] %s — NOT falling back to local CLI\n" % msg)
+        return _error(e.code, msg)
+    except Exception as e:  # URLError, timeout, JSON decode, etc. → genuinely unreachable
         sys.stderr.write(
             "[cognee-search] server unreachable at %s: %s\n" % (service_url, str(e)[:160])
         )
@@ -89,10 +103,9 @@ def do_recall(
 
     # An error-shaped 2xx body is also not a real result set.
     if isinstance(data, dict) and data.get("error"):
-        sys.stderr.write(
-            "[cognee-search] server returned error: %s\n" % str(data.get("error"))[:160]
-        )
-        return UNREACHABLE
+        msg = str(data.get("error"))[:200]
+        sys.stderr.write("[cognee-search] server returned error: %s\n" % msg)
+        return _error(200, msg)
     if isinstance(data, list):
         return data
     return [data]
@@ -102,6 +115,8 @@ def main(argv):
     # argv: service_url, api_key, query, session_id, scope, top_k
     a = list(argv) + [""] * 6
     result = do_recall(a[0], a[1], a[2], a[3], a[4], a[5])
+    # UNREACHABLE → caller falls back to CLI; a list (results) or an error
+    # object → caller prints as-is and does NOT fall back.
     print(UNREACHABLE if result == UNREACHABLE else json.dumps(result))
 
 
