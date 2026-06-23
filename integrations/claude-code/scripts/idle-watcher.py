@@ -31,7 +31,7 @@ POLL_SECONDS = float(os.environ.get("COGNEE_IDLE_POLL", "10"))
 IDLE_SECONDS = float(os.environ.get("COGNEE_IDLE_THRESHOLD", "60"))
 IMPROVE_COOLDOWN = float(os.environ.get("COGNEE_IMPROVE_COOLDOWN", "120"))
 
-_PLUGIN_DIR = Path.home() / ".cognee-plugin"
+_PLUGIN_DIR = Path.home() / ".cognee-plugin" / "claude-code"
 _ACTIVITY = _PLUGIN_DIR / "activity.ts"
 _PIDFILE = _PLUGIN_DIR / "watcher.pid"
 _STOPFILE = _PLUGIN_DIR / "watcher.stop"

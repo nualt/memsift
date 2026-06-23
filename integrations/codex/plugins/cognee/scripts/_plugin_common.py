@@ -19,12 +19,13 @@ from pathlib import Path
 from typing import Optional
 
 _PLUGIN_DIR = Path.home() / ".cognee-plugin" / "codex"
+_SHARED_PLUGIN_ROOT = Path.home() / ".cognee-plugin"
 _HOOK_LOG = _PLUGIN_DIR / "hook.log"
 _COUNTER_FILE = _PLUGIN_DIR / "counter.json"
 _ACTIVITY_FILE = _PLUGIN_DIR / "activity.ts"
 _ACTIVITY_LOG = _PLUGIN_DIR / "activity.log"
 _SAVE_COUNTER = _PLUGIN_DIR / "save_counter.json"
-_SERVER_READY_MARKER = Path.home() / ".cognee-plugin" / "server-ready.json"
+_SERVER_READY_MARKER = _SHARED_PLUGIN_ROOT / "server-ready.json"
 _SERVER_READY_TTL_SECONDS = 30
 _SYNC_LOCK = _PLUGIN_DIR / "sync.lock"
 # Per-agent-session buffer dirs. Each agent session (one Claude/Codex terminal)
@@ -35,7 +36,7 @@ _PENDING_DIR = _PLUGIN_DIR / "pending"
 _SUBPROCESS_LOG = _PLUGIN_DIR / "subprocess.log"
 # Single-principal model: one API key (user-provided COGNEE_API_KEY or one minted
 # from the default user) is cached here. Replaces the old per-agent agent_keys.json.
-_API_KEY_CACHE = _PLUGIN_DIR / "api_key.json"
+_API_KEY_CACHE = _SHARED_PLUGIN_ROOT / "api_key.json"
 # Host-session-id -> generated Cognee session-id map. The host (Claude/Codex)
 # session id is used ONLY as a local correlation key so every hook process of a
 # single launch resolves the SAME Cognee session id; it is never sent to Cognee
@@ -59,7 +60,6 @@ _DEFAULT_LOCAL_SERVICE_URL = "http://localhost:8011"
 # cognee server, and the data store are shared with the Claude Code plugin so
 # cognee is installed once and a single server serves both. Only per-plugin
 # state (logs, buffers) stays under _PLUGIN_DIR; the runtime lives at the root.
-_SHARED_PLUGIN_ROOT = Path.home() / ".cognee-plugin"
 _VENV_DIR = _SHARED_PLUGIN_ROOT / "venv"
 _VENV_PYTHON = _VENV_DIR / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 _VENV_READY_MARKER = _SHARED_PLUGIN_ROOT / "venv-ready.json"

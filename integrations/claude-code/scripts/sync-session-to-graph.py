@@ -45,7 +45,7 @@ from config import (
     sync_graph_context_to_session,
 )
 
-_STATE_DIR = Path.home() / ".cognee-plugin"
+_STATE_DIR = Path.home() / ".cognee-plugin" / "claude-code"
 _WATCHER_PID = _STATE_DIR / "watcher.pid"
 _WATCHER_STOP = _STATE_DIR / "watcher.stop"
 _DETACHED_ARG = "--detached-final"

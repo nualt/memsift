@@ -14,7 +14,7 @@ import os
 import sys
 from pathlib import Path
 
-_CONFIG_PATH = Path.home() / ".cognee-plugin" / "config.json"
+_CONFIG_PATH = Path.home() / ".cognee-plugin" / "claude-code" / "config.json"
 _DEFAULT_DATASET = "cognee_sessions"
 
 
