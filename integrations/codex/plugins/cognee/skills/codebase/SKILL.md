@@ -89,3 +89,11 @@ uv run cognee-cli search "<specific symbol or behavior>" -d <dataset-name> -t CH
 
 Use results as supporting context. Verify important claims against the actual
 files before editing code.
+
+**The server is the source of truth.** `cognee-cli` can print empty stdout even when content exists, so never conclude "not found" from an empty CLI run — confirm against the server directly (authoritative), and omit `-d <dataset>` to search all datasets:
+
+```bash
+curl -s -X POST "${COGNEE_BASE_URL:-http://localhost:8011}/api/v1/recall" \
+  -H "Content-Type: application/json" ${COGNEE_API_KEY:+-H "X-Api-Key: $COGNEE_API_KEY"} \
+  -d '{"query": "<question>", "top_k": 10, "only_context": true, "scope": ["graph"]}'
+```

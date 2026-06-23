@@ -23,35 +23,45 @@ Knowledge is organized into three categories via `node_set`:
 
 ## Instructions
 
-### Search session memory (current session, more results)
+Search goes through the **running Cognee server** (`POST /api/v1/recall`) — the source of truth. Use the wrapper below: it queries the server first, searches **all your authorized datasets** (so a hit isn't missed because it lives in another dataset), and falls back to `cognee-cli` only if the server is unreachable.
+
+### Search (server-first)
 
 ```bash
-cognee-cli recall "$ARGUMENTS" -s "${COGNEE_SESSION_ID:-claude_code_session}" -k 10 -f json
-```
-
-### Search permanent graph (all categories)
-
-```bash
-cognee-cli recall "$ARGUMENTS" -d "${COGNEE_PLUGIN_DATASET:-claude_sessions}" -k 5 -f json
-```
-
-### Search permanent graph (specific category)
-
-```bash
-# User data only
-cognee-cli recall "$ARGUMENTS" -d "${COGNEE_PLUGIN_DATASET:-claude_sessions}" --node-set user_context -k 5 -f json
-
-# Project data only
-cognee-cli recall "$ARGUMENTS" -d "${COGNEE_PLUGIN_DATASET:-claude_sessions}" --node-set project_docs -k 5 -f json
-
-# Agent data only
-cognee-cli recall "$ARGUMENTS" -d "${COGNEE_PLUGIN_DATASET:-claude_sessions}" --node-set agent_actions -k 5 -f json
-```
-
-### Search both (session first, fallback to graph)
-
-```bash
+# session cache + permanent graph (default)
 ${CLAUDE_PLUGIN_ROOT}/scripts/cognee-search.sh "$ARGUMENTS"
+
+# permanent graph only
+${CLAUDE_PLUGIN_ROOT}/scripts/cognee-search.sh "$ARGUMENTS" 10 --graph
+
+# current session only
+${CLAUDE_PLUGIN_ROOT}/scripts/cognee-search.sh "$ARGUMENTS" 10 --session
+```
+
+### Filter by category (optional)
+
+Categories (`user_context` / `project_docs` / `agent_actions`) filter by `node_set`, currently exposed via the CLI (same server backend):
+
+```bash
+cognee-cli recall "$ARGUMENTS" --node-set project_docs -k 5 -f json
+```
+
+### Ground-truth a suspicious result (debugging)
+
+The server is authoritative. If a search returns empty but you expect content, confirm directly — **do not** conclude "not found" from empty CLI output:
+
+```bash
+curl -s -X POST "${COGNEE_BASE_URL:-http://localhost:8011}/api/v1/recall" \
+  -H "Content-Type: application/json" ${COGNEE_API_KEY:+-H "X-Api-Key: $COGNEE_API_KEY"} \
+  -d "{\"query\": \"$ARGUMENTS\", \"top_k\": 5, \"only_context\": true, \"scope\": [\"graph\"]}"
+```
+
+### Fallback only — server unreachable
+
+`cognee-cli` is a thin client over the same server and can print **empty stdout even when content exists**. Use it only when the server is down, and treat empty output as *inconclusive*, never as "no results":
+
+```bash
+cognee-cli recall "$ARGUMENTS" -k 5 -f json
 ```
 
 ## Understanding results
@@ -67,8 +77,8 @@ Session entries tagged with `[category:agent]` are automatic tool call logs.
 | Signal | Action |
 |--------|--------|
 | Need current session context | Already automatic, no action needed |
-| "what are my preferences" | Search graph with `--node-set user_context` |
-| "what does the codebase do" | Search graph with `--node-set project_docs` |
-| "what did we do last time" | Search graph (all categories) with `-d` |
-| User explicitly says "search cognee" | Search graph with `-d` |
-| Auto context insufficient | Search session with `-s -k 10` |
+| User explicitly says "search cognee" | `cognee-search.sh "<query>"` (server-first) |
+| "what does the codebase do" / "what did we do last time" | `cognee-search.sh "<query>" 10 --graph` |
+| Need a specific category | add `--node-set {user_context\|project_docs\|agent_actions}` via the CLI form |
+| Auto context insufficient | `cognee-search.sh "<query>" 10 --session` |
+| **Result empty but you expect content** | **Ground-truth via the `curl` above before concluding "not found"** |
