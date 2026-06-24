@@ -57,7 +57,7 @@ def _active_mode() -> str:
             pass
     if not url:
         return "local"
-    return "local" if urlparse(url).hostname in _LOOPBACK else "cloud"
+    return "local" if (urlparse(url).hostname or "") in _LOOPBACK else "cloud"
 
 
 def _health_prefix() -> str:

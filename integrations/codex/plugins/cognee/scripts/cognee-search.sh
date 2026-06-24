@@ -47,7 +47,7 @@ if service_url and api_key:
         query = ""
         session_key = (os.environ.get("COGNEE_SESSION_KEY") or "").strip()
         if session_key:
-            query = "?agent_sessions_name=" + urllib.parse.quote(session_key, safe="")
+            query = "?agent_session_name=" + urllib.parse.quote(session_key, safe="")
         req = urllib.request.Request(
             service_url.rstrip("/") + "/api/v1/agents/connections/me" + query,
             headers={"X-Api-Key": api_key},
