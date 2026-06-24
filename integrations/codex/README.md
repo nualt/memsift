@@ -50,11 +50,11 @@ You can also set config in `~/.cognee-plugin/config.json`:
 ```json
 {
   "base_url": "https://your-instance.cognee.ai",
-  "dataset": "cognee_sessions"
+  "dataset": "agent_sessions"
 }
 ```
 
-On startup the statusline shows `cognee: <dataset>` to confirm the plugin is active.
+On startup the statusline shows `cognee: <dataset> · local` (or `· cloud`) to confirm the plugin is active.
 
 ## Auth
 
@@ -100,7 +100,7 @@ Two terminals can deliberately share a session by setting the same `COGNEE_SESSI
 
 ## Dataset
 
-All writes and recall are scoped to a single dataset. By default both the Claude Code and Codex plugins use `cognee_sessions`, so memory is shared across both integrations automatically.
+All writes and recall are scoped to a single dataset. By default both the Claude Code and Codex plugins use `agent_sessions`, so memory is shared across both integrations automatically.
 
 Set a custom dataset at launch:
 
@@ -144,14 +144,19 @@ Final sync on session end is triggered by the `SessionEnd` detached worker, with
 
 ## Status visibility
 
-Cognee dataset status is shown as:
+Cognee status is shown as `cognee: <dataset> · <mode>`, for example:
 
-`cognee: <dataset-name>`
+```
+cognee: agent_sessions · local
+cognee: my-project · cloud
+```
 
-It is rendered by the Cognee statusline renderer using the same resolution order as the hooks:
-1. `COGNEE_PLUGIN_DATASET` env var
-2. `~/.cognee-plugin/config.json` → `dataset` key
-3. Default: `cognee_sessions`
+`<dataset>` is the active Cognee dataset. `<mode>` is `local` when no `COGNEE_BASE_URL` is set or when it points to localhost, and `cloud` when it points to a remote host.
+
+The renderer reads only local state — no network calls on every refresh:
+1. `COGNEE_PLUGIN_DATASET` / `COGNEE_BASE_URL` env vars
+2. `~/.cognee-plugin/config.json` → `dataset` and `base_url` keys
+3. Default: `cognee: agent_sessions · local`
 
 ## Logs and state
 
@@ -196,7 +201,7 @@ Config precedence:
 
 | Key | Env var(s) | Default | Notes |
 |---|---|---|---|
-| `dataset` | `COGNEE_PLUGIN_DATASET` | `cognee_sessions` | Dataset for writes and recall |
+| `dataset` | `COGNEE_PLUGIN_DATASET` | `agent_sessions` | Dataset for writes and recall |
 | `session_id` | `COGNEE_SESSION_ID` | auto-generated per launch | Override to resume a named session |
 | `session_strategy` | `COGNEE_SESSION_STRATEGY` | `per-directory` | `per-directory`, `git-branch`, `static` |
 | `session_prefix` | `COGNEE_SESSION_PREFIX` | `codex` | Prefix for auto-generated session IDs |
@@ -211,7 +216,7 @@ Config precedence:
 ## Troubleshooting
 
 **Recall returns empty but data was ingested**
-- Recall is scoped to the active dataset (`COGNEE_PLUGIN_DATASET` / `config.json` / `cognee_sessions`).
+- Recall is scoped to the active dataset (`COGNEE_PLUGIN_DATASET` / `config.json` / `agent_sessions`).
 - Data written via the Python SDK or `client.py` goes to `default_dataset` by default, if dataset not otherwise specified.
 - To verify, call the recall API directly without a dataset filter: `curl -X POST "$COGNEE_BASE_URL/api/v1/recall" -d '{"query":"..."}'`
 

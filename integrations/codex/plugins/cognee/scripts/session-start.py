@@ -563,7 +563,7 @@ async def _resolve_single_principal_key(service_url: str, config: dict) -> str:
 
 
 async def _ensure_agent_credentials_and_register(
-    config: dict, cwd: str, session_id: str, agent_session_name: str, session_key: str
+    config: dict, cwd: str, session_id: str, agent_sessions_name: str, session_key: str
 ) -> tuple[str, str, str, bool]:
     service_url = _normalize_service_url(str(config.get("base_url", "") or ""))
     if not service_url:
@@ -584,7 +584,7 @@ async def _ensure_agent_credentials_and_register(
     # Registration is now purely a lifecycle counter + connection registry under
     # the single principal. The connection handle IS the Cognee session id.
     registered, registration = register_agent_via_http(
-        agent_session_name=agent_session_name,
+        agent_sessions_name=agent_sessions_name,
         session_id=session_id,
         dataset_names=[str(config.get("dataset", "") or "").strip()],
     )
@@ -594,7 +594,7 @@ async def _ensure_agent_credentials_and_register(
     hook_log(
         "agent_register_result",
         {
-            "agent_session_name": agent_session_name,
+            "agent_sessions_name": agent_sessions_name,
             "registered": registered,
             "connection_id": str(registration.get("id", "")),
             "session_id": session_id,
@@ -602,7 +602,7 @@ async def _ensure_agent_credentials_and_register(
         },
     )
 
-    return user_id, api_key, agent_session_name, registered
+    return user_id, api_key, agent_sessions_name, registered
 
 
 def _watcher_alive() -> bool:
@@ -727,7 +727,7 @@ def _spawn_exit_watcher(
     dataset: str,
     *,
     session_key: str = "",
-    agent_session_name: str = "",
+    agent_sessions_name: str = "",
     api_key: str = "",
     service_url: str = "",
 ) -> None:
@@ -778,7 +778,7 @@ def _spawn_exit_watcher(
         "session_id": session_id,
         "dataset": dataset,
         "session_key": session_key,
-        "agent_session_name": agent_session_name,
+        "agent_sessions_name": agent_sessions_name,
         "api_key": api_key,
         "base_url": service_url,
         "pidfile": str(watcher_pidfile),
@@ -878,7 +878,7 @@ def _spawn_bootstrap(
     config: dict,
     cwd: str,
     session_id: str,
-    agent_session_name: str,
+    agent_sessions_name: str,
     session_key: str,
     dataset: str,
 ) -> None:
@@ -888,7 +888,7 @@ def _spawn_bootstrap(
         "session_id": session_id,
         "session_key": session_key,
         "dataset": dataset,
-        "agent_session_name": agent_session_name,
+        "agent_sessions_name": agent_sessions_name,
         "base_url": str(config.get("base_url", "") or _LOCAL_SERVICE_URL),
     }
     log_path = _STATE_DIR / "bootstrap.log"
@@ -920,7 +920,7 @@ async def _run_heavy(
     config: dict,
     cwd: str,
     session_id: str,
-    agent_session_name: str,
+    agent_sessions_name: str,
     session_key: str,
     dataset: str,
     *,
@@ -970,7 +970,7 @@ async def _run_heavy(
                 agent_name,
                 _registered,
             ) = await _ensure_agent_credentials_and_register(
-                config, cwd, session_id, agent_session_name, session_key
+                config, cwd, session_id, agent_sessions_name, session_key
             )
             if agent_id:
                 user_id = agent_id
@@ -1035,7 +1035,7 @@ async def _run_bootstrap(bootstrap: dict) -> None:
     session_id = str(bootstrap.get("session_id", "") or "")
     session_key = str(bootstrap.get("session_key", "") or "")
     dataset = str(bootstrap.get("dataset", "") or get_dataset(config))
-    agent_session_name = str(bootstrap.get("agent_session_name", "") or session_id)
+    agent_sessions_name = str(bootstrap.get("agent_sessions_name", "") or session_id)
     if session_key:
         os.environ["COGNEE_SESSION_KEY"] = session_key
     if session_id:
@@ -1070,7 +1070,7 @@ async def _run_bootstrap(bootstrap: dict) -> None:
             config,
             cwd,
             session_id,
-            agent_session_name,
+            agent_sessions_name,
             session_key,
             dataset,
             managed_endpoint=False,
@@ -1119,7 +1119,7 @@ async def _start(payload: dict | None = None) -> dict:
     # synchronously here so prompt hooks read back the identical ids before any run.
     session_id, conn_uuid = ensure_launch_record(session_key, cwd)
     os.environ["COGNEE_SESSION_ID"] = session_id
-    agent_session_name = conn_uuid
+    agent_sessions_name = conn_uuid
     hook_log(
         "session_resolved",
         {
@@ -1145,14 +1145,14 @@ async def _start(payload: dict | None = None) -> dict:
         {"base_url": target_url, "server_live": server_live, "will_boot": will_boot},
     )
     if will_boot and _LAZY_BOOTSTRAP:
-        _spawn_bootstrap(config, cwd, session_id, agent_session_name, session_key, dataset)
+        _spawn_bootstrap(config, cwd, session_id, agent_sessions_name, session_key, dataset)
         user_id = os.environ.get("COGNEE_USER_ID", "")
     else:
         user_id, agent_api_key, ok = await _run_heavy(
             config,
             cwd,
             session_id,
-            agent_session_name,
+            agent_sessions_name,
             session_key,
             dataset,
             managed_endpoint=not will_boot,
@@ -1161,7 +1161,7 @@ async def _start(payload: dict | None = None) -> dict:
         if not ok:
             if _LAZY_BOOTSTRAP and _is_local_url(target_url):
                 # Inline attempt failed; retry the heavy path out of band.
-                _spawn_bootstrap(config, cwd, session_id, agent_session_name, session_key, dataset)
+                _spawn_bootstrap(config, cwd, session_id, agent_sessions_name, session_key, dataset)
             else:
                 return {}
 
@@ -1192,7 +1192,7 @@ async def _start(payload: dict | None = None) -> dict:
         session_id,
         dataset,
         session_key=session_key,
-        agent_session_name=agent_session_name,
+        agent_sessions_name=agent_sessions_name,
         api_key=agent_api_key,
         service_url=str(config.get("base_url", "") or ""),
     )

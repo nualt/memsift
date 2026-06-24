@@ -198,7 +198,7 @@ def _load_resolved() -> tuple:
     session_key = set_session_key(get_session_key())
     env_session_id = str(os.environ.get("COGNEE_SYNC_SESSION_ID", "") or "").strip()
     env_dataset = str(os.environ.get("COGNEE_SYNC_DATASET", "") or "").strip()
-    env_agent_session_name = str(os.environ.get("COGNEE_AGENT_SESSION_NAME", "") or "").strip()
+    env_agent_sessions_name = str(os.environ.get("COGNEE_AGENT_SESSION_NAME", "") or "").strip()
     env_api_key = str(os.environ.get("COGNEE_API_KEY", "") or "").strip()
     env_service_url = str(os.environ.get("COGNEE_BASE_URL", "") or "").strip()
     resolved_service_url, resolved_api_key = resolved_http_endpoint_auth()
@@ -218,7 +218,7 @@ def _load_resolved() -> tuple:
             env_session_id or data.get("session_id", ""),
             env_dataset or data.get("dataset", ""),
             data.get("user_id", ""),
-            env_agent_session_name or data.get("agent_session_name", ""),
+            env_agent_sessions_name or data.get("agent_sessions_name", ""),
             bool(data.get("registered", False)),
             bool(env_api_key or data.get("api_key", "")),
             session_key,
@@ -226,14 +226,14 @@ def _load_resolved() -> tuple:
 
     config = load_config()
     fallback_session_id = get_session_id(config)
-    fallback_agent_session_name = session_key or ""
+    fallback_agent_sessions_name = session_key or ""
     if env_service_url:
         os.environ["COGNEE_BASE_URL"] = env_service_url
     return (
         env_session_id or fallback_session_id,
         env_dataset or get_dataset(config),
         "",
-        env_agent_session_name or fallback_agent_session_name,
+        env_agent_sessions_name or fallback_agent_sessions_name,
         False,
         bool(env_api_key),
         session_key,
@@ -241,7 +241,7 @@ def _load_resolved() -> tuple:
 
 
 async def _sync(stop_watcher: bool, unregister_on_finish: bool = False):
-    session_id, dataset, user_id, agent_session_name, was_registered, has_api_key, session_key = (
+    session_id, dataset, user_id, agent_sessions_name, was_registered, has_api_key, session_key = (
         _load_resolved()
     )
     target_sessions = [session_id] if session_id else []
@@ -322,20 +322,20 @@ async def _sync(stop_watcher: bool, unregister_on_finish: bool = False):
                     {"session": session_id, "dataset": dataset},
                 )
             else:
-                unregister_name = str(agent_session_name or session_key or "").strip()
+                unregister_name = str(agent_sessions_name or session_key or "").strip()
                 if not unregister_name:
                     hook_log(
                         "agent_unregister_skipped_no_session_name",
                         {"session": session_id, "dataset": dataset},
                     )
                     return
-                ok, active = unregister_agent_via_http(agent_session_name=unregister_name)
+                ok, active = unregister_agent_via_http(agent_sessions_name=unregister_name)
                 hook_log(
                     "agent_unregister_result",
                     {
                         "session": session_id,
                         "dataset": dataset,
-                        "agent_session_name": unregister_name,
+                        "agent_sessions_name": unregister_name,
                         "ok": ok,
                         "active_agents": active,
                         "cached_registered": was_registered,

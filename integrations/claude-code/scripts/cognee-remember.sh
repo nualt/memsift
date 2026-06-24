@@ -47,7 +47,7 @@ if service_url and api_key:
         session_key = (os.environ.get("COGNEE_SESSION_KEY") or "").strip()
         query = ""
         if session_key:
-            query = "?agent_session_name=" + urllib.parse.quote(session_key, safe="")
+            query = "?agent_sessions_name=" + urllib.parse.quote(session_key, safe="")
         req = urllib.request.Request(
             service_url.rstrip("/") + "/api/v1/agents/connections/me" + query,
             headers={"X-Api-Key": api_key},
@@ -98,7 +98,7 @@ PY
 
 [ -z "$SERVICE_URL" ] && SERVICE_URL="${COGNEE_BASE_URL:-${COGNEE_LOCAL_API_URL:-http://localhost:8011}}"
 [ -z "$API_KEY" ] && API_KEY="${COGNEE_API_KEY:-}"
-[ -z "$DATASET" ] && DATASET="${COGNEE_PLUGIN_DATASET:-cognee_sessions}"
+[ -z "$DATASET" ] && DATASET="${COGNEE_PLUGIN_DATASET:-agent_sessions}"
 
 # Parse arguments: content is first positional; flags follow
 CONTENT="${1:-}"

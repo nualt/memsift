@@ -359,7 +359,7 @@ def load_resolved(session_key: str = "") -> dict:
         resolved["session_id"] = cognee_session_id
     conn_uuid = resolve_conn_uuid(active_session_key)
     if conn_uuid:
-        resolved["agent_session_name"] = conn_uuid
+        resolved["agent_sessions_name"] = conn_uuid
 
     service_url = _local_api_url().strip()
     if service_url:
@@ -385,7 +385,7 @@ def load_resolved(session_key: str = "") -> dict:
     try:
         query = ""
         if conn_uuid:
-            query = f"?agent_session_name={urllib.parse.quote(conn_uuid, safe='')}"
+            query = f"?agent_sessions_name={urllib.parse.quote(conn_uuid, safe='')}"
         conn = _json_http_request(
             f"/api/v1/agents/connections/me{query}",
             method="GET",
@@ -396,9 +396,9 @@ def load_resolved(session_key: str = "") -> dict:
             if isinstance(agent, dict):
                 # Do not overwrite resolved["session_id"] from the connection: the
                 # local map is authoritative for the *current* session (post-switch).
-                agent_session_name = str(agent.get("agent_session_name") or "").strip()
-                if agent_session_name:
-                    resolved["agent_session_name"] = agent_session_name
+                agent_sessions_name = str(agent.get("agent_sessions_name") or "").strip()
+                if agent_sessions_name:
+                    resolved["agent_sessions_name"] = agent_sessions_name
                 agent_user_id = str(agent.get("user_id") or "").strip()
                 if agent_user_id and not resolved.get("user_id"):
                     resolved["user_id"] = agent_user_id
@@ -447,7 +447,7 @@ def _bridge_cache_key(dataset: str, session_id: str) -> str:
     return f"{dataset}:{session_id}"
 
 
-def _agent_session_scope(fallback: str = "") -> str:
+def _agent_sessions_scope(fallback: str = "") -> str:
     """Filesystem-safe identity of the current agent session.
 
     Each agent session (one Claude/Codex terminal) owns its own pending and
@@ -460,11 +460,11 @@ def _agent_session_scope(fallback: str = "") -> str:
 
 
 def _pending_file(session_id: str = "") -> Path:
-    return _PENDING_DIR / f"{_agent_session_scope(session_id)}.json"
+    return _PENDING_DIR / f"{_agent_sessions_scope(session_id)}.json"
 
 
 def _bridge_file(session_id: str = "") -> Path:
-    return _BRIDGE_DIR / f"{_agent_session_scope(session_id)}.json"
+    return _BRIDGE_DIR / f"{_agent_sessions_scope(session_id)}.json"
 
 
 def append_http_bridge_entry(
@@ -1073,13 +1073,13 @@ def remember_entry_via_http(
 
 def register_agent_via_http(
     *,
-    agent_session_name: str,
+    agent_sessions_name: str,
     session_id: str = "",
     dataset_names: list[str] | None = None,
     timeout: float = 15.0,
 ) -> tuple[bool, dict]:
     payload = {
-        "agent_session_name": agent_session_name,
+        "agent_sessions_name": agent_sessions_name,
         "type": "api",
         "memory_mode": "hybrid",
         "source": "api",
@@ -1102,12 +1102,12 @@ def register_agent_via_http(
 
 
 def unregister_agent_via_http(
-    *, agent_session_name: str, timeout: float = 15.0
+    *, agent_sessions_name: str, timeout: float = 15.0
 ) -> tuple[bool, int]:
     try:
         result = _json_http_request(
             "/api/v1/agents/unregister",
-            {"agent_session_name": agent_session_name},
+            {"agent_sessions_name": agent_sessions_name},
             method="POST",
             timeout=timeout,
         )

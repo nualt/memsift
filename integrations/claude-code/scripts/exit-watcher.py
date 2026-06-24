@@ -64,7 +64,7 @@ def _spawn_sync(
     dataset: str,
     *,
     session_key: str = "",
-    agent_session_name: str = "",
+    agent_sessions_name: str = "",
     api_key: str = "",
     service_url: str = "",
 ) -> None:
@@ -78,8 +78,8 @@ def _spawn_sync(
             env["COGNEE_SYNC_DATASET"] = dataset
         if session_key:
             env["COGNEE_SESSION_KEY"] = session_key
-        if agent_session_name:
-            env["COGNEE_AGENT_SESSION_NAME"] = agent_session_name
+        if agent_sessions_name:
+            env["COGNEE_AGENT_SESSION_NAME"] = agent_sessions_name
         if api_key:
             env["COGNEE_API_KEY"] = api_key
         if service_url:
@@ -110,9 +110,9 @@ def main() -> None:
 
     parent_pid = int(bootstrap.get("parent_pid") or 0)
     session_id = str(bootstrap.get("session_id") or "")
-    dataset = str(bootstrap.get("dataset") or "cognee_sessions")
+    dataset = str(bootstrap.get("dataset") or "agent_sessions")
     session_key = str(bootstrap.get("session_key") or "")
-    agent_session_name = str(bootstrap.get("agent_session_name") or "")
+    agent_sessions_name = str(bootstrap.get("agent_sessions_name") or "")
     api_key = str(bootstrap.get("api_key") or "")
     service_url = str(bootstrap.get("base_url") or "")
     pidfile_raw = str(bootstrap.get("pidfile") or "").strip()
@@ -165,7 +165,7 @@ def main() -> None:
         session_id,
         dataset,
         session_key=session_key,
-        agent_session_name=agent_session_name,
+        agent_sessions_name=agent_sessions_name,
         api_key=api_key,
         service_url=service_url,
     )
