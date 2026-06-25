@@ -22,12 +22,44 @@ Diagnostics also go to stderr so the caller can surface them.
 """
 
 import json
+import os
+import ssl
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
 UNREACHABLE = "UNREACHABLE"
+
+
+# macOS Python installations often lack root CA certs in the default bundle.
+# Build one opener for all HTTPS calls: try certifi opportunistically (if
+# importable), then walk system cert file locations until one loads cleanly.
+def _build_https_opener():
+    try:
+        import certifi
+
+        ctx = ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        ctx = ssl.create_default_context()
+        for path in filter(
+            None,
+            [
+                os.environ.get("SSL_CERT_FILE"),
+                "/etc/ssl/cert.pem",
+                "/etc/ssl/certs/ca-certificates.crt",
+            ],
+        ):
+            if os.path.exists(path):
+                try:
+                    ctx.load_verify_locations(path)
+                    break  # only stop once a path loaded successfully
+                except Exception:
+                    pass
+    return urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+
+
+_HTTPS_OPENER = _build_https_opener()
 
 
 def _is_local(url):
@@ -73,7 +105,7 @@ def do_recall(
     dataset="",
     context_profile="",
     *,
-    opener=urllib.request.urlopen,
+    opener=None,
     timeout=20.0,
 ):
     """Query the server. Return results (list), an error envelope (dict), or ``UNREACHABLE``."""
@@ -108,8 +140,9 @@ def do_recall(
     req = urllib.request.Request(
         url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST"
     )
+    _open = opener if opener is not None else _HTTPS_OPENER.open
     try:
-        with opener(req, timeout=timeout) as resp:
+        with _open(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         # Reachable but rejected/failed. NOT an authoritative empty, and NOT a
