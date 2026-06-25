@@ -118,6 +118,26 @@ Claude-specific contracts are preserved:
 - `hookSpecificOutput` payload format
 - async hook behavior for write hooks
 
+## Memory preference
+
+With the plugin active, Cognee is the **preferred** memory system: relevant memory is
+auto-recalled into context on every `UserPromptSubmit` and writes are captured
+automatically, so Claude consults Cognee first when answering. To reinforce this, the
+`SessionStart` hook injects an `additionalContext` instruction telling Claude to treat
+Cognee as authoritative and prefer the Cognee tools/skills over Claude Code's built-in
+file memory (`MEMORY.md`).
+
+Note: a plugin **cannot reliably disable** Claude Code's native auto memory
+(`MEMORY.md` is injected as context, not a tool call that hooks can intercept). This
+feature steers the model toward Cognee rather than hard-disabling native memory. To
+turn the steer off, set `COGNEE_PREFER_MEMORY=false`. To additionally suppress native
+auto memory yourself, disable it in Claude Code (e.g. `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`
+in the launching shell, if your Claude Code version supports it).
+
+| Env var | Default | Effect |
+|---|---|---|
+| `COGNEE_PREFER_MEMORY` | `true` | Inject SessionStart steer asserting Cognee as the preferred memory |
+
 ## Session sync and watchers
 
 An idle watcher runs in the background for the lifetime of each launch. It polls activity every `COGNEE_IDLE_POLL` seconds and persists the session cache when the session has been quiet for `COGNEE_IDLE_THRESHOLD` seconds, then waits at least `COGNEE_IMPROVE_COOLDOWN` seconds before the next run.
