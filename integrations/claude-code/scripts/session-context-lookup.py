@@ -76,7 +76,7 @@ def _format_entry(entry: dict) -> str:
         return f"[graph-snapshot]\n{content}"
 
     if source == "session_context":
-        content = str(entry.get("content", "") or "")[:TRUNCATE_GRAPH_CTX]
+        content = str(entry.get("content", "") or entry.get("text", ""))[:TRUNCATE_GRAPH_CTX]
         return f"[agent-guidance]\n{content}"
 
     if source == "trace":
@@ -113,7 +113,7 @@ def _has_entry_content(entry: dict) -> bool:
     if source == "graph_context":
         return bool(str(entry.get("content", "") or entry.get("text", "")).strip())
     if source == "session_context":
-        return bool(str(entry.get("content", "") or "").strip())
+        return bool(str(entry.get("content", "") or entry.get("text", "")).strip())
     if source == "trace":
         fields = ("origin_function", "status", "session_feedback", "method_return_value")
     else:
