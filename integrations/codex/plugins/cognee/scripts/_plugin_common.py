@@ -1114,6 +1114,7 @@ def recall_via_http(
     scope: list[str],
     only_context: bool = True,
     search_type: str | None = None,
+    context_profile: str | None = None,
     timeout: float = 10.0,
 ) -> list:
     payload = {
@@ -1125,6 +1126,8 @@ def recall_via_http(
     }
     if search_type:
         payload["search_type"] = search_type
+    if context_profile:
+        payload["context_profile"] = context_profile
     result = _json_http_request("/api/v1/recall", payload, timeout=timeout)
     return result if isinstance(result, list) else []
 
