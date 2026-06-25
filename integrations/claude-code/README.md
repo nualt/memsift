@@ -136,6 +136,24 @@ Final sync on session end is triggered by the `SessionEnd` detached worker, with
 - `/cognee-memory:cognee-search`
 - `/cognee-memory:cognee-sync`
 
+## Remember (write) behavior
+
+`cognee-remember` and the auto-capture hooks POST to the server's `/api/v1/remember`
+and ask it to build the graph **in the background** (`run_in_background=true`), so the
+write returns as soon as it's enqueued instead of blocking the turn on a synchronous
+cognify. A synchronous build can take tens of seconds, exceed the client timeout, and be
+misread as "server unreachable" — which then triggers a `cognee-cli` fallback that can
+double-write. The graph populates shortly after the call, so a recall in the same breath
+may not see the new entry yet.
+
+| Env var | Default | Effect |
+|---|---|---|
+| `COGNEE_REMEMBER_BACKGROUND` | `true` | Build the graph in the background; set `false` for a synchronous, immediately-queryable write |
+
+A write that *times out* is reported as "submitted; timed out waiting for confirmation"
+and does **not** fall back to `cognee-cli` (the write likely landed — a fallback would
+risk a duplicate). Only a genuine connection failure falls back.
+
 ## Status line
 
 The status line displays `cognee: <dataset> · <mode>`, for example:
