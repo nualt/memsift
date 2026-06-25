@@ -33,8 +33,8 @@ UNREACHABLE = "UNREACHABLE"
 
 
 # macOS Python installations often lack root CA certs in the default bundle.
-# Build one opener for all HTTPS calls: try certifi (installed in the plugin
-# venv), then common system cert file locations, then Python's default.
+# Build one opener for all HTTPS calls: try certifi opportunistically (if
+# importable), then walk system cert file locations until one loads cleanly.
 def _build_https_opener():
     try:
         import certifi
@@ -53,9 +53,9 @@ def _build_https_opener():
             if os.path.exists(path):
                 try:
                     ctx.load_verify_locations(path)
+                    break  # only stop once a path loaded successfully
                 except Exception:
                     pass
-                break
     return urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
 
 
