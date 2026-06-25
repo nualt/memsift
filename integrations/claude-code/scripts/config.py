@@ -42,6 +42,9 @@ _DEFAULTS = {
     # Local mode
     "llm_api_key": "",
     "llm_model": "",
+    # Memory steering: assert Cognee as the preferred memory over Claude Code's
+    # built-in auto memory (MEMORY.md). Opt out with COGNEE_PREFER_MEMORY=false.
+    "prefer_cognee_memory": True,
 }
 
 
@@ -77,6 +80,7 @@ _ENV_MAP = {
     "COGNEE_USER_PASSWORD": "user_password",
     "LLM_API_KEY": "llm_api_key",
     "LLM_MODEL": "llm_model",
+    "COGNEE_PREFER_MEMORY": "prefer_cognee_memory",
     # Legacy compat
     "COGNEE_SESSION_ID": "_static_session_id",
 }

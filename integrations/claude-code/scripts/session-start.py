@@ -1160,6 +1160,44 @@ def _ensure_statusline_configured() -> None:
         hook_log("statusline_setup_failed", {"error": str(exc)[:200]})
 
 
+_MEMORY_PREFERENCE_STEER = (
+    "Memory policy for this session: Cognee is the preferred, authoritative long-term "
+    "memory. On every user request, Cognee memory relevant to the prompt is "
+    "automatically recalled and injected into your context before you answer — consult "
+    "that recalled Cognee context FIRST. When you need to look up or store durable "
+    "information, use the Cognee tools/skills (cognee-search, cognee-remember) in "
+    "preference to Claude Code's built-in file memory (MEMORY.md), and do not duplicate "
+    "durable knowledge into MEMORY.md. Cognee is the source of truth for memory."
+)
+
+
+def _apply_memory_preference(output: dict) -> dict:
+    """Steer Claude to treat Cognee as the preferred memory over native auto-memory.
+
+    Claude Code's built-in auto memory (MEMORY.md) can't be reliably disabled by a
+    plugin, so instead we assert Cognee as the authoritative memory via a SessionStart
+    ``additionalContext`` instruction (injected into the model's context, not shown to
+    the user). Applied across all SessionStart branches. Opt out with
+    ``COGNEE_PREFER_MEMORY=false``.
+    """
+    try:
+        val = load_config().get("prefer_cognee_memory", True)
+    except Exception:
+        val = True
+    if str(val).strip().lower() in {"0", "false", "no", "off"}:
+        return output
+
+    result = dict(output or {})
+    hso = dict(result.get("hookSpecificOutput") or {})
+    hso.setdefault("hookEventName", "SessionStart")
+    existing = str(hso.get("additionalContext") or "").strip()
+    hso["additionalContext"] = (
+        f"{existing}\n\n{_MEMORY_PREFERENCE_STEER}" if existing else _MEMORY_PREFERENCE_STEER
+    )
+    result["hookSpecificOutput"] = hso
+    return result
+
+
 async def _start(payload: dict | None = None) -> dict:
     _ensure_statusline_configured()
     config = load_config()
@@ -1319,6 +1357,7 @@ def main():
             output = asyncio.run(_start(payload))
     except Exception as exc:
         hook_log("session_start_exception", {"error": str(exc)[:200]})
+    output = _apply_memory_preference(output)
     print(json.dumps(output or {}))
 
 

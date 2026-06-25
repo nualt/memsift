@@ -19,6 +19,8 @@ Diagnostics also go to stderr so the caller can surface them.
 """
 
 import json
+import os
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -64,6 +66,32 @@ def _error(status, message):
     return {"error": message, "status": status, "authoritative": False}
 
 
+def _background_flag():
+    """Whether the server should cognify in the background (default: yes).
+
+    A synchronous cognify (run_in_background=false) can take tens of seconds: it
+    blocks the agent's turn and risks the client read-timeout that gets misread as
+    "server unreachable" (then a CLI fallback that can double-write). Background lets
+    the POST return as soon as the work is enqueued. Set COGNEE_REMEMBER_BACKGROUND=false
+    for a synchronous, immediately-queryable write.
+    """
+    val = os.environ.get("COGNEE_REMEMBER_BACKGROUND", "").strip().lower()
+    return "false" if val in {"0", "false", "no", "off"} else "true"
+
+
+def _timeout_result(timeout):
+    """A write timeout is NOT 'unreachable': the request likely reached the server and
+    the write may have landed. Returning UNREACHABLE would make the caller re-write via
+    the CLI and risk a duplicate, so surface a non-fatal note instead — the caller
+    prints it and does NOT fall back. Background writes make this path rare.
+    """
+    sys.stderr.write(
+        "[cognee-remember] timed out after %ss waiting for confirmation; the write may "
+        "have succeeded — NOT falling back to local CLI\n" % timeout
+    )
+    return _error(0, "remember submitted; timed out after %ss waiting for confirmation" % timeout)
+
+
 def do_remember(
     service_url,
     api_key,
@@ -81,7 +109,7 @@ def do_remember(
         {
             "datasetName": dataset,
             "node_set": node_set,
-            "run_in_background": "false",
+            "run_in_background": _background_flag(),
         },
         [("data", filename, content.encode("utf-8") if isinstance(content, str) else content)],
     )
@@ -102,6 +130,17 @@ def do_remember(
             msg = "server returned HTTP %s for /api/v1/remember" % e.code
         sys.stderr.write("[cognee-remember] %s — NOT falling back to local CLI\n" % msg)
         return _error(e.code, msg)
+    except (TimeoutError, socket.timeout):
+        return _timeout_result(timeout)
+    except urllib.error.URLError as e:
+        # A read timeout arrives wrapped in URLError on some platforms — treat it as
+        # a timeout, not "unreachable" (the request likely reached the server).
+        if isinstance(getattr(e, "reason", None), (TimeoutError, socket.timeout)):
+            return _timeout_result(timeout)
+        sys.stderr.write(
+            "[cognee-remember] server unreachable at %s: %s\n" % (service_url, str(e)[:160])
+        )
+        return UNREACHABLE
     except Exception as e:
         sys.stderr.write(
             "[cognee-remember] server unreachable at %s: %s\n" % (service_url, str(e)[:160])
