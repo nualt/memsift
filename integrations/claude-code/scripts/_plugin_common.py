@@ -1325,6 +1325,7 @@ def _post_remember_document(
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status_code = resp.status
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         # urlopen raises on non-2xx. Surface it as a graceful failure (not an
@@ -1352,11 +1353,14 @@ def _post_remember_document(
     result = {"ok": True, "dataset_id": "", "pipeline_run_id": ""}
     try:
         parsed = json.loads(raw) if raw else {}
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as exc:
         # A 2xx with an unparseable body (e.g. a proxy/nginx error page) is NOT a
-        # trustworthy success — flag it so the caller retries instead of marking done.
+        # trustworthy success — flag it (with the uniform status/error shape) so the
+        # caller retries instead of marking done.
         parsed = {}
         result["parse_error"] = True
+        result["status"] = status_code
+        result["error"] = f"unparseable 2xx body: {str(exc)[:80]}"
     if isinstance(parsed, dict):
         result["dataset_id"] = str(parsed.get("dataset_id") or "")
         result["pipeline_run_id"] = str(parsed.get("pipeline_run_id") or "")
@@ -1443,9 +1447,13 @@ def persist_session_cache_to_graph_via_http(
                 hook_log("http_bridge_no_dataset_id", {"dataset": dataset, "kind": kind})
                 continue
             remaining = poll_deadline - (time.monotonic() - overall_start)
+            if remaining <= 0:
+                # The POST consumed the remaining budget — don't start a poll.
+                hook_log("http_bridge_deadline_exceeded", {"dataset": dataset, "kind": kind})
+                break
             outcome = wait_for_cognify(
                 dataset_id,
-                deadline_seconds=max(1.0, remaining),
+                deadline_seconds=remaining,
                 interval_seconds=poll_interval,
                 request_timeout=status_timeout,
             )

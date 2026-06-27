@@ -194,6 +194,8 @@ def test_post_remember_document_parse_error_flag():
     assert res["ok"] is True
     assert res.get("parse_error") is True
     assert res["dataset_id"] == ""
+    assert res["status"] == 200  # uniform shape: parse_error carries status + error
+    assert "error" in res
 
 
 def test_post_remember_document_network_error_returns_not_ok():
