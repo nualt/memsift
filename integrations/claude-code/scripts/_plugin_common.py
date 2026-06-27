@@ -1125,7 +1125,7 @@ def wait_for_cognify(
 
         if time.monotonic() >= deadline:
             return "timeout"
-        time.sleep(max(0.0, interval_seconds))
+        time.sleep(max(0.1, interval_seconds))  # floor avoids a tight spin if misconfigured to 0
 
 
 def remember_entry_via_http(
@@ -1322,10 +1322,14 @@ def _post_remember_document(
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        if not (200 <= resp.status < 300):
-            return {"ok": False, "dataset_id": "", "pipeline_run_id": ""}
-        raw = resp.read().decode("utf-8")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        # urlopen raises on non-2xx. Surface it as a graceful failure (not an
+        # exception) so the caller skips this one document and keeps syncing the
+        # others; the unmarked digest lets a later detached attempt retry.
+        return {"ok": False, "dataset_id": "", "pipeline_run_id": "", "status": exc.code}
     result = {"ok": True, "dataset_id": "", "pipeline_run_id": ""}
     try:
         parsed = json.loads(raw) if raw else {}
@@ -1390,6 +1394,12 @@ def persist_session_cache_to_graph_via_http(
                 base_url, api_key, dataset, document, node_set, submit_timeout
             )
             if not submitted.get("ok"):
+                # Skip this document (digest stays unmarked → retried later) but keep
+                # syncing the others; one bad/transient document must not abort the sync.
+                hook_log(
+                    "http_bridge_post_failed",
+                    {"dataset": dataset, "kind": kind, "status": submitted.get("status")},
+                )
                 continue
             dataset_id = submitted.get("dataset_id") or ""
             if not dataset_id:

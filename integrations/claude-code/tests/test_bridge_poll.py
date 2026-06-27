@@ -14,6 +14,7 @@ Run: python integrations/claude-code/tests/test_bridge_poll.py (or via pytest).
 import hashlib
 import pathlib
 import sys
+import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
@@ -53,10 +54,14 @@ def test_post_remember_document_background_and_parses_ids():
     assert res == {"ok": True, "dataset_id": "d1", "pipeline_run_id": "p1"}
 
 
-def _run_bridge(outcome, *, post_result=None, preseed_state=None):
+def _run_bridge(
+    outcome, *, post_result=None, post_results=None, preseed_state=None, docs=("qa text", "")
+):
     """Drive persist_session_cache_to_graph_via_http with the HTTP seams mocked.
 
-    Returns (wrote, written_state, calls) where calls tracks post/wait invocations.
+    `post_results` (a list) returns a different result per POST call, in order, to
+    exercise one document failing while another succeeds. Returns
+    (wrote, written_state, calls) where calls tracks post/wait invocations.
     """
     calls = {"post": 0, "wait": 0}
     written = {}
@@ -78,6 +83,8 @@ def _run_bridge(outcome, *, post_result=None, preseed_state=None):
 
     def _post(*a, **k):
         calls["post"] += 1
+        if post_results is not None:
+            return post_results[min(calls["post"] - 1, len(post_results) - 1)]
         return post_result or {"ok": True, "dataset_id": "d1", "pipeline_run_id": "p1"}
 
     def _wait(*a, **k):
@@ -87,7 +94,7 @@ def _run_bridge(outcome, *, post_result=None, preseed_state=None):
     pc._local_api_url = lambda: "http://x"
     pc._backend_reachable = lambda url: True
     pc._api_key = lambda: "k"
-    pc._format_cached_bridge_document = lambda dataset, sid: ("qa text", "")
+    pc._format_cached_bridge_document = lambda dataset, sid: docs
     pc._bridge_file = lambda sid: pathlib.Path("/tmp/_bridge_test.json")
     pc._load_json_file = lambda p: {"_state": dict(preseed_state)} if preseed_state else {}
     pc._write_json_file = lambda p, data: written.update(data)
@@ -142,6 +149,47 @@ def test_already_synced_skips_post():
     wrote, state, calls = _run_bridge("completed", preseed_state={key: digest})
     assert calls["post"] == 0  # unchanged document is not re-posted
     assert wrote is False
+
+
+def test_post_remember_document_http_error_returns_not_ok():
+    # urlopen raises HTTPError on non-2xx; _post_remember_document must surface it as
+    # {"ok": False} (graceful) rather than letting it crash the bridge.
+    orig = urllib.request.urlopen
+
+    def _raise(req, timeout=None):
+        raise urllib.error.HTTPError("http://x", 503, "Service Unavailable", {}, None)
+
+    urllib.request.urlopen = _raise
+    try:
+        res = pc._post_remember_document("http://x", "k", "ds", "doc", "user_context", 30.0)
+    finally:
+        urllib.request.urlopen = orig
+    assert res["ok"] is False
+    assert res["status"] == 503
+
+
+def test_post_failure_skips_document():
+    # A failing POST leaves the digest unmarked (retried later) and does not crash.
+    wrote, state, calls = _run_bridge("completed", post_result={"ok": False, "status": 500})
+    assert wrote is False
+    assert state == {}
+    assert calls["wait"] == 0  # never polled — the submit failed
+
+
+def test_one_doc_fails_other_continues():
+    # First document (qa) fails its POST; the second (trace) must still sync.
+    wrote, state, calls = _run_bridge(
+        "completed",
+        docs=("qa text", "trace text"),
+        post_results=[
+            {"ok": False, "status": 503},
+            {"ok": True, "dataset_id": "d2", "pipeline_run_id": "p2"},
+        ],
+    )
+    assert calls["post"] == 2  # both attempted; the first failure didn't abort the loop
+    assert calls["wait"] == 1  # only the successful submit was polled
+    assert wrote is True
+    assert len(state) == 1  # only the trace document was marked written
 
 
 if __name__ == "__main__":

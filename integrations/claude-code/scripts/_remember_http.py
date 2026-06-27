@@ -164,7 +164,7 @@ def _poll_status(
             return "errored"
         if time.monotonic() >= deadline:
             return "timeout"
-        time.sleep(max(0.0, interval_seconds))
+        time.sleep(max(0.1, interval_seconds))  # floor avoids a tight spin if misconfigured to 0
 
 
 def do_remember(
