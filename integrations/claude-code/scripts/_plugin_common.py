@@ -1303,7 +1303,8 @@ def _post_remember_document(
     is abandoned mid-flight even though the server finishes). Returns the enqueue
     handle so the caller can poll completion:
       {"ok": True, "dataset_id": <uuid|"">, "pipeline_run_id": <uuid|"">}
-    A non-2xx status is raised by urlopen (HTTPError) for the caller to handle.
+    On any HTTP/network error returns {"ok": False, ...} (never raises), so the caller
+    skips just this document and keeps syncing the rest; the unmarked digest retries.
     """
     body, boundary = _multipart_body(
         {
@@ -1330,6 +1331,10 @@ def _post_remember_document(
         # exception) so the caller skips this one document and keeps syncing the
         # others; the unmarked digest lets a later detached attempt retry.
         return {"ok": False, "dataset_id": "", "pipeline_run_id": "", "status": exc.code}
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        # A transient network/timeout error must also skip just this document,
+        # not propagate to the outer handler and abort the whole sync.
+        return {"ok": False, "dataset_id": "", "pipeline_run_id": "", "error": str(exc)[:200]}
     result = {"ok": True, "dataset_id": "", "pipeline_run_id": ""}
     try:
         parsed = json.loads(raw) if raw else {}

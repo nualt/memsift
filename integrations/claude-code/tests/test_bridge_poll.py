@@ -168,6 +168,23 @@ def test_post_remember_document_http_error_returns_not_ok():
     assert res["status"] == 503
 
 
+def test_post_remember_document_network_error_returns_not_ok():
+    # A URLError/timeout during the POST must also be graceful, not propagate and
+    # abort the whole bridge via the caller's outer handler.
+    orig = urllib.request.urlopen
+
+    def _raise(req, timeout=None):
+        raise urllib.error.URLError("connection timed out")
+
+    urllib.request.urlopen = _raise
+    try:
+        res = pc._post_remember_document("http://x", "k", "ds", "doc", "user_context", 30.0)
+    finally:
+        urllib.request.urlopen = orig
+    assert res["ok"] is False
+    assert "error" in res
+
+
 def test_post_failure_skips_document():
     # A failing POST leaves the digest unmarked (retried later) and does not crash.
     wrote, state, calls = _run_bridge("completed", post_result={"ok": False, "status": 500})
