@@ -358,9 +358,7 @@ async def _run(prompt: str) -> dict | None:
         for e in by_source["session"]:
             section_lines.append(_format_entry(e))
             section_lines.append("")
-    full_context = (
-        f"{header}\n\n" + "\n".join(section_lines).strip() if section_lines else header
-    )
+    full_context = f"{header}\n\n" + "\n".join(section_lines).strip() if section_lines else header
 
     # Audit log: persist full recall details per turn for debugging.
     # Only the header (status line + counts) is returned as additionalContext;
