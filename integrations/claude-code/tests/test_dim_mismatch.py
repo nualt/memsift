@@ -15,6 +15,7 @@ import asyncio
 import os
 import pathlib
 import sys
+import tempfile
 
 # Pin the loop-guard so importing _plugin_common never re-execs the test process
 # into the plugin venv (its module-level _reexec_into_venv()).
@@ -53,14 +54,22 @@ class _FakeCollection:
         return _FakeQuery(self._rows)
 
 
+class _FakeConnection:
+    def __init__(self, names):
+        self._names = list(names)
+
+    async def table_names(self):
+        return self._names
+
+
 class _FakeLanceEngine:
     def __init__(self, query_size, stored_vector, present=("Entity_name",)):
         self.embedding_engine = _FakeEmbed(query_size)
         self._stored_vector = stored_vector
-        self._present = set(present)
+        self._present = tuple(present)
 
-    async def has_collection(self, name):
-        return name in self._present
+    async def get_connection(self):
+        return _FakeConnection(self._present)
 
     async def get_collection(self, _name):
         rows = [{"vector": self._stored_vector}] if self._stored_vector is not None else []
@@ -73,8 +82,8 @@ class _FakeErrorEngine:
     def __init__(self, query_size):
         self.embedding_engine = _FakeEmbed(query_size)
 
-    async def has_collection(self, name):
-        return name == "Entity_name"
+    async def get_connection(self):
+        return _FakeConnection(("Entity_name",))
 
     async def get_collection(self, _name):
         raise RuntimeError("store locked")
@@ -93,6 +102,16 @@ def test_mismatch_names_both_dims_and_model():
 
 def test_matching_dims_returns_none():
     assert _hint(_FakeLanceEngine(query_size=1536, stored_vector=[0.0] * 1536)) is None
+
+
+def test_enumerates_nonstandard_collection():
+    # Enumeration (not a fixed name list) means a custom-pipeline collection is still
+    # sampled, so the diagnostic fires for non-standard stores too.
+    engine = _FakeLanceEngine(
+        query_size=3072, stored_vector=[0.0] * 1536, present=("CustomThing_body",)
+    )
+    msg = _hint(engine)
+    assert msg is not None and "1536" in msg and "3072" in msg
 
 
 def test_no_collections_returns_none():
@@ -118,6 +137,25 @@ def test_broken_engine_returns_none():
             raise RuntimeError("boom")
 
     assert _hint(_Broken()) is None
+
+
+def test_dim_memo_roundtrip():
+    # The per-prompt wrapper caches a completed probe result keyed by the embedder
+    # signature: a matching signature reuses it (message, incl. a cached None = "no
+    # mismatch"); a different signature is a miss so the probe re-runs.
+    with tempfile.TemporaryDirectory() as tmp:
+        saved = pc._DIM_MEMO_FILE
+        pc._DIM_MEMO_FILE = pathlib.Path(tmp) / "dim_check.json"
+        try:
+            assert pc._read_dim_memo("sigA") is None  # cold: nothing cached
+            pc._write_dim_memo("sigA", "MSG")
+            assert pc._read_dim_memo("sigA")["message"] == "MSG"  # hit
+            assert pc._read_dim_memo("sigB") is None  # signature changed -> re-probe
+            pc._write_dim_memo("sigA", None)  # "checked, dims match"
+            hit = pc._read_dim_memo("sigA")
+            assert hit is not None and hit["message"] is None  # cached None is a hit
+        finally:
+            pc._DIM_MEMO_FILE = saved
 
 
 if __name__ == "__main__":
