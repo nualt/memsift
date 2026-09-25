@@ -4172,9 +4172,12 @@ def recall_node_sets(project_tags: list[str]) -> list[str]:
     recall API has always taken node_name. Without it, a user on a backend
     without typed-entry tagging cannot scope recall at all.
 
-    COGNEE_RECALL_SHARED_NODE_SETS (comma-separated, default "global") names the
-    sets every project may read, and COGNEE_RECALL_PROJECT_SCOPE=false keeps
-    capture tagging while leaving recall unfiltered.
+    COGNEE_RECALL_SHARED_NODE_SETS (comma-separated, default
+    "global,user_context") names the sets every project may read. user_context
+    is where cognee-remember files the user's own preferences and facts, which
+    belong to the user rather than to one project, so they stay recallable in
+    every project. COGNEE_RECALL_PROJECT_SCOPE=false keeps capture tagging
+    while leaving recall unfiltered.
     """
     tags = [str(t).strip() for t in project_tags if str(t).strip()]
     if not tags:
@@ -4185,7 +4188,7 @@ def recall_node_sets(project_tags: list[str]) -> list[str]:
         return []
     if os.environ.get("COGNEE_RECALL_PROJECT_SCOPE", "true").strip().lower() in _FALSE:
         return []
-    shared = os.environ.get("COGNEE_RECALL_SHARED_NODE_SETS", "global")
+    shared = os.environ.get("COGNEE_RECALL_SHARED_NODE_SETS", "global,user_context")
     extra = [t.strip() for t in shared.split(",") if t.strip()]
     return list(dict.fromkeys(tags + extra))
 
@@ -4606,9 +4609,9 @@ def recall_via_http(
         payload["context_profile"] = context_profile
 
     # A session that names a project scopes its graph recall to that node set
-    # plus the shared sets (default "global"), OR-joined, so other projects'
-    # documents and sessions stop filling the graph lane. Session and trace
-    # scopes are keyed by session already and stay unfiltered.
+    # plus the shared sets (default "global,user_context"), OR-joined, so other
+    # projects' documents and sessions stop filling the graph lane. Session and
+    # trace scopes are keyed by session already and stay unfiltered.
     node_name = recall_node_sets(target.get("node_set") or [])
     if node_name and "graph" in scope:
         payload["node_name"] = node_name
