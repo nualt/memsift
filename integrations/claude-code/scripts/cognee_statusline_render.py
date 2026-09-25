@@ -593,7 +593,12 @@ def _llm_prefix(session_id: str = "") -> str:
         return ""
     state = str(marker.get("llm_state") or "")
     if state in ("not_set", "auth_failed"):
-        return _fail_glyph(_LLM_KEY_REASON)
+        # The watcher may name a more specific cause (e.g. ``claude_not_logged_in``
+        # when the LLM is the Claude observer and there is no key to be incorrect).
+        reason = str(marker.get("reason") or "").strip()
+        if not reason or not reason.replace("_", "").isalnum():
+            reason = _LLM_KEY_REASON
+        return _fail_glyph(reason)
     return ""
 
 
@@ -639,12 +644,7 @@ def _recall_segment(session_id: str) -> str:
 
     Default rendering, per turn at normal weight and the session total faint::
 
-        · 5 memory hits (3 from past sessions) · 12/40 turns had hits this session
-
-    ``from past sessions`` counts the graph passages not stamped with this
-    session's id (see ``_count_cross_session_hits`` in the lookup hook) —
-    the part of the hit that no amount of scrolling back would have given
-    Claude. It is omitted when zero.
+        · 5 memory hits · 12/40 turns had hits this session
 
     A session that has not had a single hit yet says so instead of showing a
     bare ``0/7`` (the graph is usually still filling up)::
@@ -669,15 +669,6 @@ def _recall_segment(session_id: str) -> str:
 
     total = sum(_int(hits, key) for key in hits)
     out = f" · {_plural(total, 'memory hit')}"
-    # Of those, the ones this conversation could not have produced: graph
-    # passages from earlier sessions (or remembered documents). This is the
-    # plugin's distinctive contribution, so it rides along at normal weight.
-    cross = min(_int(marker, "cross_session_hits"), total)
-    if cross == 1:
-        out += " (1 from a past session)"
-    elif cross > 1:
-        out += f" ({cross} from past sessions)"
-
     totals = marker.get("session_totals")
     if isinstance(totals, dict):
         turns = _int(totals, "turns")
