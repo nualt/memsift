@@ -849,8 +849,10 @@ def main():
     prompt = payload.get("prompt", "")
     if not prompt or len(prompt) < 5:
         return
+    # Only a raised floor applies here: the stock gate above keeps its exact
+    # behavior (whitespace counts), so an unset variable changes nothing.
     min_chars = _recall_min_prompt_chars()
-    if len(prompt.strip()) < min_chars:
+    if min_chars > 5 and len(prompt.strip()) < min_chars:
         hook_log("context_lookup_short_prompt", {"chars": len(prompt.strip()), "min": min_chars})
         return
     cwd = str(payload.get("cwd") or "") or os.getcwd()
