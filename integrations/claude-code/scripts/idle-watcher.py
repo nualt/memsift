@@ -33,7 +33,7 @@ from event_names import event_fields
 
 # Tunable via env. Defaults chosen to avoid thrashing the LLM: 60s idle
 # threshold means you have to actively pause a full minute. The improve cooldown
-# (COGNEE_IMPROVE_COOLDOWN, 10 minutes) is deliberately NOT a variable here: this
+# (COGNEE_IMPROVE_COOLDOWN, 30 minutes) is deliberately NOT a variable here: this
 # process exits after one bridge and is respawned on the next prompt, so a
 # process-local timestamp reset every turn and the cooldown never gated
 # anything. It lives in the per-session improve state instead
@@ -194,6 +194,40 @@ def _check_llm_key(config: dict) -> None:
         if str(prior.get("session_key") or "") == get_session_key() and (
             time.time() - float(prior.get("checked_at", 0) or 0) < interval
         ):
+            return
+
+        # Claude observer: the "key" is Claude Code's own login, and the shim knows
+        # whether `claude` can answer. Ask it instead of litellm — no cognee import,
+        # and a failure names the actual fix (log in to Claude Code), not a key.
+        from _observer import is_active as _observer_active
+        from _observer import observer_probe
+
+        if _observer_active():
+            verdict = observer_probe(timeout=75.0)
+            auth = verdict.get("auth")
+            if auth == "ok":
+                write_llm_state("ok")
+                _log("llm_key_ok", source="observer")
+            elif auth == "failed":
+                write_llm_state(
+                    "auth_failed",
+                    detail=str(verdict.get("detail") or "")[:200],
+                    reason="claude_not_logged_in",
+                )
+                _log(
+                    "llm_key_auth_failed",
+                    source="observer",
+                    detail=str(verdict.get("detail") or "")[:200],
+                )
+            else:
+                # The shim is down or claude failed for a non-auth reason: no key
+                # verdict either way.
+                _log(
+                    "llm_key_check_inconclusive",
+                    source="observer",
+                    status=verdict.get("status"),
+                    error=str(verdict.get("detail") or "")[:200],
+                )
             return
 
         from cognee.infrastructure.llm.config import get_llm_config

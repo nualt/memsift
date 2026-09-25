@@ -126,14 +126,21 @@ def coerce_top_k(value, default=5):
     return n if n > 0 else default
 
 
-def coerce_scope(value, default="auto"):
-    """Parse the JSON scope arg; fall back to "auto" on anything malformed."""
+def coerce_scope(value, default=None):
+    """Parse the JSON scope arg; graph-only on anything empty or malformed.
+
+    Memory is read from the graph and the code graph only. The server's
+    ``auto`` scope would fold raw session entries in, so it is never the
+    fallback here.
+    """
+    if default is None:
+        default = ["graph"]
     if not value:
-        return default
+        return list(default)
     try:
         return json.loads(value)
     except (TypeError, ValueError):
-        return default
+        return list(default)
 
 
 def _error(status, message, *, transient=False):
@@ -148,6 +155,42 @@ def _error(status, message, *, transient=False):
     if transient:
         envelope["transient"] = True
     return envelope
+
+
+def _searched_target(body):
+    """What a recall body searched, for error messages: dataset name(s) or id(s)."""
+    names = body.get("datasets") or ([body["dataset"]] if body.get("dataset") else [])
+    if names:
+        return "dataset " + ", ".join(str(n) for n in names)
+    ids = body.get("dataset_ids") or []
+    if ids:
+        return "dataset id " + ", ".join(str(i) for i in ids)
+    return ""
+
+
+def _server_error_detail(error, limit=400):
+    """The server's error message from an HTTPError body ('' when there is none)."""
+    try:
+        raw = error.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        parsed = raw
+    if isinstance(parsed, dict):
+        for key in ("detail", "message", "error"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                parsed = value
+                break
+            if isinstance(value, dict) and isinstance(value.get("message"), str):
+                parsed = value["message"]
+                break
+    text = parsed if isinstance(parsed, str) else json.dumps(parsed)
+    return " ".join(text.split())[:limit]
 
 
 def coerce_code_query(value):
@@ -258,10 +301,28 @@ def do_recall(
     except urllib.error.HTTPError as e:
         # Reachable but rejected/failed. NOT an authoritative empty, and NOT a
         # reason to query a different backend via the CLI — report the error.
+        if e.code == 404:
+            # cognee >= 1.6.0 answers a dataset with no graph yet, or a dataset
+            # name that resolves to nothing, with 404 (DatasetNotFoundError)
+            # instead of an empty list. Nothing can be found there: an
+            # authoritative empty, not a failure, and not a reason to fall back.
+            sys.stderr.write(
+                "[cognee-search] no graph for this dataset yet (HTTP 404) — empty result\n"
+            )
+            return []
         if e.code in (401, 403):
             msg = "unauthorized (HTTP %s) — check COGNEE_API_KEY / credentials" % e.code
         else:
             msg = "server returned HTTP %s for /api/v1/recall" % e.code
+            # Name what was searched and pass the server's own reason on: the
+            # server's message identifies a dataset only by UUID, and a bare
+            # status code leaves a model reading this to guess the rest.
+            target = _searched_target(body)
+            if target:
+                msg += " (searched %s)" % target
+            detail = _server_error_detail(e)
+            if detail:
+                msg += ": " + detail
         sys.stderr.write("[cognee-search] %s — NOT falling back to local CLI\n" % msg)
         return _error(e.code, msg)
     except Exception as e:

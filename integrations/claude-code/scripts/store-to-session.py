@@ -27,15 +27,18 @@ from _plugin_common import (
     append_warmup_entry,
     bump_save_counter,
     bump_turn_counter,
+    clear_payment_required,
     elapsed_ms,
     get_session_key,
     hook_log,
     http_api_ready,
     improve_throttle_reason,
+    is_observer_child,
     load_resolved,
     notify,
     pop_pending_prompt,
     quiet_hook_output,
+    record_payment_required,
     remember_entry_via_http,
     resolve_runtime_mode,
     resolve_session_key_from_payload,
@@ -243,6 +246,8 @@ async def _store_tool_call(payload: dict) -> None:
             )
             notify(f"trace store failed, buffered for replay ({exc})")
         else:
+            if status_code == 402:
+                record_payment_required("save")
             hook_log(
                 "trace_store_error",
                 {
@@ -256,6 +261,7 @@ async def _store_tool_call(payload: dict) -> None:
         return
 
     if result:
+        clear_payment_required()
         trace_id = (
             result.get("entry_id")
             if isinstance(result, dict)
@@ -361,6 +367,8 @@ async def _store_assistant_stop(payload: dict) -> None:
             )
             notify(f"stop store failed, buffered for replay ({exc})")
         else:
+            if status == 402:
+                record_payment_required("save")
             hook_log(
                 "stop_store_error",
                 {"error": str(exc)[:200], "status": status, "buffered": False},
@@ -369,6 +377,7 @@ async def _store_assistant_stop(payload: dict) -> None:
         return
 
     if result:
+        clear_payment_required()
         qa_id = (
             result.get("entry_id")
             if isinstance(result, dict)
@@ -424,6 +433,8 @@ def _maybe_reingest_code_repo(payload: dict) -> None:
 
 
 def main():
+    if is_observer_child():
+        return
     payload_raw = sys.stdin.read()
     if not payload_raw.strip():
         return
