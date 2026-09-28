@@ -197,6 +197,8 @@ At startup (`SessionStart`):
 
 A forced-local switch also scrubs `COGNEE_BASE_URL`/`COGNEE_API_KEY` from the process environment, so the per-prompt recall/remember calls and every spawned worker resolve the same local endpoint — not just `SessionStart`. A forced-cloud switch with no URL configured never boots the local server; the connection attempt fails visibly instead (status line + doctor).
 
+**Self-hosted deployments on loopback:** when the configured URL is a loopback address (`127.0.0.1`, `localhost`) and the server is down at session start, the plugin normally boots its embedded local server on that port. If the URL actually belongs to an externally managed deployment (docker compose stack, systemd service), set `COGNEE_MANAGED_ENDPOINT=true`: an outage then makes `SessionStart` report **Cognee Memory OFFLINE** loudly instead of silently booting an unrelated fallback instance over the deployment's port.
+
 At hook runtime:
 - hooks resolve the endpoint through runtime endpoint auth (env + `api_key.json`), not only config intent
 - every hook talks to that endpoint over HTTP; there is no in-process (SDK) fallback
@@ -876,6 +878,7 @@ Keys are letters, digits, and underscores. Values are taken literally — no `$V
 | `session_strategy` | `COGNEE_SESSION_STRATEGY` | `per-directory` | `per-directory`, `git-branch`, `static` |
 | `session_prefix` | `COGNEE_SESSION_PREFIX` | `cc` | Prefix for auto-generated session IDs |
 | `base_url` | `COGNEE_BASE_URL` | unset | Set to enable managed endpoint mode |
+| `managed_endpoint` | `COGNEE_MANAGED_ENDPOINT` | unset | `true` = the URL is an externally managed deployment: never boot a local fallback on its port; outages fail loudly |
 | `api_key` | `COGNEE_API_KEY` | unset | API key; auto-minted if absent in local mode |
 | mode switch | `COGNEE_BACKEND` | unset | `local` or `cloud` — pins the terminal's mode, overriding the URL rule; flips the Claude Code **and** Codex plugins |
 | plugin-only mode switch | `COGNEE_CLAUDE_BACKEND` | unset | Same, for this plugin only; beats `COGNEE_BACKEND` |
@@ -887,6 +890,7 @@ Keys are letters, digits, and underscores. Values are taken literally — no `$V
 | improve cooldown | `COGNEE_IMPROVE_COOLDOWN` | `1800` | Minimum seconds between automatic (idle/auto) improves of one session |
 | auto-improve threshold | `COGNEE_AUTO_IMPROVE_EVERY` | `150` | Stored tool calls/stops between automatic improves (`0` disables) |
 | improve submit timeout | `COGNEE_IMPROVE_SUBMIT_TIMEOUT` | `420` | Read timeout for the improve POST |
+| recall minimum prompt length | `COGNEE_RECALL_MIN_PROMPT_CHARS` | `5` | Prompts shorter than this (surrounding whitespace not counted) skip the per-prompt recall. Values below `5` or non-numeric fall back to `5`. Capture is unaffected. |
 
 ### Per-operation timeouts
 
@@ -935,6 +939,19 @@ The setting is pinned for the session, including buffered writes and detached
 improve workers. The backend must expose `node_set` on typed QA/trace entries and
 preserve it through improve. Older backends leave capture queued with an explicit
 `project_memory_prepared` error instead of silently losing the tags.
+
+When a session names a project, **graph recall is scoped to it**: every prompt's
+graph lookup sends `node_name=[<project>, <shared sets>]` (OR-joined), so other
+projects' documents and sessions stop crowding the hits. Session and trace
+recall are keyed by session and stay unfiltered, and the code lane is never
+filtered. Scoping needs nothing new from the backend, so a recall-only project
+name works where capture tagging is not available yet.
+
+| Env var | Default | Effect |
+|---|---|---|
+| `COGNEE_RECALL_PROJECT_NODE_SET` | unset | Names the project for **recall only**, without tagging capture. `COGNEE_PROJECT_NODE_SET` wins when both are set; `auto`, `off` and blank are ignored. |
+| `COGNEE_RECALL_SHARED_NODE_SETS` | `global,user_context` | Comma-separated node sets every project may read. `user_context` keeps what `cognee-remember` saved about you (preferences, facts) recallable in every project. |
+| `COGNEE_RECALL_PROJECT_SCOPE` | `true` | Set `false` to keep project tagging on capture but leave recall unfiltered. |
 
 `COGNEE_SESSION_COMPANION_DATASET=true` asks the backend to provision
 `<primary>-agent_sessions`. Writes and improve use the companion only after the
