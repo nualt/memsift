@@ -56,6 +56,7 @@ from _plugin_common import (
     server_presence,
     server_ready_hint,
     service_url_is_local,
+    set_launch_base_url,
     set_session_key,
     touch_activity,
     write_connection_state,
@@ -2263,6 +2264,9 @@ async def _start(payload: dict | None = None) -> dict:
         dataset=str(config.get("dataset", "") or "").strip(),
         host_pid=_find_claude_parent_pid(),
     )
+    # The server this launch registers on. Hooks re-read ~/.cognee/.env, so a
+    # later edit is detected against this and reported (base_url_change_notice).
+    set_launch_base_url(session_key, target_url)
     # The launch record is what the status line and doctor read — neither has
     # this process's environment — so the observer decision lands on it here,
     # once the record exists.

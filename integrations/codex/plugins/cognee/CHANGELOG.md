@@ -73,6 +73,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
   could wait up to ~20s. The hooks now resolve local fields only
   (`identity=False`). Diagnosed by @Zozi96 (#270).
 
+- **A mid-session `COGNEE_BASE_URL` change is reported.** Hooks re-read
+  `~/.cognee/.env` in every process, so editing the URL during a session reached
+  later hooks while the session stayed registered on the server SessionStart
+  connected to, and it half-applied silently. SessionStart now records the
+  launch's server; when a later prompt resolves a different one, the recall hook
+  shows a one-time notice naming both servers and asking for a new session
+  (events `endpoint.base_url_changed_mid_session`). Nothing is re-registered
+  mid-session. Prompted by #262 by @rshkarin (a rework of #192 by @SaviPandey).
+
 ## [1.7.0]
 
 ### Changed

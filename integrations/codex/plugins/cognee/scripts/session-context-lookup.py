@@ -57,6 +57,7 @@ from _plugin_common import (
     set_session_key,
     slow_streak_threshold,
     warmup_backlog,
+    with_base_url_notice,
     write_connection_state,
 )
 from _recall_http import DOWN, SLOW, classify_transport_exception
@@ -896,7 +897,7 @@ def main():
             output = asyncio.run(_run(prompt, cwd))
     except Exception as exc:
         hook_log("context_lookup_exception", {"error": str(exc)[:200]})
-    return output
+    return with_base_url_notice(output, "UserPromptSubmit")
 
 
 if __name__ == "__main__":
