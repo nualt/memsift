@@ -2645,6 +2645,19 @@ def plugin_identity_mode(config: dict | None = None) -> str:
     raise ValueError("COGNEE_PLUGIN_IDENTITY must be auto, true, or false")
 
 
+def managed_endpoint_enabled(config: dict | None = None) -> bool:
+    """True when ``base_url`` is an externally managed deployment (docker stack,
+    systemd service, ...) that happens to live on a loopback address. The plugin
+    must then NEVER boot its own server on that port or configure one — a
+    fallback would shadow the real deployment with a second, unrelated brain.
+    Opt in with ``COGNEE_MANAGED_ENDPOINT=true`` (env, ``~/.cognee/.env`` or the
+    ``managed_endpoint`` config key); outages then fail loudly instead."""
+    val = os.environ.get("COGNEE_MANAGED_ENDPOINT", "") or str(
+        (config or {}).get("managed_endpoint", "") or ""
+    )
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
 def _principal_fingerprint(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest() if key else ""
 
@@ -4250,6 +4263,44 @@ def urlopen_following_307(req, *, timeout: float, context=None):
     return urllib.request.urlopen(req, timeout=timeout, context=context)
 
 
+_FALSE = {"0", "false", "no", "off"}
+
+
+def recall_node_sets(project_tags: list[str]) -> list[str]:
+    """Node sets the graph recall lane is scoped to, or [] for no scoping.
+
+    Two ways to name the project, in precedence order:
+
+    1. the session's pinned project memory state (COGNEE_PROJECT_NODE_SET),
+       which also tags captured QA and traces, and
+    2. COGNEE_RECALL_PROJECT_NODE_SET, which scopes recall ONLY.
+
+    The second exists because tagging capture needs a backend that accepts
+    node_set on typed entries, while filtering recall needs nothing new: the
+    recall API has always taken node_name. Without it, a user on a backend
+    without typed-entry tagging cannot scope recall at all.
+
+    COGNEE_RECALL_SHARED_NODE_SETS (comma-separated, default
+    "global,user_context") names the sets every project may read. user_context
+    is where cognee-remember files the user's own preferences and facts, which
+    belong to the user rather than to one project, so they stay recallable in
+    every project. COGNEE_RECALL_PROJECT_SCOPE=false keeps capture tagging
+    while leaving recall unfiltered.
+    """
+    tags = [str(t).strip() for t in project_tags if str(t).strip()]
+    if not tags:
+        direct = os.environ.get("COGNEE_RECALL_PROJECT_NODE_SET", "").strip()
+        if direct and direct.lower() not in _FALSE and direct.lower() != "auto":
+            tags = [direct]
+    if not tags:
+        return []
+    if os.environ.get("COGNEE_RECALL_PROJECT_SCOPE", "true").strip().lower() in _FALSE:
+        return []
+    shared = os.environ.get("COGNEE_RECALL_SHARED_NODE_SETS", "global,user_context")
+    extra = [t.strip() for t in shared.split(",") if t.strip()]
+    return list(dict.fromkeys(tags + extra))
+
+
 def _json_http_request(
     path: str,
     payload: dict | None = None,
@@ -4530,8 +4581,11 @@ def register_agent_via_http(
     session_id: str = "",
     dataset_names: list[str] | None = None,
     dataset_ids: list[str] | None = None,
-    timeout: float = 15.0,
+    timeout: float | None = None,
 ) -> tuple[bool, dict]:
+    if timeout is None:
+        # Tunable independently of recall/remember; 15s is the historical value.
+        timeout = _float_env("COGNEE_REGISTER_TIMEOUT", 15.0)
     payload = {
         "agent_session_name": agent_session_name,
         # Self-declared connection type (the server keeps a free-form registry;
@@ -4664,6 +4718,15 @@ def recall_via_http(
         payload["search_type"] = search_type
     if context_profile:
         payload["context_profile"] = context_profile
+
+    # A session that names a project scopes its graph recall to that node set
+    # plus the shared sets (default "global,user_context"), OR-joined, so other
+    # projects' documents and sessions stop filling the graph lane. Session and
+    # trace scopes are keyed by session already and stay unfiltered.
+    node_name = recall_node_sets(target.get("node_set") or [])
+    if node_name and "graph" in scope:
+        payload["node_name"] = node_name
+        payload["node_name_filter_operator"] = "OR"
 
     def fetch_scopes():
         started = time.monotonic()
