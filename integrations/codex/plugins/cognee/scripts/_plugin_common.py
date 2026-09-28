@@ -1399,9 +1399,13 @@ def _reexec_into_venv() -> None:
     except OSError:
         pass
     os.environ["COGNEE_PLUGIN_IN_VENV"] = "1"
+    # A hook launched through hook_runner.py re-execs through it too, so a crash
+    # under the venv interpreter is still logged instead of exiting 1.
+    runner = os.environ.get("COGNEE_HOOK_RUNNER", "")
+    prefix = [runner] if runner and os.path.isfile(runner) else []
     try:
         # execv inherits os.environ (incl. the loop guard just set above).
-        os.execv(str(vpy), [str(vpy), *sys.argv])
+        os.execv(str(vpy), [str(vpy), *prefix, *sys.argv])
     except OSError as exc:
         # Better to run degraded under the host interpreter than to die.
         hook_log("venv_reexec_failed", {"error": str(exc)[:200]})
@@ -2639,6 +2643,19 @@ def plugin_identity_mode(config: dict | None = None) -> str:
     if normalized in ("0", "false", "no", "off"):
         return "disabled"
     raise ValueError("COGNEE_PLUGIN_IDENTITY must be auto, true, or false")
+
+
+def managed_endpoint_enabled(config: dict | None = None) -> bool:
+    """True when ``base_url`` is an externally managed deployment (docker stack,
+    systemd service, ...) that happens to live on a loopback address. The plugin
+    must then NEVER boot its own server on that port or configure one — a
+    fallback would shadow the real deployment with a second, unrelated brain.
+    Opt in with ``COGNEE_MANAGED_ENDPOINT=true`` (env, ``~/.cognee/.env`` or the
+    ``managed_endpoint`` config key); outages then fail loudly instead."""
+    val = os.environ.get("COGNEE_MANAGED_ENDPOINT", "") or str(
+        (config or {}).get("managed_endpoint", "") or ""
+    )
+    return val.strip().lower() in ("1", "true", "yes", "on")
 
 
 def _principal_fingerprint(key: str) -> str:
