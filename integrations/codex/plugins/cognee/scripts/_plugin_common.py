@@ -10,6 +10,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import math
 import os
 import shutil
 import socket
@@ -2645,6 +2646,19 @@ def plugin_identity_mode(config: dict | None = None) -> str:
     raise ValueError("COGNEE_PLUGIN_IDENTITY must be auto, true, or false")
 
 
+def managed_endpoint_enabled(config: dict | None = None) -> bool:
+    """True when ``base_url`` is an externally managed deployment (docker stack,
+    systemd service, ...) that happens to live on a loopback address. The plugin
+    must then NEVER boot its own server on that port or configure one — a
+    fallback would shadow the real deployment with a second, unrelated brain.
+    Opt in with ``COGNEE_MANAGED_ENDPOINT=true`` (env, ``~/.cognee/.env`` or the
+    ``managed_endpoint`` config key); outages then fail loudly instead."""
+    val = os.environ.get("COGNEE_MANAGED_ENDPOINT", "") or str(
+        (config or {}).get("managed_endpoint", "") or ""
+    )
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
 def _principal_fingerprint(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest() if key else ""
 
@@ -3254,6 +3268,97 @@ def same_connection_target(service_url: str, prior_url: str) -> bool:
     active = _normalize_service_url(service_url)
     marked = _normalize_service_url(prior_url)
     return not (active and marked and active != marked)
+
+
+def _url_identity(url: str) -> str:
+    """``scheme://host:port/path`` with loopback aliases folded, for equality only."""
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = "http://" + raw
+    parts = urllib.parse.urlparse(raw)
+    host = (parts.hostname or "").lower()
+    if host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        host = "localhost"
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    return f"{parts.scheme.lower()}://{host}:{port}{parts.path.rstrip('/')}"
+
+
+def set_launch_base_url(host_key: str, base_url: str) -> None:
+    """Record the server this launch registered on. Called by every SessionStart.
+
+    Hooks re-read ``~/.cognee/.env`` in every process, so an edit made during a
+    session reaches later hooks while the session stays registered on the server
+    SessionStart connected to. ``base_url_change_notice`` compares against this.
+    """
+    host_key = _sanitize_session_key(host_key) or get_session_key()
+    base_url = str(base_url or "").strip()
+    if not host_key or not base_url:
+        return
+    from _file_lock import file_lock
+
+    lock_path = _session_map_path(host_key).with_suffix(".switch.lock")
+    with file_lock(lock_path, timeout=_float_env("COGNEE_SWITCH_LOCK_TIMEOUT", 5.0)) as held:
+        if not held:
+            return
+        rec = _read_map_record(host_key)
+        if not rec:
+            return
+        if rec.get("base_url") == base_url and "base_url_notice" not in rec:
+            return
+        rec["base_url"] = base_url
+        rec.pop("base_url_notice", None)
+        _write_map_record(host_key, rec)
+
+
+def base_url_change_notice(host_key: str = "") -> str:
+    """A one-time notice when this hook resolves a different server than the launch.
+
+    Returns "" when the URL is unchanged, unknown, or the change was already
+    reported for this URL. Only detects and reports: the session keeps working
+    against whatever the hook resolves, and a new session applies the change.
+    """
+    host_key = _sanitize_session_key(host_key) or get_session_key()
+    rec = _read_map_record(host_key)
+    launch_url = str(rec.get("base_url") or "").strip()
+    current_url = _normalize_service_url(_local_api_url())
+    if not launch_url or not current_url:
+        return ""
+    if _url_identity(launch_url) == _url_identity(current_url):
+        return ""
+    if rec.get("base_url_notice") == current_url:
+        return ""
+    hook_log("base_url_changed_mid_session", {"launch": launch_url, "now": current_url})
+    rec["base_url_notice"] = current_url
+    _write_map_record(host_key, rec)
+    return (
+        f"Cognee: COGNEE_BASE_URL changed since this session started ({launch_url} -> "
+        f"{current_url}). This session is registered on {launch_url}; start a new "
+        "session for the change to take effect."
+    )
+
+
+def with_base_url_notice(output: dict | None, hook_event: str) -> dict | None:
+    """Add ``base_url_change_notice`` to a hook's output (user- and model-visible)."""
+    try:
+        notice = base_url_change_notice()
+    except Exception as exc:
+        hook_log("base_url_notice_failed", {"error": str(exc)[:200]})
+        return output
+    if not notice:
+        return output
+    result = dict(output or {})
+    hso = dict(result.get("hookSpecificOutput") or {})
+    hso.setdefault("hookEventName", hook_event)
+    context = str(hso.get("additionalContext") or "")
+    hso["additionalContext"] = notice + ("\n\n" + context if context else "")
+    if "systemMessage" in hso:
+        hso["systemMessage"] = notice + "\n" + str(hso["systemMessage"] or "")
+    result["hookSpecificOutput"] = hso
+    top = str(result.get("systemMessage") or "")
+    result["systemMessage"] = notice + ("\n" + top if top else "")
+    return result
 
 
 def read_connection_state() -> dict:
@@ -4159,6 +4264,44 @@ def urlopen_following_307(req, *, timeout: float, context=None):
     return urllib.request.urlopen(req, timeout=timeout, context=context)
 
 
+_FALSE = {"0", "false", "no", "off"}
+
+
+def recall_node_sets(project_tags: list[str]) -> list[str]:
+    """Node sets the graph recall lane is scoped to, or [] for no scoping.
+
+    Two ways to name the project, in precedence order:
+
+    1. the session's pinned project memory state (COGNEE_PROJECT_NODE_SET),
+       which also tags captured QA and traces, and
+    2. COGNEE_RECALL_PROJECT_NODE_SET, which scopes recall ONLY.
+
+    The second exists because tagging capture needs a backend that accepts
+    node_set on typed entries, while filtering recall needs nothing new: the
+    recall API has always taken node_name. Without it, a user on a backend
+    without typed-entry tagging cannot scope recall at all.
+
+    COGNEE_RECALL_SHARED_NODE_SETS (comma-separated, default
+    "global,user_context") names the sets every project may read. user_context
+    is where cognee-remember files the user's own preferences and facts, which
+    belong to the user rather than to one project, so they stay recallable in
+    every project. COGNEE_RECALL_PROJECT_SCOPE=false keeps capture tagging
+    while leaving recall unfiltered.
+    """
+    tags = [str(t).strip() for t in project_tags if str(t).strip()]
+    if not tags:
+        direct = os.environ.get("COGNEE_RECALL_PROJECT_NODE_SET", "").strip()
+        if direct and direct.lower() not in _FALSE and direct.lower() != "auto":
+            tags = [direct]
+    if not tags:
+        return []
+    if os.environ.get("COGNEE_RECALL_PROJECT_SCOPE", "true").strip().lower() in _FALSE:
+        return []
+    shared = os.environ.get("COGNEE_RECALL_SHARED_NODE_SETS", "global,user_context")
+    extra = [t.strip() for t in shared.split(",") if t.strip()]
+    return list(dict.fromkeys(tags + extra))
+
+
 def _json_http_request(
     path: str,
     payload: dict | None = None,
@@ -4203,6 +4346,17 @@ def _float_env(name: str, default: float) -> float:
         return float(raw) if raw else default
     except (TypeError, ValueError):
         return default
+
+
+def positive_float_env(name: str, default: float) -> float:
+    """A timeout from the environment: only a finite value > 0 is honoured.
+
+    ``_float_env`` passes 0, negatives, inf and nan through, which a socket
+    timeout turns into an immediate failure or an error; those fall back to
+    ``default`` here.
+    """
+    value = _float_env(name, default)
+    return value if math.isfinite(value) and value > 0 else default
 
 
 def elapsed_ms(start: float) -> int:
@@ -4439,8 +4593,11 @@ def register_agent_via_http(
     session_id: str = "",
     dataset_names: list[str] | None = None,
     dataset_ids: list[str] | None = None,
-    timeout: float = 15.0,
+    timeout: float | None = None,
 ) -> tuple[bool, dict]:
+    if timeout is None:
+        # Tunable independently of recall/remember; 15s is the historical value.
+        timeout = positive_float_env("COGNEE_REGISTER_TIMEOUT", 15.0)
     payload = {
         "agent_session_name": agent_session_name,
         # Self-declared connection type (the server keeps a free-form registry;
@@ -4573,6 +4730,15 @@ def recall_via_http(
         payload["search_type"] = search_type
     if context_profile:
         payload["context_profile"] = context_profile
+
+    # A session that names a project scopes its graph recall to that node set
+    # plus the shared sets (default "global,user_context"), OR-joined, so other
+    # projects' documents and sessions stop filling the graph lane. Session and
+    # trace scopes are keyed by session already and stay unfiltered.
+    node_name = recall_node_sets(target.get("node_set") or [])
+    if node_name and "graph" in scope:
+        payload["node_name"] = node_name
+        payload["node_name_filter_operator"] = "OR"
 
     def fetch_scopes():
         started = time.monotonic()

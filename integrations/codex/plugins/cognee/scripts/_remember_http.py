@@ -21,6 +21,7 @@ Diagnostics also go to stderr so the caller can surface them.
 from __future__ import annotations
 
 import json
+import math
 import os
 import socket
 import sys
@@ -104,6 +105,17 @@ def _explicit_wait_seconds():
     immediate recall sees the not-yet-cognified graph. 0 disables (fire-and-forget).
     """
     return _float_env("COGNEE_REMEMBER_WAIT_SECONDS", 8.0)
+
+
+def _remember_timeout():
+    """Client timeout (seconds) for the remember submit POST.
+
+    Tunable independently of recall/register via ``COGNEE_REMEMBER_TIMEOUT``;
+    defaults to 120s, the value ``do_remember`` has always used.
+    """
+    value = _float_env("COGNEE_REMEMBER_TIMEOUT", 120.0)
+    # 0, negatives, inf and nan would make the socket fail at once or raise.
+    return value if math.isfinite(value) and value > 0 else 120.0
 
 
 def _poll_status(
@@ -300,7 +312,16 @@ def main(argv):
     # are uploaded under their real basename so code files route as code.
     # dataset_id (arg 7) addresses the dataset by UUID instead of the name.
     a = list(argv) + [""] * 7
-    result = do_remember(a[0], a[1], a[2], a[3], a[4], file_path=a[5] or None, dataset_id=a[6])
+    result = do_remember(
+        a[0],
+        a[1],
+        a[2],
+        a[3],
+        a[4],
+        file_path=a[5] or None,
+        dataset_id=a[6],
+        timeout=_remember_timeout(),
+    )
     print(UNREACHABLE if result == UNREACHABLE else json.dumps(result))
     if result != UNREACHABLE:
         # Refresh the status-line credits marker, attributing the spend delta
