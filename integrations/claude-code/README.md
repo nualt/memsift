@@ -867,7 +867,7 @@ Keys are letters, digits, and underscores. Values are taken literally — no `$V
 
 **Remove a variable** — delete (or comment out) its line in the editor. To switch modes you usually don't need to remove anything: keep both modes' variables in the file and export the switch instead — `export COGNEE_BACKEND=local` (see [Which mode wins](#which-mode-wins-and-how-to-switch)). Remove the `COGNEE_BASE_URL` line only when you want local to become the permanent default for every terminal.
 
-**Apply and verify** — the file is read at session start, so changes take effect on the next `claude` launch. If a value seems to be ignored, check whether the same variable is `export`ed in your shell: real exports always win over the file. The doctor's **Env File** row lists which keys the file defines and flags any that a shell export is overriding.
+**Apply and verify** — changes take effect on the next `claude` launch: the session registers on its server at start. Hooks re-read the file in every process, so a `COGNEE_BASE_URL` edited mid-session is detected: the next prompt shows a one-time notice naming the old and new server, and a new session applies the change. If a value seems to be ignored, check whether the same variable is `export`ed in your shell: real exports always win over the file. The doctor's **Env File** row lists which keys the file defines and flags any that a shell export is overriding.
 
 | Key | Env var(s) | Default | Notes |
 |---|---|---|---|

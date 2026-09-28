@@ -43,6 +43,8 @@ EVENT_NAMES = {
     "hook:auto_improve_fired": "auto.improve_fired",
     "hook:auto_improve_skipped_no_auth": "auto.improve_skipped_no_auth",
     "hook:auto_improve_throttled": "auto.improve_throttled",
+    "hook:base_url_changed_mid_session": "endpoint.base_url_changed_mid_session",
+    "hook:base_url_notice_failed": "endpoint.base_url_notice_failed",
     "hook:boot_refused_server_present": "boot.refused_server_present",
     "hook:bootstrap_complete": "bootstrap.complete",
     "hook:bootstrap_failed": "bootstrap.failed",

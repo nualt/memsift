@@ -52,6 +52,7 @@ from _plugin_common import (
     resolve_session_key_from_payload,
     server_presence,
     service_url_is_local,
+    set_launch_base_url,
     set_session_key,
     touch_activity,
     write_connection_state,
@@ -1855,6 +1856,9 @@ async def _start(payload: dict | None = None) -> dict:
         dataset=str(config.get("dataset", "") or "").strip(),
         host_pid=_find_codex_parent_pid(),
     )
+    # The server this launch registers on. Hooks re-read ~/.cognee/.env, so a
+    # later edit is detected against this and reported (base_url_change_notice).
+    set_launch_base_url(session_key, target_url)
     from _project_memory import begin as begin_project_memory
 
     begin_project_memory(get_dataset(config), session_id, cwd)
