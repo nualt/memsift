@@ -57,6 +57,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   across five projects, cross-project bleed fell from 0.72 to 0.06 and injected
   context shrank by 20%. Contributed by @nagelm (#402).
 
+- **Per-operation timeouts for remember and register.** Only recall was
+  tunable; the explicit remember submit and the session register call had
+  hardcoded client timeouts. `COGNEE_REMEMBER_TIMEOUT` (default `120`) and
+  `COGNEE_REGISTER_TIMEOUT` (default `15`) now set them independently, falling
+  back to those historical values when unset or malformed; an explicit caller
+  timeout still wins. The README's new "Per-operation timeouts" table also
+  documents `COGNEE_RECALL_BUDGET` and `COGNEE_RECALL_TIMEOUT`. Originally
+  contributed by @RajdeepKushwaha5 (#167), reworked by @rshkarin (#259).
 
 ### Fixed
 - **Capture hooks no longer wait on identity lookups.** `store-to-session.py`
