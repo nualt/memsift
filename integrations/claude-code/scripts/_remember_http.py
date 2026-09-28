@@ -21,6 +21,7 @@ Diagnostics also go to stderr so the caller can surface them.
 from __future__ import annotations
 
 import json
+import math
 import os
 import socket
 import sys
@@ -112,7 +113,9 @@ def _remember_timeout():
     Tunable independently of recall/register via ``COGNEE_REMEMBER_TIMEOUT``;
     defaults to 120s, the value ``do_remember`` has always used.
     """
-    return _float_env("COGNEE_REMEMBER_TIMEOUT", 120.0)
+    value = _float_env("COGNEE_REMEMBER_TIMEOUT", 120.0)
+    # 0, negatives, inf and nan would make the socket fail at once or raise.
+    return value if math.isfinite(value) and value > 0 else 120.0
 
 
 def _poll_status(

@@ -41,6 +41,7 @@ from _plugin_common import (  # noqa: E402
     list_writable_datasets,
     load_resolved,
     mint_switch_session_id,
+    positive_float_env,
     register_agent_via_http,
     resolve_host_key_outside_hook,
     resolve_shared_dataset,
@@ -135,14 +136,28 @@ def _sync_current(host_key: str, session_id: str, dataset: str) -> None:
     env["COGNEE_SYNC_SESSION_ID"] = session_id
     env["COGNEE_SYNC_DATASET"] = dataset
     started = time.monotonic()
-    proc = subprocess.run(
-        [sys.executable, str(_SYNC_SCRIPT), "--strict"],
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=float(os.environ.get("COGNEE_SWITCH_SYNC_TIMEOUT", "") or 900),
-    )
+    timeout = positive_float_env("COGNEE_SWITCH_SYNC_TIMEOUT", 900.0)
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(_SYNC_SCRIPT), "--strict"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        # run() has already killed the sync. Nothing has changed yet: the old
+        # session is still the registered one. Raised as a sync failure so the
+        # exit code says so and --force can continue past it.
+        hook_log(
+            "switch_sync_timeout",
+            {"session": session_id, "dataset": dataset, "timeout_s": timeout},
+        )
+        raise SwitchError(
+            EXIT_SYNC_FAILED,
+            f"sync of session {session_id} (dataset {dataset}) timed out after {timeout:g}s",
+        ) from None
     hook_log(
         "switch_sync_result",
         {

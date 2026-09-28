@@ -238,6 +238,7 @@ EVENT_NAMES = {
     "hook:switch_old_handle_released": "switch.old_handle_released",
     "hook:switch_sync_forced_past_failure": "switch.sync_forced_past_failure",
     "hook:switch_sync_result": "switch.sync_result",
+    "hook:switch_sync_timeout": "switch.sync_timeout",
     "hook:switch_watcher_restart_failed": "switch.watcher_restart_failed",
     "hook:switch_watcher_restarted": "switch.watcher_restarted",
     "hook:switch_watcher_stop_failed": "switch.watcher_stop_failed",

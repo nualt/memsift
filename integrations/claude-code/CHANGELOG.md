@@ -61,8 +61,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
   tunable; the explicit remember submit and the session register call had
   hardcoded client timeouts. `COGNEE_REMEMBER_TIMEOUT` (default `120`) and
   `COGNEE_REGISTER_TIMEOUT` (default `15`) now set them independently, falling
-  back to those historical values when unset or malformed; an explicit caller
-  timeout still wins. The README's new "Per-operation timeouts" table also
+  back to those historical values when unset, malformed, zero, negative or
+  non-finite; an explicit caller timeout still wins. The README's new "Per-operation timeouts" table also
   documents `COGNEE_RECALL_BUDGET` and `COGNEE_RECALL_TIMEOUT`. Originally
   contributed by @RajdeepKushwaha5 (#167), reworked by @rshkarin (#259).
 
@@ -95,6 +95,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
   now `codebase-foo-js-…` and can be indexed. The rule is shared across
   integrations in `integrations/conformance/dataset_name_cases.json`. First
   implemented by @eiza763 (#226).
+- **A dataset switch whose sync times out fails cleanly.** The pre-switch sync's
+  timeout escaped as a crash, so `--force` could not continue past it; it is now
+  reported as a sync failure (exit code and `switch.sync_timeout` event), and a
+  malformed or non-positive `COGNEE_SWITCH_SYNC_TIMEOUT` falls back to 900s.
 
 ## [1.6.1]
 

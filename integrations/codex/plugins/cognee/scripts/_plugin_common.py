@@ -10,6 +10,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import math
 import os
 import shutil
 import socket
@@ -4347,6 +4348,17 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
+def positive_float_env(name: str, default: float) -> float:
+    """A timeout from the environment: only a finite value > 0 is honoured.
+
+    ``_float_env`` passes 0, negatives, inf and nan through, which a socket
+    timeout turns into an immediate failure or an error; those fall back to
+    ``default`` here.
+    """
+    value = _float_env(name, default)
+    return value if math.isfinite(value) and value > 0 else default
+
+
 def elapsed_ms(start: float) -> int:
     """Whole milliseconds elapsed since a ``time.monotonic()`` start marker.
 
@@ -4585,7 +4597,7 @@ def register_agent_via_http(
 ) -> tuple[bool, dict]:
     if timeout is None:
         # Tunable independently of recall/remember; 15s is the historical value.
-        timeout = _float_env("COGNEE_REGISTER_TIMEOUT", 15.0)
+        timeout = positive_float_env("COGNEE_REGISTER_TIMEOUT", 15.0)
     payload = {
         "agent_session_name": agent_session_name,
         # Self-declared connection type (the server keeps a free-form registry;
