@@ -58,6 +58,7 @@ from _plugin_common import (
     set_session_key,
     slow_streak_threshold,
     warmup_backlog,
+    with_base_url_notice,
     write_connection_state,
 )
 from _recall_http import DOWN, SLOW, classify_transport_exception
@@ -810,6 +811,20 @@ async def _run(prompt: str, cwd: str = "") -> dict | None:
     return output
 
 
+def _recall_min_prompt_chars() -> int:
+    """Prompts shorter than this skip recall (capture keeps its own 5-char floor).
+
+    COGNEE_RECALL_MIN_PROMPT_CHARS lets a host raise the floor so acknowledgements
+    and one-word nudges do not cost a lookup and an injected context block. The
+    default matches the stock gate, so an unset variable changes nothing.
+    """
+    raw = os.environ.get("COGNEE_RECALL_MIN_PROMPT_CHARS", "").strip()
+    try:
+        return max(5, int(raw)) if raw else 5
+    except ValueError:
+        return 5
+
+
 def main():
     if is_observer_child():
         return
@@ -835,6 +850,12 @@ def main():
     prompt = payload.get("prompt", "")
     if not prompt or len(prompt) < 5:
         return
+    # Only a raised floor applies here: the stock gate above keeps its exact
+    # behavior (whitespace counts), so an unset variable changes nothing.
+    min_chars = _recall_min_prompt_chars()
+    if min_chars > 5 and len(prompt.strip()) < min_chars:
+        hook_log("context_lookup_short_prompt", {"chars": len(prompt.strip()), "min": min_chars})
+        return
     cwd = str(payload.get("cwd") or "") or os.getcwd()
 
     output = None
@@ -843,6 +864,7 @@ def main():
             output = asyncio.run(_run(prompt, cwd))
     except Exception as exc:
         hook_log("context_lookup_exception", {"error": str(exc)[:200]})
+    output = with_base_url_notice(output, "UserPromptSubmit")
     if output:
         print(json.dumps(output))
 
