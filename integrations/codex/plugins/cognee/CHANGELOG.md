@@ -42,6 +42,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
   session record. Contributed by @nagelm (#403).
 - New event: `recall.lookup_short_prompt`.
 
+### Fixed
+- **Capture hooks no longer wait on identity lookups.** `store-to-session.py`
+  resolved the session with `load_resolved()`, which queries
+  `/agents/connections/me` and then `/users/me` (10s timeout each) on every
+  PostToolUse and Stop, although no store path uses the user id. Codex runs
+  these hooks synchronously, so on a slow backend every tool call and answer
+  could wait up to ~20s. The hooks now resolve local fields only
+  (`identity=False`). Diagnosed by @Zozi96 (#270).
+
 ## [1.7.0]
 
 ### Changed
