@@ -90,6 +90,7 @@ Names cover current hooks, configuration, transcript cleanup, and both watchers.
 | `hook:context_lookup_hit` | `recall.lookup_hit` |
 | `hook:context_lookup_missing_session_key` | `recall.lookup_missing_session_key` |
 | `hook:context_lookup_session_key` | `recall.lookup_session_key` |
+| `hook:context_lookup_short_prompt` | `recall.lookup_short_prompt` |
 | `hook:control_plane_request_failed` | `shared_memory.control_plane_request_failed` |
 | `hook:credits_fetch_empty` | `credits.fetch_empty` |
 | `hook:credits_fetch_failed` | `credits.fetch_failed` |
@@ -151,6 +152,8 @@ Names cover current hooks, configuration, transcript cleanup, and both watchers.
 | `hook:list_datasets_failed` | `datasets.list_failed` |
 | `hook:llm_state_clear_failed` | `llm.state_clear_failed` |
 | `hook:llm_state_write_failed` | `llm.state_write_failed` |
+| `hook:managed_endpoint_boot_refused` | `boot.refused_managed_endpoint` |
+| `hook:managed_endpoint_down` | `endpoint.managed_down` |
 | `hook:map_create_failed` | `map.create_failed` |
 | `hook:missing_payload_session_id` | `missing.payload_session_id` |
 | `hook:mode_decision` | `runtime.decision` |

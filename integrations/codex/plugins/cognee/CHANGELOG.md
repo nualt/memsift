@@ -12,6 +12,36 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [1.7.1]
 
+### Added
+- **`COGNEE_MANAGED_ENDPOINT` — never boot over a managed endpoint.** When
+  `COGNEE_BASE_URL` points at a self-hosted deployment that lives on a loopback
+  address (docker compose stack, systemd service, reverse proxy), an outage at
+  session start used to silently boot the embedded local server on the
+  deployment's own port. The shadow instance then squats the port, answers 401
+  to the deployment's API keys (which reads as a baffling auth failure on the
+  real stack), and captures memory into an embedded database nobody reads.
+  Setting `COGNEE_MANAGED_ENDPOINT=true` (env var, `~/.cognee/.env`, or config
+  key `managed_endpoint`) declares the endpoint externally managed: when it is
+  unreachable, `SessionStart` reports **Cognee Memory OFFLINE** loudly (system
+  message + agent context) and refuses to install or boot anything. Extends the
+  forced-cloud misconfiguration surfacing and the present-but-busy boot refusal
+  to configured-URL deployments that are cleanly down. The outage is also
+  recorded as `unreachable` in the shared connection marker, so the status line
+  and the recall gate stop trusting the previous session's verdict. Default
+  behavior without the flag is unchanged. Contributed by @feyola (#341).
+
+- New events: `boot.refused_managed_endpoint`, `endpoint.managed_down`.
+
+- **`COGNEE_RECALL_MIN_PROMPT_CHARS` — skip recall on short prompts.** The
+  per-prompt context lookup ran on every prompt of five or more characters, so
+  acknowledgements and one-word nudges ("Try again", "approved") each cost a
+  lookup and an injected context block. Raising the floor (surrounding
+  whitespace not counted) skips recall for shorter prompts; values below `5` or
+  non-numeric fall back to the stock gate, and unset nothing changes. Prompt
+  capture keeps its own five-character floor, so short replies still enter the
+  session record. Contributed by @nagelm (#403).
+- New event: `recall.lookup_short_prompt`.
+
 ### Fixed
 - **Capture hooks no longer wait on identity lookups.** `store-to-session.py`
   resolved the session with `load_resolved()`, which queries
@@ -66,6 +96,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
   can say where a fact came from, and memory is graph-only recall now anyway.
 
 ### Fixed
+- **A hook that crashes is reported instead of failing silently.** Every hook now
+  runs through `scripts/hook_runner.py`. On Windows every hook was exiting 1 before
+  any of its own error handling ran: Codex showed only "Hook failed", nothing reached
+  `hook.log`, and the `|| python` fallback ran the hook a second time. An uncaught
+  exception, import-time ones included, is now written with its traceback to
+  `~/.cognee-plugin/codex/hook-crash.log`, shown once per hour as a `systemMessage`,
+  and the hook exits 0. An explicit `sys.exit(code)` is left as it was. The runner
+  also switches the hook's stdin/stdout to UTF-8, since Windows pipes default to the
+  ANSI code page. The venv re-exec keeps going through the runner.
+- **Windows hooks have their own launch commands.** Every hook in `hooks.json` has a
+  `commandWindows` that tries `py -3` and then `python`. Codex runs it through
+  `cmd.exe` on Windows, where `python3` is usually the Microsoft Store stub.
 - **Fresh installs against cognee 1.6.0 could not mint their owner API key
   (SDK-740).** cognee 1.6.0 stopped baking `default_password` into the default user:
   the server creates that user at startup only when `DEFAULT_USER_PASSWORD` is set,

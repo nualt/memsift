@@ -12,6 +12,38 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [1.6.2]
 
+### Added
+- **`COGNEE_MANAGED_ENDPOINT` — never boot over a managed endpoint.** When
+  `COGNEE_BASE_URL` points at a self-hosted deployment that lives on a loopback
+  address (docker compose stack, systemd service, reverse proxy), an outage at
+  session start used to silently boot the embedded local server on the
+  deployment's own port. The shadow instance then squats the port, answers 401
+  to the deployment's API keys (which reads as a baffling auth failure on the
+  real stack), and captures memory into an embedded database nobody reads.
+  Setting `COGNEE_MANAGED_ENDPOINT=true` (env var, `~/.cognee/.env`, or config
+  key `managed_endpoint`) declares the endpoint externally managed: when it is
+  unreachable, `SessionStart` reports **Cognee Memory OFFLINE** loudly (system
+  message + agent context) and refuses to install or boot anything. Extends the
+  forced-cloud misconfiguration surfacing and the present-but-busy boot refusal
+  to configured-URL deployments that are cleanly down. The outage is also
+  recorded as `unreachable` in the shared connection marker, so the status line
+  and the recall gate stop trusting the previous session's verdict. Default
+  behavior without the flag is unchanged. Contributed by @feyola (#341).
+
+- With `COGNEE_MANAGED_ENDPOINT` set the Claude observer stays off (reason
+  `managed_endpoint`): the external deployment owns its LLM configuration.
+- New events: `boot.refused_managed_endpoint`, `endpoint.managed_down`.
+
+- **`COGNEE_RECALL_MIN_PROMPT_CHARS` — skip recall on short prompts.** The
+  per-prompt context lookup ran on every prompt of five or more characters, so
+  acknowledgements and one-word nudges ("Try again", "approved") each cost a
+  lookup and an injected context block. Raising the floor (surrounding
+  whitespace not counted) skips recall for shorter prompts; values below `5` or
+  non-numeric fall back to the stock gate, and unset nothing changes. Prompt
+  capture keeps its own five-character floor, so short replies still enter the
+  session record. Contributed by @nagelm (#403).
+- New event: `recall.lookup_short_prompt`.
+
 ### Fixed
 - **Capture hooks no longer wait on identity lookups.** `store-to-session.py`
   resolved the session with `load_resolved()`, which queries
@@ -79,6 +111,19 @@ project adheres to [Semantic Versioning](https://semver.org/).
   refused,shim_start_failed,record_failed,error}` (hooks) and
   `observer.{started,stopped,completion,completion_failed,probe,retire,signal,
   handler_exception}` (shim, in `~/.cognee-plugin/observer/observer-events.log`).
+
+### Fixed
+- **A hook that crashes is reported instead of failing silently.** Every hook now
+  runs through `scripts/hook_runner.py`. Anything that failed before a hook's own
+  error handling (an import-time error in `_plugin_common`, an unreadable stdin, an
+  unsupported interpreter) exited 1 with no traceback in `hook.log`. For the async
+  hooks (prompt, tool and Stop capture, credits refresh) nothing was shown at all,
+  and the `|| python` fallback ran the hook a second time. An uncaught exception is
+  now written with its traceback to `~/.cognee-plugin/claude-code/hook-crash.log`,
+  shown once per hour as a `systemMessage`, and the hook exits 0. An explicit
+  `sys.exit(code)` is left as it was. The runner also switches the hook's
+  stdin/stdout to UTF-8, since Windows pipes default to the ANSI code page. The
+  venv re-exec keeps going through the runner.
 
 ## [1.6.0]
 
