@@ -34,6 +34,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `managed_endpoint`): the external deployment owns its LLM configuration.
 - New events: `boot.refused_managed_endpoint`, `endpoint.managed_down`.
 
+- **`COGNEE_RECALL_MIN_PROMPT_CHARS` — skip recall on short prompts.** The
+  per-prompt context lookup ran on every prompt of five or more characters, so
+  acknowledgements and one-word nudges ("Try again", "approved") each cost a
+  lookup and an injected context block. Raising the floor (surrounding
+  whitespace not counted) skips recall for shorter prompts; values below `5` or
+  non-numeric fall back to the stock gate, and unset nothing changes. Prompt
+  capture keeps its own five-character floor, so short replies still enter the
+  session record. Contributed by @nagelm (#403).
+- New event: `recall.lookup_short_prompt`.
+
 ## [1.6.1]
 
 ### Added
