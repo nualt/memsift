@@ -232,9 +232,9 @@ def do_remember(
             return _error(0, "cannot read %s: %s" % (file_path, str(e)[:160]))
     if isinstance(content, str):
         content = content.encode("utf-8")
-    filename = text_upload_name(node_set, content)
-    if file_path:
-        filename = os.path.basename(str(file_path).rstrip("/")) or filename
+    # Hash only when the name needs it: a --file upload keeps its basename.
+    filename = os.path.basename(str(file_path).rstrip("/")) if file_path else ""
+    filename = filename or text_upload_name(node_set, content)
     from _dataset_access import dataset_id as parse_dataset_id
 
     # The explicit UUID (shared memory's canonical dataset) wins; otherwise a
