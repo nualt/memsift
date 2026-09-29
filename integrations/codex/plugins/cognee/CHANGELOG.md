@@ -10,6 +10,23 @@ is the cache key and semver record, bumped on each release, not the update trigg
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.7.2]
+
+### Fixed
+- **Explicit remember no longer loses every save after the first on cognee >= 1.6.0**
+  ([#444](https://github.com/topoteretes/cognee-integrations/issues/444)). Inline
+  text was uploaded as `{node_set}.txt`, and cognee 1.6.0 treats an upload's
+  filename as its identity in the dataset: a known name arriving with different
+  content is refused with a 409. So after the first `user_context` remember in a
+  dataset, every later one was refused, and with the default background write the
+  failure only reached the server log. Inline text now uploads as
+  `{node_set}-{sha256[:32]}.txt`: distinct texts get distinct names, and the same
+  text reuses its name, which the server's content-hash dedup keeps a no-op.
+  `--file` uploads keep their real basename, since the extension selects the
+  server-side loader.
+  A background remember that the server refuses for another reason can still
+  report `queryable: true`; that half of #444 is still open.
+
 ## [1.7.1]
 
 ### Added
