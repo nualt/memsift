@@ -10,18 +10,6 @@ is the cache key and semver record, bumped on each release, not the update trigg
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.7.3]
-
-### Fixed
-- **Session sync no longer skips a backend whose `/health` is slow**
-  ([#443](https://github.com/topoteretes/cognee-integrations/issues/443)). Every
-  session sync first checks the backend with a `/health` probe that gave up after a
-  hard-coded 1.5s, so on a tenant slower than that each sync was recorded as
-  `unreachable`, nothing was submitted, and the replay backlog never drained, while
-  `cognee-doctor`, which waits 5s, reported the same backend as reachable. The probe
-  now waits 2s by default and reads `COGNEE_REACHABLE_TIMEOUT` (seconds); `0`,
-  negative, non-finite and unparsable values fall back to the default.
-
 ## [1.7.2]
 
 ### Fixed
@@ -38,6 +26,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   server-side loader.
   A background remember that the server refuses for another reason can still
   report `queryable: true`; that half of #444 is still open.
+- **Session sync no longer skips a backend whose `/health` is slow**
+  ([#443](https://github.com/topoteretes/cognee-integrations/issues/443)). Every
+  session sync first checks the backend with a `/health` probe that gave up after a
+  hard-coded 1.5s, so on a tenant slower than that each sync was recorded as
+  `unreachable`, nothing was submitted, and the replay backlog never drained, while
+  `cognee-doctor`, which waits 5s, reported the same backend as reachable. The probe
+  now waits 2s by default and reads `COGNEE_REACHABLE_TIMEOUT` (seconds); `0`,
+  negative, non-finite and unparsable values fall back to the default.
 
 ## [1.7.1]
 
