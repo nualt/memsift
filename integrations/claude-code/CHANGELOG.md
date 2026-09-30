@@ -13,6 +13,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
 ## [1.6.3]
 
 ### Fixed
+- **No false `✕ (incorrect_llm_api_key)` for a server the plugin did not start**
+  ([#371](https://github.com/topoteretes/cognee-integrations/issues/371),
+  [#377](https://github.com/topoteretes/cognee-integrations/issues/377)). The idle
+  watcher validated the LLM key for every loopback `COGNEE_BASE_URL`, but a docker or
+  systemd cognee published on `127.0.0.1` reads its key from its own environment. With
+  no key in the plugin's environment the check wrote `not_set`, and the status line
+  showed a permanent ✕ while the server answered LLM calls normally. The check now
+  runs only against a server the plugin started. It is skipped, and any earlier
+  verdict withdrawn, when `COGNEE_MANAGED_ENDPOINT` is set, or when a server answers on the port without the
+  plugin's pidfile. When nothing answers yet (the plugin's own server still booting),
+  the check runs as before.
 - **Explicit remember no longer loses every save after the first on cognee >= 1.6.0**
   ([#444](https://github.com/topoteretes/cognee-integrations/issues/444)). Inline
   text was uploaded as `{node_set}.txt`, and cognee 1.6.0 treats an upload's

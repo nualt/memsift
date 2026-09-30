@@ -176,7 +176,9 @@ def _check_llm_key(config: dict) -> None:
             return
         sys.path.insert(0, os.path.dirname(__file__))
         from _plugin_common import (
+            clear_llm_state,
             get_session_key,
+            llm_key_owner,
             read_llm_state,
             service_url_is_local,
             write_llm_state,
@@ -185,6 +187,13 @@ def _check_llm_key(config: dict) -> None:
         base_url = str(config.get("base_url") or "")
         if base_url and not service_url_is_local(base_url):
             return  # cloud: the remote server owns its own LLM key
+        # Loopback is not ownership: a server this plugin did not start reads its
+        # key from its own environment, so ours says nothing about it (#371).
+        owner = llm_key_owner(config)
+        if owner:
+            clear_llm_state()
+            _log("llm_key_check_skipped", reason=owner)
+            return
 
         # Throttle against OUR OWN last verdict only. The marker is machine-wide, so
         # honouring another session's timestamp would let a keyless launch's verdict

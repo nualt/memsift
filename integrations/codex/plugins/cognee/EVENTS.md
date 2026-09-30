@@ -303,6 +303,7 @@ Names cover current hooks, configuration, transcript cleanup, and both watchers.
 | `idle-watcher:llm_key_auth_failed` | `idle_watcher.llm_key_auth_failed` |
 | `idle-watcher:llm_key_check_error` | `idle_watcher.llm_key_check_error` |
 | `idle-watcher:llm_key_check_inconclusive` | `idle_watcher.llm_key_check_inconclusive` |
+| `idle-watcher:llm_key_check_skipped` | `idle_watcher.llm_key_check_skipped` |
 | `idle-watcher:llm_key_not_set` | `idle_watcher.llm_key_not_set` |
 | `idle-watcher:llm_key_ok` | `idle_watcher.llm_key_ok` |
 | `idle-watcher:pidfile_read_failed` | `idle_watcher.pidfile_read_failed` |

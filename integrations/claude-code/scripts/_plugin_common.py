@@ -3557,13 +3557,66 @@ def read_llm_state() -> dict:
 
 
 def clear_llm_state() -> None:
-    """Remove the LLM-state marker (e.g. a key is present and will be validated)."""
+    """Withdraw this session's LLM-key verdict, so the status line shows none.
+
+    Removes the per-session copy, and the shared marker only when it is ours or
+    unattributed: another session's verdict is its own to keep or withdraw.
+    """
+    key = get_session_key()
+    if _session_key_path_safe(key):
+        try:
+            (_LLM_STATE_DIR / f"{key}.json").unlink()
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            hook_log("llm_state_clear_failed", {"error": str(exc)[:200]})
     try:
+        shared = json.loads(_LLM_STATE_MARKER.read_text(encoding="utf-8"))
+        owner = str(shared.get("session_key") or "") if isinstance(shared, dict) else ""
+        if owner and owner != key:
+            return
         _LLM_STATE_MARKER.unlink()
     except FileNotFoundError:
         return
     except Exception as exc:
         hook_log("llm_state_clear_failed", {"error": str(exc)[:200]})
+
+
+def llm_key_owner(config: dict | None = None) -> str:
+    """Why the server at ``base_url`` does not use this plugin's LLM key, or ""
+    when it does (the plugin started it, so the watcher can validate the key).
+
+    A loopback URL alone does not make the server ours: a docker or systemd
+    cognee published on 127.0.0.1 reads its key from its own environment, and
+    checking ours put a false ✕ (incorrect_llm_api_key) on the bar (#371, #377).
+      "managed_endpoint" — COGNEE_MANAGED_ENDPOINT says the deployment is not ours
+      "unowned_server"   — a server answers on the port with no plugin pidfile.
+                           The pidfile is written at spawn, before the server
+                           binds, so a server the plugin started always has one.
+    Nothing answering (our server still booting, or down) returns "": the
+    plugin is the one that will start it, so the check stays valid.
+    """
+    if managed_endpoint_enabled(config):
+        return "managed_endpoint"
+    base = _normalize_service_url(str((config or {}).get("base_url") or "") or _local_api_url())
+    if not base:
+        return ""
+    if "://" not in base:
+        base = f"http://{base}"
+    try:
+        parsed = urllib.parse.urlsplit(base)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return ""
+    if not _is_loopback_host(parsed.hostname or "localhost"):
+        return ""
+    # Probe first, then read the pidfile: a server of ours that is already
+    # answering wrote its pidfile before it bound, so this order has no race.
+    if probe_health(base, timeout=2.0) != "ready":
+        return ""
+    if _live_server_pid(port):
+        return ""
+    return "unowned_server"
 
 
 def clear_server_ready() -> None:
