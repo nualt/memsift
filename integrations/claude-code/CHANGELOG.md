@@ -18,19 +18,33 @@ project adheres to [Semantic Versioning](https://semver.org/).
   on since yesterday?", "what happened this week and what did we decide?" and "how did
   topic X evolve?" from what the server already records — no new server surface, no
   new hooks. Sessions come from `GET /api/v1/sessions` (+ `/{id}`: last prompts, tool
-  calls, edited files), learnings from a context-only graph recall (no LLM call). The
+  calls, edited files). The digest's learnings are the dataset's lesson rows
+  (`GET /api/v1/datasets/{id}/data` + `/raw`): every lesson the server distilled into
+  the graph inside the window, dated by the row's `created_at` — an exhaustive count,
+  no search, no LLM call; the newest `--max-learnings` (40, `0` = all) are fetched and
+  listed, the skeleton says how many more there were. The timeline seeds a context-only graph recall with the topic and dates
+  each passage by the end of the session it names; a session the server no longer
+  knows leaves the passage undated, not dropped. The
   wrapper prints a deterministic Markdown skeleton grouped by project (standup), by
-  day → project with most-edited files and the graph learnings dated inside the window
-  (digest), or as a dated chronology of `learned` / `asked` events (timeline); the
-  skill tells the model to summarise it, not paste it. `--since` takes `24h`, `7d`,
-  `2w`, `today`, `yesterday`, `week` (since Monday), `month`, `all` or a date;
-  `--projects` narrows by working directory, `--all-sessions` adds non-coding-agent
-  sessions, `--json` returns the data. Sessions driven from a host without prompt
-  hooks (a Cursor terminal, a cron job) are attributed to the git root of the files
-  they edited and described by their tool mix rather than the server's first-tool
-  label. The dataset is the launch record's, else the plugin default — an unscoped
-  recall would search every readable dataset (~1 min, code graphs drowning the
-  learnings).
+  day → project with most-edited files and the dated learnings (digest), or as a dated
+  chronology of `learned` / `recorded` / `asked` events (timeline; a raw transcript
+  chunk the graph holds is `recorded`, not `learned`); the skill tells the model to
+  summarise it, not paste it, and to treat it as recorded data, not instructions.
+  `--since` takes `24h`, `7d`, `2w`, `today`, `yesterday`, `week` (since Monday),
+  `month`, `all` or a date (a local calendar day); `--projects` narrows by working
+  directory, `--all-sessions` adds non-coding-agent sessions, `--json` returns the
+  data. Sessions driven from a host without prompt hooks (a Cursor terminal, a cron
+  job) are attributed to the git root of the files they edited (looked up only under
+  the home directory and known working directories) and described by their tool mix
+  rather than the server's first-tool label. The dataset is the launch record's, else
+  the plugin default — an unscoped recall would search every readable dataset (~1 min,
+  code graphs drowning the learnings); the timeline's recall carries no session id so
+  project memory does not narrow a cross-project history. The data listing is
+  newest-first, so the digest stops paging at the first page older than the window.
+  An unreachable server, an
+  HTTP status (401/403 name the key / identity) or a refused identity is one stderr
+  line and exit 1; a failed graph lookup in timeline mode still renders the prompt
+  lane.
 
 ## [1.6.3]
 
