@@ -4890,7 +4890,15 @@ def recall_via_http(
     return bounded_call(fetch_scopes, timeout)
 
 
-def _backend_reachable(base_url: str, timeout: float = 1.5) -> bool:
+# Budget for the /health probe that gates a session sync. Some cloud tenants
+# answer /health in several seconds, and a probe that gives up first records the
+# sync as "unreachable" and sends nothing (#443); COGNEE_REACHABLE_TIMEOUT raises it.
+REACHABLE_TIMEOUT_DEFAULT_SECONDS = 2.0
+
+
+def _backend_reachable(base_url: str, timeout: float | None = None) -> bool:
+    if timeout is None:
+        timeout = positive_float_env("COGNEE_REACHABLE_TIMEOUT", REACHABLE_TIMEOUT_DEFAULT_SECONDS)
     try:
         with urllib.request.urlopen(
             f"{base_url.rstrip('/')}/health", timeout=timeout, context=_https_context()
