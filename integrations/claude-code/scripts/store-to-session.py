@@ -33,6 +33,7 @@ from _plugin_common import (
     hook_log,
     http_api_ready,
     improve_throttle_reason,
+    is_observer_child,
     load_resolved,
     notify,
     pop_pending_prompt,
@@ -132,7 +133,9 @@ def _infer_status(payload: dict) -> tuple[str, str]:
 
 def _load_session() -> tuple[str, str, str]:
     """Load session_id, dataset, user_id from resolved cache with fallbacks."""
-    resolved = load_resolved()
+    # Local fields only: the identity probes cost up to 10s each on a slow
+    # backend, on every tool call and Stop, and no store path uses user_id.
+    resolved = load_resolved(identity=False)
     session_id = resolved.get("session_id", "")
     dataset = resolved.get("dataset", "")
     user_id = resolved.get("user_id", "")
@@ -432,6 +435,8 @@ def _maybe_reingest_code_repo(payload: dict) -> None:
 
 
 def main():
+    if is_observer_child():
+        return
     payload_raw = sys.stdin.read()
     if not payload_raw.strip():
         return

@@ -47,11 +47,13 @@ from _plugin_common import (
     ensure_launch_record,
     get_session_key,
     hook_log,
+    managed_endpoint_enabled,
     probe_health,
     quiet_hook_output,
     resolve_session_key_from_payload,
     server_presence,
     service_url_is_local,
+    set_launch_base_url,
     set_session_key,
     touch_activity,
     write_connection_state,
@@ -116,7 +118,7 @@ _FALLBACK_VENV_MIN_PYTHON = (3, 10)
 # refusal reaches the user as a systemMessage (the worker that hits it runs
 # detached, with nothing it prints visible). Cleared once a venv is ready.
 _HOST_PYTHON_MARKER = _GLOBAL_STATE_DIR / "host-python-unsupported.json"
-_PINNED_COGNEE_VERSION = "1.5.4"
+_PINNED_COGNEE_VERSION = "1.6.0"
 _INSTALL_TIMEOUT_SECONDS = float(os.environ.get("COGNEE_INSTALL_TIMEOUT", "") or 600.0)
 
 # Maps a configured backend provider env var to the cognee package "extra" that
@@ -296,7 +298,8 @@ def _venv_cognee_version() -> str:
 
 
 # One distribution per extra whose presence in the venv proves that extra's
-# drivers are installed (verified against cognee 1.5.3's optional-dependencies).
+# drivers are installed (verified against cognee 1.6.0's optional-dependencies:
+# fastembed and codegraph are empty extras there, their packages being core).
 # Probing the venv is deliberately preferred over recording installed extras in
 # venv-ready.json: that marker is shared with plugins that don't know about
 # extras (codex/openclaw), whose rewrites would wipe the record and force a
@@ -640,6 +643,15 @@ def _ensure_local_server_running(
         _ready()
         return
 
+    if managed_endpoint_enabled(config):
+        # Hard stop at the single spawn/install choke point so no call path —
+        # present or future — can boot a shadow server over a managed endpoint.
+        hook_log("managed_endpoint_boot_refused", {"base_url": service_url})
+        raise RuntimeError(
+            f"managed Cognee endpoint {service_url} is unreachable and "
+            "COGNEE_MANAGED_ENDPOINT forbids booting a local fallback server"
+        )
+
     # The server is positively absent and we're at a boot point: ensure the
     # shared venv holds the latest cognee BEFORE booting, so the server's
     # lifespan migrations run on the upgraded code. Single-flighted on its own
@@ -706,6 +718,15 @@ def _ensure_local_server_running(
         # We are spawning the server, so run it in agent mode: it tears itself
         # down once all registered agents disconnect.
         server_env["COGNEE_AGENT_MODE"] = "true"
+        # cognee >= 1.6.0 creates the default user at startup only when
+        # DEFAULT_USER_PASSWORD is set, and never rewrites a stored password. Hand
+        # the server the well-known local credentials so a fresh install gets the
+        # same default user it always had and the owner-key bootstrap below can log
+        # in. The server binds localhost only. setdefault: an operator's own
+        # DEFAULT_USER_* export wins. COGNEE_USER_EMAIL/COGNEE_USER_PASSWORD still
+        # pick the user the plugin logs in as; a non-default user must already exist.
+        server_env.setdefault("DEFAULT_USER_EMAIL", _LOCAL_DEFAULT_USER_EMAIL)
+        server_env.setdefault("DEFAULT_USER_PASSWORD", _LOCAL_DEFAULT_USER_PASSWORD)
         # The server's console output must not inherit this worker's stdio
         # (bootstrap.log — that is how it reached gigabytes: every line the
         # server printed for as long as it ran), but it must not vanish either:
@@ -775,6 +796,40 @@ def _normalize_service_url(service_url: str) -> str:
     return str(service_url or "").strip().rstrip("/")
 
 
+# The credentials a server booted by this plugin is given (DEFAULT_USER_EMAIL /
+# DEFAULT_USER_PASSWORD) and the ones config.py logs in with by default. They
+# must agree, or a fresh install cannot mint its owner API key.
+_LOCAL_DEFAULT_USER_EMAIL = "default_user@example.com"
+_LOCAL_DEFAULT_USER_PASSWORD = "default_password"
+_NO_PASSWORD_MARKER = "does not have a password"
+_BAD_CREDENTIALS_MARKER = "LOGIN_BAD_CREDENTIALS"
+
+
+def _login_failure_message(status: int, body: str) -> str:
+    """One actionable sentence for a failed default-user login.
+
+    cognee >= 1.6.0 creates the default user without a password unless the server
+    was started with DEFAULT_USER_PASSWORD, and logging into such a user answers
+    400 "does not have a password". A server this plugin boots gets the variable
+    itself, so that answer means an externally managed server, whose environment
+    the plugin cannot set.
+    """
+    head = f"default-user login failed ({status}: {body[:200]})."
+    if status == 400 and _NO_PASSWORD_MARKER in body:
+        return (
+            f"{head} The server's default user has no password: cognee >= 1.6.0 "
+            "creates none unless the server is started with DEFAULT_USER_PASSWORD set. "
+            "Start the server with DEFAULT_USER_PASSWORD set to the same value as "
+            "COGNEE_USER_PASSWORD, or set COGNEE_API_KEY to skip the login."
+        )
+    if status == 400 and _BAD_CREDENTIALS_MARKER in body:
+        return (
+            f"{head} The server rejected COGNEE_USER_EMAIL/COGNEE_USER_PASSWORD; point "
+            "them at a user that exists on that server, or set COGNEE_API_KEY."
+        )
+    return f"{head} Set COGNEE_USER_EMAIL/COGNEE_USER_PASSWORD correctly, or set COGNEE_API_KEY."
+
+
 async def _login_default_user_for_owner_api_key(service_url: str, config: dict) -> str:
     base = _normalize_service_url(service_url)
     email = config.get("user_email", "")
@@ -787,11 +842,7 @@ async def _login_default_user_for_owner_api_key(service_url: str, config: dict) 
         timeout=30.0,
     )
     if status != 200:
-        raise RuntimeError(
-            "default-user login failed "
-            f"({status}: {body[:200]}). "
-            "Set COGNEE_USER_EMAIL/COGNEE_USER_PASSWORD correctly."
-        )
+        raise RuntimeError(_login_failure_message(status, body))
     login_data = json.loads(body) if body else {}
     jwt = str(login_data.get("access_token", "") or "")
     if not jwt:
@@ -1815,6 +1866,9 @@ async def _start(payload: dict | None = None) -> dict:
         dataset=str(config.get("dataset", "") or "").strip(),
         host_pid=_find_codex_parent_pid(),
     )
+    # The server this launch registers on. Hooks re-read ~/.cognee/.env, so a
+    # later edit is detected against this and reported (base_url_change_notice).
+    set_launch_base_url(session_key, target_url)
     from _project_memory import begin as begin_project_memory
 
     begin_project_memory(get_dataset(config), session_id, cwd)
@@ -1857,13 +1911,21 @@ async def _start(payload: dict | None = None) -> dict:
         server_live = presence_verdict == PRESENCE_READY
     else:
         server_live = bool(target_url) and _health_ok(_health_url(target_url))
-    will_boot = (not server_live) and bool(target_url) and _is_local_url(target_url)
+    # COGNEE_MANAGED_ENDPOINT: the URL belongs to a deployment we don't own, so
+    # it is never booted. This is stronger than _run_heavy's
+    # ``managed_endpoint=not will_boot`` (connect-only for THIS call): the lock
+    # also stops the out-of-band retry and _ensure_local_server_running itself.
+    managed_locked = managed_endpoint_enabled(config)
+    will_boot = (
+        (not server_live) and bool(target_url) and _is_local_url(target_url) and not managed_locked
+    )
     hook_log(
         "endpoint_mode_selected",
         {
             "base_url": target_url,
             "server_live": server_live,
             "will_boot": will_boot,
+            "managed_endpoint": managed_locked,
             **(
                 {"presence": presence_verdict, "evidence": presence_evidence}
                 if presence_verdict
@@ -1871,6 +1933,39 @@ async def _start(payload: dict | None = None) -> dict:
             ),
         },
     )
+    if managed_locked and target_url and not server_live:
+        # Managed deployment is down: fail loudly, never fork a fallback brain.
+        hook_log("managed_endpoint_down", {"base_url": target_url})
+        print(
+            f"cognee-plugin: managed endpoint {target_url} unreachable — memory OFFLINE",
+            file=sys.stderr,
+        )
+        # The status line and the recall gate read the shared marker, not this
+        # output: without this they would keep the previous session's verdict.
+        write_connection_state("unreachable", target_url)
+        offline_message = (
+            "## ⚠ Cognee Memory OFFLINE\n"
+            f"The managed Cognee endpoint {target_url} is unreachable. "
+            "COGNEE_MANAGED_ENDPOINT is set, so no local fallback server was "
+            "started — memory recall and capture are disabled for this session.\n"
+            "Start the deployment, then start a new session (or /clear)."
+        )
+        return {
+            # Top level is where the universal ``systemMessage`` is documented
+            # and where the Antigravity adapter reads it; keep both copies.
+            "systemMessage": offline_message,
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "systemMessage": offline_message,
+                "additionalContext": (
+                    "Cognee memory is OFFLINE for this session: the managed endpoint "
+                    f"{target_url} is unreachable and local fallback is disabled by "
+                    "COGNEE_MANAGED_ENDPOINT. Nothing is being recalled or captured. "
+                    "If durable memory matters for the current task, remind the user "
+                    "that the Cognee stack is down before proceeding."
+                ),
+            },
+        }
     if will_boot and _LAZY_BOOTSTRAP:
         _spawn_bootstrap(config, cwd, session_id, agent_session_name, session_key, dataset)
         user_id = os.environ.get("COGNEE_USER_ID", "")
@@ -1886,7 +1981,7 @@ async def _start(payload: dict | None = None) -> dict:
             boot_timeout=_HEALTH_TIMEOUT_SECONDS,
         )
         if not ok:
-            if _LAZY_BOOTSTRAP and target_url and _is_local_url(target_url):
+            if _LAZY_BOOTSTRAP and target_url and _is_local_url(target_url) and not managed_locked:
                 # Inline attempt failed; retry the heavy path out of band.
                 _spawn_bootstrap(config, cwd, session_id, agent_session_name, session_key, dataset)
             else:

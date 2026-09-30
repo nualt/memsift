@@ -70,6 +70,8 @@ EOF
 chmod 600 ~/.cognee/.env
 ```
 
+**Default user and its password.** The local server is started with `DEFAULT_USER_EMAIL=default_user@example.com` and `DEFAULT_USER_PASSWORD=default_password`, which is how cognee 1.6.0 and later create the default user at all (a server started without `DEFAULT_USER_PASSWORD` creates no default account, and the password is set once and never rewritten). The plugin logs in as that user to mint its owner API key, so a fresh install needs no manual step and an existing install keeps working. Exporting `DEFAULT_USER_EMAIL`/`DEFAULT_USER_PASSWORD` yourself overrides what the plugin passes; `COGNEE_USER_EMAIL`/`COGNEE_USER_PASSWORD` pick the user the plugin logs in as, and a non-default user must already exist on the server. When pointing at a server you run yourself (`COGNEE_BASE_URL`), either start it with `DEFAULT_USER_PASSWORD` set to the same value as `COGNEE_USER_PASSWORD`, or set `COGNEE_API_KEY` so no login is needed; a server without either answers the login with an error that says so.
+
 **Windows (PowerShell)** — same idea, same file:
 
 ```powershell
@@ -112,10 +114,10 @@ On startup the statusline shows `cognee: <dataset> · local` (or `· cloud`) to 
 Every prompt's recalled context opens with a one-line memory header:
 
 ```
-Cognee memory: 5 memory hits (3 from past sessions) · 12/40 turns had hits this session · saved last turn 1 prompt / 3 trace / 1 answer
+Cognee memory: 5 memory hits · 12/40 turns had hits this session · saved last turn 1 prompt / 3 trace / 1 answer
 ```
 
-`5 memory hits` is how many memories this turn's lookup found and injected (across session turns, traces, graph context and agent guidance); `3 from past sessions` is the part the model could not have known from this conversation — knowledge-graph passages from an earlier session or a `remember`-ed document (omitted when zero); `12/40 turns had hits this session` is the running total, reading `memory warming up (7 turns)` until the first hit; `saved last turn` is what the previous turn persisted — on the server. The counts are also written to `~/.cognee-plugin/codex/last_recall.json`.
+`5 memory hits` is how many memory blocks this turn's lookup found and injected (the memory request, plus code-graph facts when that lane is armed); `12/40 turns had hits this session` is the running total, reading `memory warming up (7 turns)` until the first hit; `saved last turn` is what the previous turn persisted — on the server. The counts are also written to `~/.cognee-plugin/codex/last_recall.json`.
 
 When the server cannot be reached, traces and answers are buffered locally and replayed later; those are never counted as saved. Instead the header grows two segments — `buffered last turn 6 trace / 1 answer (not saved yet) · 7 awaiting replay, oldest 20d` — so an outage is visible on every prompt, including prompts whose recall was skipped because the server is known to be down (`Cognee memory: recall skipped (server unreachable) · …`). Both segments disappear once the buffer has drained.
 
@@ -211,6 +213,8 @@ At startup (`SessionStart`):
 - otherwise → `integration_local` (local API bootstrap)
 
 A forced-local switch also scrubs `COGNEE_BASE_URL`/`COGNEE_API_KEY` from the process environment, so the per-prompt recall/remember calls and every spawned worker resolve the same local endpoint — not just `SessionStart`. A forced-cloud switch with no URL configured never boots the local server; the connection attempt fails visibly instead (status + doctor).
+
+**Self-hosted deployments on loopback:** when the configured URL is a loopback address (`127.0.0.1`, `localhost`) and the server is down at session start, the plugin normally boots its embedded local server on that port. If the URL actually belongs to an externally managed deployment (docker compose stack, systemd service), set `COGNEE_MANAGED_ENDPOINT=true`: an outage then makes `SessionStart` report **Cognee Memory OFFLINE** loudly instead of silently booting an unrelated fallback instance over the deployment's port.
 
 At hook runtime:
 - hooks resolve the endpoint from env, with localhost as the default
@@ -337,7 +341,7 @@ A **failed** attempt arms the same window as a **backoff**: if the submit timed 
 |---|---|---|
 | `COGNEE_IDLE_POLL` | `10` | Poll interval in seconds |
 | `COGNEE_IDLE_THRESHOLD` | `60` | Seconds of inactivity before idle improve fires |
-| `COGNEE_IMPROVE_COOLDOWN` | `600` | Minimum seconds between automatic (idle/auto) improves of one session; persisted per session |
+| `COGNEE_IMPROVE_COOLDOWN` | `1800` | Minimum seconds between automatic (idle/auto) improves of one session; persisted per session |
 | `COGNEE_AUTO_IMPROVE_EVERY` | `150` | Stored tool calls/stops between automatic improves (`0` disables) |
 | `COGNEE_IMPROVE_SUBMIT_TIMEOUT` | `420` | Read timeout for the improve POST (agent-context extraction and distillation run inside the request) |
 
@@ -429,7 +433,7 @@ In local mode the plugin also surfaces `LLM_API_KEY` problems (the key the local
 
 Both verdicts come from a single authority: the background idle watcher (off the prompt path). It resolves the key exactly as the server does — Cognee's own config, so a key in `LLM_API_KEY`, a `.env`, or Cognee's config file all count — and validates it with one tiny `max_tokens=1` call through the same LLM stack Cognee uses, making it **provider-agnostic**. Only `401`/`403` counts as a key failure: providers authenticate before validating anything else, so any other response (including the `400` reasoning models return when one token is too few to finish a message) proves the key works, while a transport failure with no HTTP status is inconclusive and leaves the previous verdict alone. It runs once per idle-watcher launch — at session start, and again on any prompt that finds no live watcher — never more often than once per `COGNEE_LLM_CHECK_INTERVAL` seconds (default 300); there is no periodic timer. The verdict clears once the key checks out and expires after 30 minutes, so one left behind by an ended session never lingers.
 
-**Per-terminal status.** Every signal answers *for this session*, not for the machine — terminals legitimately disagree (one shell exported `LLM_API_KEY`, another didn't; two hold different `COGNEE_API_KEY`s). Each writer keeps a machine-wide marker (`server-ready.json`, `llm-state.json`) as **coordination** state — it gates recall and is shared with the Claude Code plugin, since both talk to one server — plus a per-session copy under `conn-state/<session_key>.json` and `llm-state/<session_key>.json` as the **display** state the status reads. Your own record wins, except that a fresher **server-wide** failure in the shared marker takes precedence — `unreachable` or `server_error`, since the server is shared. `incorrect_cognee_api_key` is not propagated: it describes the other session's credential, not the server. A fresher shared `ready` does not clear your own failure either. With no record of your own, the shared marker counts only when unattributed; another session's record is ignored and no glyph is shown. Local mode only; disable with `COGNEE_LLM_KEY_CHECK=false`.
+**Per-terminal status.** Every signal answers *for this session*, not for the machine — terminals legitimately disagree (one shell exported `LLM_API_KEY`, another didn't; two hold different `COGNEE_API_KEY`s). Each writer keeps a machine-wide marker (`server-ready.json`, `llm-state.json`) as **coordination** state — it gates recall and is shared with the Claude Code plugin, since both talk to one server — plus a per-session copy under `conn-state/<session_key>.json` and `llm-state/<session_key>.json` as the **display** state the status reads. Your own record wins, except that a fresher **server-wide** failure in the shared marker takes precedence — `unreachable` or `server_error`, since the server is shared. `incorrect_cognee_api_key` is not propagated: it describes the other session's credential, not the server. A fresher shared `ready` does not clear your own failure either. With no record of your own, the shared marker counts only when unattributed; another session's record is ignored and no glyph is shown. Local mode only, and only for a server the plugin started: a docker or systemd cognee on a loopback URL reads its own key, so the check is skipped when `COGNEE_MANAGED_ENDPOINT` is set or when a server answers on the port without the plugin's pidfile. Disable with `COGNEE_LLM_KEY_CHECK=false`.
 
 **Internal variables — do not set these.** A few `COGNEE_*` names in the environment
 are the plugin's own inter-process plumbing, written by one hook and read back by the
@@ -605,7 +609,7 @@ Keys are letters, digits, and underscores. Values are taken literally — no `$V
 
 **Remove a variable** — delete (or comment out) its line in the editor. To switch modes you usually don't need to remove anything: keep both modes' variables in the file and export the switch instead — `export COGNEE_BACKEND=local` (see [Which mode wins](#which-mode-wins-and-how-to-switch)). Remove the `COGNEE_BASE_URL` line only when you want local to become the permanent default for every terminal.
 
-**Apply and verify** — the file is read at session start, so changes take effect on the next `codex` launch. If a value seems to be ignored, check whether the same variable is `export`ed in your shell: real exports always win over the file. The doctor's **Env File** row lists which keys the file defines and flags any that a shell export is overriding.
+**Apply and verify** — changes take effect on the next `codex` launch: the session registers on its server at start. Hooks re-read the file in every process, so a `COGNEE_BASE_URL` edited mid-session is detected: the next prompt shows a one-time notice naming the old and new server, and a new session applies the change. If a value seems to be ignored, check whether the same variable is `export`ed in your shell: real exports always win over the file. The doctor's **Env File** row lists which keys the file defines and flags any that a shell export is overriding.
 
 | Key | Env var(s) | Default | Notes |
 |---|---|---|---|
@@ -614,6 +618,7 @@ Keys are letters, digits, and underscores. Values are taken literally — no `$V
 | `session_strategy` | `COGNEE_SESSION_STRATEGY` | `per-directory` | `per-directory`, `git-branch`, `static` |
 | `session_prefix` | `COGNEE_SESSION_PREFIX` | `codex` | Prefix for auto-generated session IDs |
 | `base_url` | `COGNEE_BASE_URL` | unset | Set to enable managed endpoint mode |
+| `managed_endpoint` | `COGNEE_MANAGED_ENDPOINT` | unset | `true` = the URL is an externally managed deployment: never boot a local fallback on its port; outages fail loudly |
 | `api_key` | `COGNEE_API_KEY` | unset | API key; auto-minted if absent in local mode |
 | mode switch | `COGNEE_BACKEND` | unset | `local` or `cloud` — pins the terminal's mode, overriding the URL rule; flips the Codex **and** Claude Code plugins |
 | plugin-only mode switch | `COGNEE_CODEX_BACKEND` | unset | Same, for this plugin only; beats `COGNEE_BACKEND` |
@@ -621,9 +626,22 @@ Keys are letters, digits, and underscores. Values are taken literally — no `$V
 | local LLM | `LLM_API_KEY`, `LLM_MODEL` | unset | Required for local mode runtime |
 | idle watcher poll | `COGNEE_IDLE_POLL` | `10` | Idle watcher poll interval in seconds |
 | idle watcher threshold | `COGNEE_IDLE_THRESHOLD` | `60` | Seconds of inactivity before idle improve fires |
-| improve cooldown | `COGNEE_IMPROVE_COOLDOWN` | `600` | Minimum seconds between automatic (idle/auto) improves of one session |
+| improve cooldown | `COGNEE_IMPROVE_COOLDOWN` | `1800` | Minimum seconds between automatic (idle/auto) improves of one session |
 | auto-improve threshold | `COGNEE_AUTO_IMPROVE_EVERY` | `150` | Stored tool calls/stops between automatic improves (`0` disables) |
 | improve submit timeout | `COGNEE_IMPROVE_SUBMIT_TIMEOUT` | `420` | Read timeout for the improve POST |
+| recall minimum prompt length | `COGNEE_RECALL_MIN_PROMPT_CHARS` | `5` | Prompts shorter than this (surrounding whitespace not counted) skip the per-prompt recall. Values below `5` or non-numeric fall back to `5`. Capture is unaffected. |
+
+### Per-operation timeouts
+
+Each operation has its own client timeout, tunable independently (all in seconds):
+
+| Env var | Default | Effect |
+|---|---|---|
+| `COGNEE_RECALL_BUDGET` | `12` | Whole-recall deadline for the per-prompt lookup; a scope that overruns contributes no hits |
+| `COGNEE_RECALL_TIMEOUT` | `120` | Client timeout for an explicit search (`cognee-search`); the per-prompt lookup uses `COGNEE_RECALL_BUDGET` instead |
+| `COGNEE_REMEMBER_TIMEOUT` | `120` | Client timeout for the explicit remember submit POST; with `COGNEE_REMEMBER_BACKGROUND` on (the default) it returns once the work is queued |
+| `COGNEE_REGISTER_TIMEOUT` | `15` | Client timeout for the session register call (session start and dataset switch) |
+| `COGNEE_REACHABLE_TIMEOUT` | `2` | Client timeout for the `/health` probe that gates a session sync; raise it for a backend whose `/health` is slow, or every sync is skipped as unreachable |
 
 ## Troubleshooting
 
@@ -691,6 +709,19 @@ The setting is pinned for the session, including buffered writes and detached
 improve workers. The backend must expose `node_set` on typed QA/trace entries and
 preserve it through improve. Older backends leave capture queued with an explicit
 `project_memory_prepared` error instead of silently losing the tags.
+
+When a session names a project, **graph recall is scoped to it**: every prompt's
+graph lookup sends `node_name=[<project>, <shared sets>]` (OR-joined), so other
+projects' documents and sessions stop crowding the hits. Session and trace
+recall are keyed by session and stay unfiltered, and the code lane is never
+filtered. Scoping needs nothing new from the backend, so a recall-only project
+name works where capture tagging is not available yet.
+
+| Env var | Default | Effect |
+|---|---|---|
+| `COGNEE_RECALL_PROJECT_NODE_SET` | unset | Names the project for **recall only**, without tagging capture. `COGNEE_PROJECT_NODE_SET` wins when both are set; `auto`, `off` and blank are ignored. |
+| `COGNEE_RECALL_SHARED_NODE_SETS` | `global,user_context` | Comma-separated node sets every project may read. `user_context` keeps what `cognee-remember` saved about you (preferences, facts) recallable in every project. |
+| `COGNEE_RECALL_PROJECT_SCOPE` | `true` | Set `false` to keep project tagging on capture but leave recall unfiltered. |
 
 `COGNEE_SESSION_COMPANION_DATASET=true` asks the backend to provision
 `<primary>-agent_sessions`. Writes and improve use the companion only after the

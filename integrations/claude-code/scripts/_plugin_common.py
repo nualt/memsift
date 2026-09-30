@@ -10,6 +10,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import math
 import os
 import shutil
 import socket
@@ -1423,9 +1424,13 @@ def _reexec_into_venv() -> None:
     except OSError:
         pass
     os.environ["COGNEE_PLUGIN_IN_VENV"] = "1"
+    # A hook launched through hook_runner.py re-execs through it too, so a crash
+    # under the venv interpreter is still logged instead of exiting 1.
+    runner = os.environ.get("COGNEE_HOOK_RUNNER", "")
+    prefix = [runner] if runner and os.path.isfile(runner) else []
     try:
         # execv inherits os.environ (incl. the loop guard just set above).
-        os.execv(str(vpy), [str(vpy), *sys.argv])
+        os.execv(str(vpy), [str(vpy), *prefix, *sys.argv])
     except OSError as exc:
         # Better to run degraded under the host interpreter than to die.
         hook_log("venv_reexec_failed", {"error": str(exc)[:200]})
@@ -1456,6 +1461,20 @@ def notify(msg: str) -> None:
             _append_log_line(_ACTIVITY_LOG, f"{ts} {line}")
         except Exception as exc:
             hook_log("activity_log_write_failed", {"error": str(exc)[:200]})
+
+
+OBSERVER_CHILD_ENV = "COGNEE_OBSERVER_CHILD"
+
+
+def is_observer_child() -> bool:
+    """True inside a ``claude -p`` process the observer shim spawned.
+
+    The shim runs Claude Code headless to serve the local server's LLM calls
+    (``--safe-mode`` already disables hooks there). If that child ever ran our
+    hooks anyway, each would talk to the same server whose cognify is waiting on
+    the child — a loop. Every hook checks this first and exits silently.
+    """
+    return bool(os.environ.get(OBSERVER_CHILD_ENV, "").strip())
 
 
 @contextmanager
@@ -1801,7 +1820,7 @@ def read_turn_count(session_id: str) -> int:
         return 0
 
 
-IMPROVE_COOLDOWN_DEFAULT_SECONDS = 600.0
+IMPROVE_COOLDOWN_DEFAULT_SECONDS = 1800.0
 
 
 def improve_cooldown_seconds() -> float:
@@ -2663,6 +2682,19 @@ def plugin_identity_mode(config: dict | None = None) -> str:
     raise ValueError("COGNEE_PLUGIN_IDENTITY must be auto, true, or false")
 
 
+def managed_endpoint_enabled(config: dict | None = None) -> bool:
+    """True when ``base_url`` is an externally managed deployment (docker stack,
+    systemd service, ...) that happens to live on a loopback address. The plugin
+    must then NEVER boot its own server on that port or configure one — a
+    fallback would shadow the real deployment with a second, unrelated brain.
+    Opt in with ``COGNEE_MANAGED_ENDPOINT=true`` (env, ``~/.cognee/.env`` or the
+    ``managed_endpoint`` config key); outages then fail loudly instead."""
+    val = os.environ.get("COGNEE_MANAGED_ENDPOINT", "") or str(
+        (config or {}).get("managed_endpoint", "") or ""
+    )
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
 def _principal_fingerprint(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest() if key else ""
 
@@ -2880,20 +2912,38 @@ def _server_pidfile(port: int) -> Path:
     return _SHARED_PLUGIN_ROOT / f"server-{int(port)}.pid"
 
 
-def write_server_pidfile(port: int, pid: int, version: str = "") -> None:
-    """Record the uvicorn server spawned on ``port`` (presence evidence)."""
+def write_server_pidfile(
+    port: int, pid: int, version: str = "", llm_observer: Optional[bool] = None
+) -> None:
+    """Record the uvicorn server spawned on ``port`` (presence evidence).
+
+    ``llm_observer`` records whether the server was spawned with the Claude
+    observer's environment: a server keeps the LLM config it booted with, so a
+    later session joining it must learn which one that was, not assume its own.
+    """
+    record = {
+        "pid": int(pid),
+        "port": int(port),
+        "version": version,
+        "created_at": datetime.now(timezone.utc).timestamp(),
+    }
+    if llm_observer is not None:
+        record["llm_observer"] = bool(llm_observer)
     try:
-        _write_json_file(
-            _server_pidfile(port),
-            {
-                "pid": int(pid),
-                "port": int(port),
-                "version": version,
-                "created_at": datetime.now(timezone.utc).timestamp(),
-            },
-        )
+        _write_json_file(_server_pidfile(port), record)
     except Exception as exc:
         hook_log("server_pidfile_write_failed", {"error": str(exc)[:200]})
+
+
+def live_server_record(port: int) -> dict:
+    """The pidfile record of the live server on ``port``, or {} (none / stale)."""
+    if not _live_server_pid(port):
+        return {}
+    try:
+        record = json.loads(_server_pidfile(port).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return record if isinstance(record, dict) else {}
 
 
 def clear_server_pidfile(port: int) -> None:
@@ -3274,6 +3324,97 @@ def same_connection_target(service_url: str, prior_url: str) -> bool:
     return not (active and marked and active != marked)
 
 
+def _url_identity(url: str) -> str:
+    """``scheme://host:port/path`` with loopback aliases folded, for equality only."""
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = "http://" + raw
+    parts = urllib.parse.urlparse(raw)
+    host = (parts.hostname or "").lower()
+    if host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        host = "localhost"
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    return f"{parts.scheme.lower()}://{host}:{port}{parts.path.rstrip('/')}"
+
+
+def set_launch_base_url(host_key: str, base_url: str) -> None:
+    """Record the server this launch registered on. Called by every SessionStart.
+
+    Hooks re-read ``~/.cognee/.env`` in every process, so an edit made during a
+    session reaches later hooks while the session stays registered on the server
+    SessionStart connected to. ``base_url_change_notice`` compares against this.
+    """
+    host_key = _sanitize_session_key(host_key) or get_session_key()
+    base_url = str(base_url or "").strip()
+    if not host_key or not base_url:
+        return
+    from _file_lock import file_lock
+
+    lock_path = _session_map_path(host_key).with_suffix(".switch.lock")
+    with file_lock(lock_path, timeout=_float_env("COGNEE_SWITCH_LOCK_TIMEOUT", 5.0)) as held:
+        if not held:
+            return
+        rec = _read_map_record(host_key)
+        if not rec:
+            return
+        if rec.get("base_url") == base_url and "base_url_notice" not in rec:
+            return
+        rec["base_url"] = base_url
+        rec.pop("base_url_notice", None)
+        _write_map_record(host_key, rec)
+
+
+def base_url_change_notice(host_key: str = "") -> str:
+    """A one-time notice when this hook resolves a different server than the launch.
+
+    Returns "" when the URL is unchanged, unknown, or the change was already
+    reported for this URL. Only detects and reports: the session keeps working
+    against whatever the hook resolves, and a new session applies the change.
+    """
+    host_key = _sanitize_session_key(host_key) or get_session_key()
+    rec = _read_map_record(host_key)
+    launch_url = str(rec.get("base_url") or "").strip()
+    current_url = _normalize_service_url(_local_api_url())
+    if not launch_url or not current_url:
+        return ""
+    if _url_identity(launch_url) == _url_identity(current_url):
+        return ""
+    if rec.get("base_url_notice") == current_url:
+        return ""
+    hook_log("base_url_changed_mid_session", {"launch": launch_url, "now": current_url})
+    rec["base_url_notice"] = current_url
+    _write_map_record(host_key, rec)
+    return (
+        f"Cognee: COGNEE_BASE_URL changed since this session started ({launch_url} -> "
+        f"{current_url}). This session is registered on {launch_url}; start a new "
+        "session for the change to take effect."
+    )
+
+
+def with_base_url_notice(output: dict | None, hook_event: str) -> dict | None:
+    """Add ``base_url_change_notice`` to a hook's output (user- and model-visible)."""
+    try:
+        notice = base_url_change_notice()
+    except Exception as exc:
+        hook_log("base_url_notice_failed", {"error": str(exc)[:200]})
+        return output
+    if not notice:
+        return output
+    result = dict(output or {})
+    hso = dict(result.get("hookSpecificOutput") or {})
+    hso.setdefault("hookEventName", hook_event)
+    context = str(hso.get("additionalContext") or "")
+    hso["additionalContext"] = notice + ("\n\n" + context if context else "")
+    if "systemMessage" in hso:
+        hso["systemMessage"] = notice + "\n" + str(hso["systemMessage"] or "")
+    result["hookSpecificOutput"] = hso
+    top = str(result.get("systemMessage") or "")
+    result["systemMessage"] = notice + ("\n" + top if top else "")
+    return result
+
+
 def read_connection_state() -> dict:
     """Return the connection marker dict (with 'state'), or {} — for hook use.
 
@@ -3360,7 +3501,7 @@ _LLM_STATE_MARKER = _PLUGIN_DIR / "llm-state.json"
 LLM_STATES = ("ok", "not_set", "auth_failed")
 
 
-def write_llm_state(state: str, detail: str = "") -> None:
+def write_llm_state(state: str, detail: str = "", reason: str = "") -> None:
     """Record LLM-key health (local mode). Plain atomic overwrite; never raises.
 
     Stamped with the writing session's host key: the key is resolved from the
@@ -3369,6 +3510,10 @@ def write_llm_state(state: str, detail: str = "") -> None:
     land in the machine-wide marker and put a false ✕ on every other session's
     status line (observed: one keyless launch clobbering a validated "ok").
     Readers show a verdict only when it is theirs, or unattributable.
+
+    ``reason`` is an optional status-line label overriding the default
+    ``incorrect_llm_api_key`` for a failed state — e.g. ``claude_not_logged_in``
+    when the LLM is the Claude observer and no key is involved at all.
     """
     if state not in LLM_STATES:
         state = "ok"
@@ -3380,6 +3525,8 @@ def write_llm_state(state: str, detail: str = "") -> None:
             "session_key": get_session_key(),
             "detail": str(detail or "")[:200],
         }
+        if reason:
+            payload["reason"] = str(reason)[:64]
         tmp = _LLM_STATE_MARKER.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload), encoding="utf-8")
         os.replace(tmp, _LLM_STATE_MARKER)
@@ -3410,13 +3557,66 @@ def read_llm_state() -> dict:
 
 
 def clear_llm_state() -> None:
-    """Remove the LLM-state marker (e.g. a key is present and will be validated)."""
+    """Withdraw this session's LLM-key verdict, so the status line shows none.
+
+    Removes the per-session copy, and the shared marker only when it is ours or
+    unattributed: another session's verdict is its own to keep or withdraw.
+    """
+    key = get_session_key()
+    if _session_key_path_safe(key):
+        try:
+            (_LLM_STATE_DIR / f"{key}.json").unlink()
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            hook_log("llm_state_clear_failed", {"error": str(exc)[:200]})
     try:
+        shared = json.loads(_LLM_STATE_MARKER.read_text(encoding="utf-8"))
+        owner = str(shared.get("session_key") or "") if isinstance(shared, dict) else ""
+        if owner and owner != key:
+            return
         _LLM_STATE_MARKER.unlink()
     except FileNotFoundError:
         return
     except Exception as exc:
         hook_log("llm_state_clear_failed", {"error": str(exc)[:200]})
+
+
+def llm_key_owner(config: dict | None = None) -> str:
+    """Why the server at ``base_url`` does not use this plugin's LLM key, or ""
+    when it does (the plugin started it, so the watcher can validate the key).
+
+    A loopback URL alone does not make the server ours: a docker or systemd
+    cognee published on 127.0.0.1 reads its key from its own environment, and
+    checking ours put a false ✕ (incorrect_llm_api_key) on the bar (#371, #377).
+      "managed_endpoint" — COGNEE_MANAGED_ENDPOINT says the deployment is not ours
+      "unowned_server"   — a server answers on the port with no plugin pidfile.
+                           The pidfile is written at spawn, before the server
+                           binds, so a server the plugin started always has one.
+    Nothing answering (our server still booting, or down) returns "": the
+    plugin is the one that will start it, so the check stays valid.
+    """
+    if managed_endpoint_enabled(config):
+        return "managed_endpoint"
+    base = _normalize_service_url(str((config or {}).get("base_url") or "") or _local_api_url())
+    if not base:
+        return ""
+    if "://" not in base:
+        base = f"http://{base}"
+    try:
+        parsed = urllib.parse.urlsplit(base)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return ""
+    if not _is_loopback_host(parsed.hostname or "localhost"):
+        return ""
+    # Probe first, then read the pidfile: a server of ours that is already
+    # answering wrote its pidfile before it bound, so this order has no race.
+    if probe_health(base, timeout=2.0) != "ready":
+        return ""
+    if _live_server_pid(port):
+        return ""
+    return "unowned_server"
 
 
 def clear_server_ready() -> None:
@@ -4247,6 +4447,44 @@ def urlopen_following_307(req, *, timeout: float, context=None):
     return urllib.request.urlopen(req, timeout=timeout, context=context)
 
 
+_FALSE = {"0", "false", "no", "off"}
+
+
+def recall_node_sets(project_tags: list[str]) -> list[str]:
+    """Node sets the graph recall lane is scoped to, or [] for no scoping.
+
+    Two ways to name the project, in precedence order:
+
+    1. the session's pinned project memory state (COGNEE_PROJECT_NODE_SET),
+       which also tags captured QA and traces, and
+    2. COGNEE_RECALL_PROJECT_NODE_SET, which scopes recall ONLY.
+
+    The second exists because tagging capture needs a backend that accepts
+    node_set on typed entries, while filtering recall needs nothing new: the
+    recall API has always taken node_name. Without it, a user on a backend
+    without typed-entry tagging cannot scope recall at all.
+
+    COGNEE_RECALL_SHARED_NODE_SETS (comma-separated, default
+    "global,user_context") names the sets every project may read. user_context
+    is where cognee-remember files the user's own preferences and facts, which
+    belong to the user rather than to one project, so they stay recallable in
+    every project. COGNEE_RECALL_PROJECT_SCOPE=false keeps capture tagging
+    while leaving recall unfiltered.
+    """
+    tags = [str(t).strip() for t in project_tags if str(t).strip()]
+    if not tags:
+        direct = os.environ.get("COGNEE_RECALL_PROJECT_NODE_SET", "").strip()
+        if direct and direct.lower() not in _FALSE and direct.lower() != "auto":
+            tags = [direct]
+    if not tags:
+        return []
+    if os.environ.get("COGNEE_RECALL_PROJECT_SCOPE", "true").strip().lower() in _FALSE:
+        return []
+    shared = os.environ.get("COGNEE_RECALL_SHARED_NODE_SETS", "global,user_context")
+    extra = [t.strip() for t in shared.split(",") if t.strip()]
+    return list(dict.fromkeys(tags + extra))
+
+
 def _json_http_request(
     path: str,
     payload: dict | None = None,
@@ -4291,6 +4529,17 @@ def _float_env(name: str, default: float) -> float:
         return float(raw) if raw else default
     except (TypeError, ValueError):
         return default
+
+
+def positive_float_env(name: str, default: float) -> float:
+    """A timeout from the environment: only a finite value > 0 is honoured.
+
+    ``_float_env`` passes 0, negatives, inf and nan through, which a socket
+    timeout turns into an immediate failure or an error; those fall back to
+    ``default`` here.
+    """
+    value = _float_env(name, default)
+    return value if math.isfinite(value) and value > 0 else default
 
 
 def elapsed_ms(start: float) -> int:
@@ -4527,8 +4776,11 @@ def register_agent_via_http(
     session_id: str = "",
     dataset_names: list[str] | None = None,
     dataset_ids: list[str] | None = None,
-    timeout: float = 15.0,
+    timeout: float | None = None,
 ) -> tuple[bool, dict]:
+    if timeout is None:
+        # Tunable independently of recall/remember; 15s is the historical value.
+        timeout = positive_float_env("COGNEE_REGISTER_TIMEOUT", 15.0)
     payload = {
         "agent_session_name": agent_session_name,
         # Self-declared connection type (the server keeps a free-form registry;
@@ -4662,6 +4914,15 @@ def recall_via_http(
     if context_profile:
         payload["context_profile"] = context_profile
 
+    # A session that names a project scopes its graph recall to that node set
+    # plus the shared sets (default "global,user_context"), OR-joined, so other
+    # projects' documents and sessions stop filling the graph lane. Session and
+    # trace scopes are keyed by session already and stay unfiltered.
+    node_name = recall_node_sets(target.get("node_set") or [])
+    if node_name and "graph" in scope:
+        payload["node_name"] = node_name
+        payload["node_name_filter_operator"] = "OR"
+
     def fetch_scopes():
         started = time.monotonic()
         result = _json_http_request("/api/v1/recall", payload, timeout=timeout)
@@ -4682,7 +4943,15 @@ def recall_via_http(
     return bounded_call(fetch_scopes, timeout)
 
 
-def _backend_reachable(base_url: str, timeout: float = 1.5) -> bool:
+# Budget for the /health probe that gates a session sync. Some cloud tenants
+# answer /health in several seconds, and a probe that gives up first records the
+# sync as "unreachable" and sends nothing (#443); COGNEE_REACHABLE_TIMEOUT raises it.
+REACHABLE_TIMEOUT_DEFAULT_SECONDS = 2.0
+
+
+def _backend_reachable(base_url: str, timeout: float | None = None) -> bool:
+    if timeout is None:
+        timeout = positive_float_env("COGNEE_REACHABLE_TIMEOUT", REACHABLE_TIMEOUT_DEFAULT_SECONDS)
     try:
         with urllib.request.urlopen(
             f"{base_url.rstrip('/')}/health", timeout=timeout, context=_https_context()
