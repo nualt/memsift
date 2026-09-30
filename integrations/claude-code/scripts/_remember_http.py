@@ -20,6 +20,7 @@ Diagnostics also go to stderr so the caller can surface them.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -54,6 +55,17 @@ def _multipart_body(fields, files):
         chunks.append(b"\r\n")
     chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
     return b"".join(chunks), boundary
+
+
+def text_upload_name(node_set, content):
+    """Upload filename for inline remember text: ``{node_set}-{sha256[:32]}.txt``.
+
+    128 bits of the digest: the server's own content identity is an md5, so a
+    longer suffix would not make two texts any more distinct than it already
+    treats them.
+    """
+    data = content.encode("utf-8") if isinstance(content, str) else content
+    return f"{node_set or 'content'}-{hashlib.sha256(data).hexdigest()[:32]}.txt"
 
 
 def _error(status, message):
@@ -196,8 +208,15 @@ def do_remember(
     memory that is the canonical parent-owned dataset; by name, an agent would
     silently create and write its own empty copy instead.
 
+    Inline text is uploaded as ``{node_set}-{sha256[:32]}.txt``. cognee >= 1.6.0
+    treats an upload's filename as its identity within the dataset and refuses
+    (409) a known name arriving with different content, so a fixed name would
+    reject every remember after the first per node_set (#444). Hashing the
+    content keeps each distinct text distinct, while re-remembering the same
+    text reuses the name and stays the server's content-hash dedup no-op.
+
     With ``file_path``, the file's bytes are uploaded under its REAL basename
-    instead of the synthetic ``{node_set}.txt``. The filename extension is the
+    instead of the synthetic text name. The filename extension is the
     server's loader-routing signal: a ``.py``/``.ts``/... upload rides the
     zero-LLM code-graph route (cognify CODE route, cognee >= 1.5.x), while the
     ``.txt`` rename would silently ingest code as prose through the LLM
@@ -205,14 +224,17 @@ def do_remember(
     limits on large sources.
     """
     url = service_url.rstrip("/") + "/api/v1/remember"
-    filename = f"{node_set or 'content'}.txt"
     if file_path:
         try:
             with open(file_path, "rb") as fh:
                 content = fh.read()
         except OSError as e:
             return _error(0, "cannot read %s: %s" % (file_path, str(e)[:160]))
-        filename = os.path.basename(str(file_path).rstrip("/")) or filename
+    if isinstance(content, str):
+        content = content.encode("utf-8")
+    # Hash only when the name needs it: a --file upload keeps its basename.
+    filename = os.path.basename(str(file_path).rstrip("/")) if file_path else ""
+    filename = filename or text_upload_name(node_set, content)
     from _dataset_access import dataset_id as parse_dataset_id
 
     # The explicit UUID (shared memory's canonical dataset) wins; otherwise a
@@ -225,7 +247,7 @@ def do_remember(
         fields["datasetName"] = dataset
     body, boundary = _multipart_body(
         fields,
-        [("data", filename, content.encode("utf-8") if isinstance(content, str) else content)],
+        [("data", filename, content)],
     )
     headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
     # Always attach the key when present: cognee >=1.2.2 enforces auth on its

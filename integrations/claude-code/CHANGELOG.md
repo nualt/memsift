@@ -10,6 +10,42 @@ Code only offers an update when that string changes. Tag releases as
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.6.3]
+
+### Fixed
+- **No false `✕ (incorrect_llm_api_key)` for a server the plugin did not start**
+  ([#371](https://github.com/topoteretes/cognee-integrations/issues/371),
+  [#377](https://github.com/topoteretes/cognee-integrations/issues/377)). The idle
+  watcher validated the LLM key for every loopback `COGNEE_BASE_URL`, but a docker or
+  systemd cognee published on `127.0.0.1` reads its key from its own environment. With
+  no key in the plugin's environment the check wrote `not_set`, and the status line
+  showed a permanent ✕ while the server answered LLM calls normally. The check now
+  runs only against a server the plugin started. It is skipped, and any earlier
+  verdict withdrawn, when `COGNEE_MANAGED_ENDPOINT` is set, or when a server answers on the port without the
+  plugin's pidfile. When nothing answers yet (the plugin's own server still booting),
+  the check runs as before.
+- **Explicit remember no longer loses every save after the first on cognee >= 1.6.0**
+  ([#444](https://github.com/topoteretes/cognee-integrations/issues/444)). Inline
+  text was uploaded as `{node_set}.txt`, and cognee 1.6.0 treats an upload's
+  filename as its identity in the dataset: a known name arriving with different
+  content is refused with a 409. So after the first `user_context` remember in a
+  dataset, every later one was refused, and with the default background write the
+  failure only reached the server log. Inline text now uploads as
+  `{node_set}-{sha256[:32]}.txt`: distinct texts get distinct names, and the same
+  text reuses its name, which the server's content-hash dedup keeps a no-op.
+  `--file` uploads keep their real basename, since the extension selects the
+  server-side loader.
+  A background remember that the server refuses for another reason can still
+  report `queryable: true`; that half of #444 is still open.
+- **Session sync no longer skips a backend whose `/health` is slow**
+  ([#443](https://github.com/topoteretes/cognee-integrations/issues/443)). Every
+  session sync first checks the backend with a `/health` probe that gave up after a
+  hard-coded 1.5s, so on a tenant slower than that each sync was recorded as
+  `unreachable`, nothing was submitted, and the replay backlog never drained, while
+  `cognee-doctor`, which waits 5s, reported the same backend as reachable. The probe
+  now waits 2s by default and reads `COGNEE_REACHABLE_TIMEOUT` (seconds); `0`,
+  negative, non-finite and unparsable values fall back to the default.
+
 ## [1.6.2]
 
 ### Added
