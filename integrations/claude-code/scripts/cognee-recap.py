@@ -53,7 +53,7 @@ import urllib.request
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePath
 
 sys.path.insert(0, os.path.dirname(__file__))
 from _plugin_common import (  # noqa: E402
@@ -451,7 +451,12 @@ def project_of(qas: list[dict], fallback_cwd: str = "") -> str:
 
 
 def _under(path: str, roots: tuple[str, ...]) -> bool:
-    return any(path == r or path.startswith(r.rstrip("/") + "/") for r in roots if r)
+    """Lexical containment (no filesystem access): both separators, Windows case rules."""
+    try:
+        target = PurePath(path)
+        return any(target.is_relative_to(PurePath(r)) for r in roots if r)
+    except ValueError:
+        return False
 
 
 def _git_root(path: str, roots: tuple[str, ...]) -> str:
@@ -461,7 +466,7 @@ def _git_root(path: str, roots: tuple[str, ...]) -> str:
     server's trace records, and a recap must not stat whatever a record names
     (a network mount that hangs, a device, a path with a NUL in it).
     """
-    if not path.startswith("/") or not _under(path, roots):
+    if not os.path.isabs(path) or not _under(path, roots):
         return ""
     try:
         current = Path(path)
@@ -493,7 +498,7 @@ def project_from_edits(edited: list[str], roots: tuple[str, ...] = ()) -> str:
     launched from. The most common git root wins.
     """
     roots = roots or edit_roots()
-    counts = Counter(_git_root(p, roots) for p in edited if p and not p.startswith("/tmp"))
+    counts = Counter(_git_root(p, roots) for p in edited if p)
     counts.pop("", None)
     if counts:
         return counts.most_common(1)[0][0]
