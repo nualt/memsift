@@ -12,6 +12,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [1.7.2]
 
+### Changed
+- **Bundled cognee is 1.6.1** (was 1.6.0; `_PINNED_COGNEE_VERSION`). The shared
+  `~/.cognee-plugin/venv` is upgraded on the next cold boot, which runs that
+  release's migrations. 1.6.1 is a patch release: chunks carry their document's
+  external metadata into hybrid retrieval, provenance is scoped to the caller's
+  readable datasets, and `dlt` is now a core dependency, which the venv install
+  pulls in on its own. The `postgres-binary`, `neo4j`, `fastembed` and `ollama`
+  extras the plugin probes for are unchanged in 1.6.1.
+
 ### Fixed
 - **No false `✕ (incorrect_llm_api_key)` for a server the plugin did not start**
   ([#371](https://github.com/topoteretes/cognee-integrations/issues/371),
