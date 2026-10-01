@@ -687,7 +687,10 @@ curl -sS http://localhost:8011/health
 The plugin supports the same automatic capture policy as Claude Code: set
 `COGNEE_CAPTURE=false` in the host environment or `~/.cognee/.env` to keep recall
 and explicit remember while stopping prompt, answer and trace capture and buffered
-replay. `COGNEE_CAPTURE_TOOLS` is a pipe-separated allowlist of tool names/globs.
+replay. `COGNEE_CAPTURE_TOOLS` is a pipe-separated allowlist of tool names, globs or
+`Tool(prefix:*)` command matchers (`Bash(git:*)` keeps `git status`, drops `rg foo`);
+`COGNEE_CAPTURE_DENY_TOOLS` uses the same syntax to exclude calls after the allowlist.
+A pattern that is not understood turns capture off and is reported on the next prompt.
 `COGNEE_CAPTURE_DENY_PATHS` extends the default credential/private-key path patterns.
 `COGNEE_CAPTURE_REDACT=true` is the default; common secrets are redacted before
 truncation and storage. `COGNEE_CAPTURE_REDACT_PATTERNS` accepts a JSON array of
