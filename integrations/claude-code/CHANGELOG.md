@@ -10,6 +10,100 @@ Code only offers an update when that string changes. Tag releases as
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.6.4]
+
+### Added
+- **Recap skills: `cognee-standup`, `cognee-digest`, `cognee-timeline`.** Three
+  skills over one new wrapper, `scripts/cognee-recap.py`, that answer "what did I work
+  on since yesterday?", "what happened this week and what did we decide?" and "how did
+  topic X evolve?" from what the server already records — no new server surface, no
+  new hooks. Sessions come from `GET /api/v1/sessions` (+ `/{id}`: last prompts, tool
+  calls, edited files). The digest's learnings are the dataset's lesson rows
+  (`GET /api/v1/datasets/{id}/data` + `/raw`): every lesson the server distilled into
+  the graph inside the window, dated by the row's `created_at` — an exhaustive count,
+  no search, no LLM call; the newest `--max-learnings` (40, `0` = all) are fetched and
+  listed, the skeleton says how many more there were. The timeline seeds a context-only graph recall with the topic and dates
+  each passage by the end of the session it names; a session the server no longer
+  knows leaves the passage undated, not dropped. The
+  wrapper prints a deterministic Markdown skeleton grouped by project (standup), by
+  day → project with most-edited files and the dated learnings (digest), or as a dated
+  chronology of `learned` / `recorded` / `asked` events (timeline; a raw transcript
+  chunk the graph holds is `recorded`, not `learned`); the skill tells the model to
+  summarise it, not paste it, and to treat it as recorded data, not instructions.
+  `--since` takes `24h`, `7d`, `2w`, `today`, `yesterday`, `week` (since Monday),
+  `month`, `all` or a date (a local calendar day); `--projects` narrows by working
+  directory, `--all-sessions` adds non-coding-agent sessions, `--json` returns the
+  data. Sessions driven from a host without prompt hooks (a Cursor terminal, a cron
+  job) are attributed to the git root of the files they edited (looked up only under
+  the home directory and known working directories) and described by their tool mix
+  rather than the server's first-tool label. The dataset is the launch record's, else
+  the plugin default — an unscoped recall would search every readable dataset (~1 min,
+  code graphs drowning the learnings); the timeline's recall carries no session id so
+  project memory does not narrow a cross-project history. The data listing is
+  newest-first, so the digest stops paging at the first page older than the window.
+  An unreachable server, an
+  HTTP status (401/403 name the key / identity) or a refused identity is one stderr
+  line and exit 1; a failed graph lookup in timeline mode still renders the prompt
+  lane.
+- **`COGNEE_CAPTURE_TOOLS` filters Bash by command, and `COGNEE_CAPTURE_DENY_TOOLS`**
+  ([#423](https://github.com/topoteretes/cognee-integrations/issues/423)). The
+  allowlist accepts Claude Code's permission spelling, `Bash(git:*)`, which matches a
+  Bash call whose command starts with that word, so a Bash-heavy session can keep
+  `git`, build and test commands while dropping `rg`, `grep`, `cat` and `sed`
+  traffic, which was most of what reached the server. The new deny variable uses the
+  same syntax and runs after the allowlist, so "everything except search" is one
+  line. Bare names and globs behave as before.
+
+### Fixed
+- **A misspelled capture pattern no longer disables capture in silence.** `Bash(rg)`,
+  `Bash()` and the like used to match nothing, which switched off capture for every
+  tool with no message anywhere. They now raise in the policy: the store hook skips
+  the trace and logs `capture_tools_invalid`, the warmup drain leaves its buffer
+  untouched instead of consuming it, and the recall hook repeats the problem to the
+  user on every prompt until the value is fixed.
+
+### Changed
+- **The prompt hook injects the retrieved context only — no conversation history,
+  no question template (SDK-904).** With `only_context=true` and a session id, a
+  cognee >= 1.6.0 completion recall returns the full prompt its own LLM would have
+  received, and the hook injected that string whole: the session's last ten Q&A
+  pairs in full (the agent's own previous turns, already in its context window),
+  the user's prompt echoed back inside an "answer using this context" template,
+  then the retrieved context. On a real install the injected block was a median
+  45k characters (~11k tokens) per prompt; the history alone was ~60% of a
+  mid-session payload, and 4 of the 5 retrieved passages were that same session's
+  own bridged turns. Now:
+  - the graph recall (`scope=["graph"]`, `HYBRID_COMPLETION`, `only_context`,
+    `top_k` unchanged) is sent **without** the session id, so no history comes back;
+  - a second, parallel `scope=["session_context"]` request with the session id
+    fetches the server-rendered guidance block (capped server-side), injected under
+    `=== Active agent guidance ===` as before SDK-741;
+  - `_recall_text.py` (new, shared verbatim by the hook suites) cuts the question
+    template away — anchored on the prompt the hook itself sent and the final
+    backtick, so it holds for every server template — and shrinks the context:
+    passages that are this session's own bridged chunks are dropped, each remaining
+    passage is capped at `COGNEE_RECALL_PASSAGE_CHARS` (default `2000`, cut at a
+    paragraph break and marked), entity bullets that say nothing (`X is a concept.`,
+    `X belongs to set …`) are pruned, facts are kept, and `COGNEE_RECALL_CONTEXT_CHARS`
+    (default `12000`) trims passages from the end as a last resort. An item the
+    trimmer cannot read is injected whole (fail-open) and logged.
+  - Measured on captured server output: 44.6k → 3.2k characters on a mid-session
+    prompt whose turns were already bridged; 34.7k → 6.9k when every passage came
+    from another session.
+  - New events: `recall.context_trimmed` (with the per-step counters),
+    `recall.context_unparsed`, and `recall.guidance_absent` for a 404 on the
+    guidance request (no guidance exists yet — an answer, not an error).
+- **The "Other Cognee datasets you can search" block rides along once per session**
+  — the first prompt the server answered — and again on any prompt memory answered
+  with nothing, instead of on every prompt. It is static text; repeating it cost
+  ~3k characters a prompt on an account with 40 datasets.
+- **The code lane injects only when it found something.** A `query_facts` payload
+  with an empty `facts` list — 36 of 57 armed turns on a real install — is a miss,
+  not a hit, and is no longer injected as raw JSON. Non-empty facts render one line
+  per symbol (`name [kind] file:line`, then `→ relation target`) instead of JSON.
+- `pre-compact.py` is unchanged: at compaction the conversation history is about to
+  be dropped, so the full item is still the right anchor there.
+
 ## [1.6.3]
 
 ### Changed

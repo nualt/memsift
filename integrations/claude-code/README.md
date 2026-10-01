@@ -294,7 +294,7 @@ so the prompt path never waits on it.
 
 | Env var | Default | Effect |
 |---|---|---|
-| `COGNEE_RECALL_DATASET_HINT` | `on` | Set `off` to stop the per-prompt hook from naming the other datasets. The explicit skill flow is unaffected. |
+| `COGNEE_RECALL_DATASET_HINT` | `on` | Set `off` to stop the prompt hook from naming the other datasets. On, the block is injected once per session (the first prompt the server answered) and again on any prompt memory answered with nothing. The explicit skill flow is unaffected. |
 | `COGNEE_DATASETS_CACHE_TTL` | `300` | Seconds the cached readable-datasets listing is served before one bounded refresh. |
 
 ## Hooks
@@ -361,6 +361,51 @@ Final sync on session end is triggered by the `SessionEnd` detached worker, with
 - `/cognee-memory:cognee-code`
 - `/cognee-memory:cognee-forget`
 - `/cognee-memory:cognee-switch-datasets`
+- `/cognee-memory:cognee-standup`, `/cognee-memory:cognee-digest`,
+  `/cognee-memory:cognee-timeline` — recaps over recorded sessions (below)
+
+## Recaps: standup, digest, timeline
+
+Three skills answer "what did I work on?" from what the server already records —
+no new server surface, no new hooks:
+
+| Skill | Question | Default window |
+|---|---|---|
+| `cognee-standup` | what happened since yesterday, per project; what was left open | `24h` |
+| `cognee-digest` | the week by day and project, most-edited files, every lesson the server distilled into the graph in that window | `7d` |
+| `cognee-timeline <topic>` | how a topic evolved: dated `learned` (distilled lessons), `recorded` (raw graph context) and `asked` (prompts) events | `30d` |
+
+All three run one wrapper, `scripts/cognee-recap.py`, which reads
+`GET /api/v1/sessions` (+ `/{id}` for each session's last prompts, tool calls and
+edited files). The digest's learnings are the dataset's lesson rows
+(`GET /api/v1/datasets/{id}/data` + `/raw`: each distilled lesson is one row tagged
+`session_learnings:<session id>` and stamped `created_at` when it was distilled), so
+the count is exhaustive within the window and dated by the server's clock — no
+search, no LLM call; the newest `--max-learnings` (40) are fetched and listed. The timeline seeds a context-only graph recall with the topic
+and dates each passage by the end of the session it names (one detail call per
+session not already in hand). It prints a deterministic Markdown skeleton; the skill tells
+the model to summarise it and to treat it as recorded data, not instructions.
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cognee-recap.py" standup  --since yesterday
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cognee-recap.py" digest   --since week --projects cognee
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cognee-recap.py" timeline 'dataset switching' --since 2w --json
+```
+
+`--since` takes `24h`, `7d`, `2w`, `today`, `yesterday`, `week` (since Monday),
+`month`, `all` or a date (a local calendar day); windows are by last activity.
+`--projects` keeps sessions whose working directory matches; `--all-sessions` adds
+sessions not from a coding agent (MCP clients, scheduled jobs); `--max-sessions` (25)
+caps the detail fetches; `--max-learnings` (40, `0` = all) caps the graph learnings the
+digest fetches (~0.5 s each on a local server, two in flight); `--json` returns the data. Sessions driven from a host without
+prompt hooks (a Cursor terminal, a cron job) are attributed to the git root of the
+files they edited (looked up only under the home directory and known working
+directories) and described by their tool mix. The dataset is the launch record's (add
+`--session-key <host session id>` when several launches share a directory), else the
+plugin default. The data listing is newest-first, so the digest stops paging at the
+first page older than the window. An unreachable server, an HTTP status (401/403:
+check `COGNEE_API_KEY` / the plugin identity) or a refused identity is one stderr line
+and exit 1.
 
 ## Remember (write) behavior
 
@@ -899,6 +944,8 @@ Each operation has its own client timeout, tunable independently (all in seconds
 | Env var | Default | Effect |
 |---|---|---|
 | `COGNEE_RECALL_BUDGET` | `12` | Whole-recall deadline for the per-prompt lookup; a scope that overruns contributes no hits |
+| `COGNEE_RECALL_PASSAGE_CHARS` | `2000` | Per-passage cap on the retrieved context the prompt hook injects, cut at a paragraph break and marked with how much was cut; `0` disables. Bridged session chunks run 2k–20k chars each |
+| `COGNEE_RECALL_CONTEXT_CHARS` | `12000` | Soft budget for the whole injected memory block; passages are trimmed from the end (lowest ranked first) until it fits, entities and facts never; `0` disables |
 | `COGNEE_RECALL_TIMEOUT` | `120` | Client timeout for an explicit search (`cognee-search`); the per-prompt lookup uses `COGNEE_RECALL_BUDGET` instead |
 | `COGNEE_REMEMBER_TIMEOUT` | `120` | Client timeout for the explicit remember submit POST; with `COGNEE_REMEMBER_BACKGROUND` on (the default) it returns once the work is queued |
 | `COGNEE_REGISTER_TIMEOUT` | `15` | Client timeout for the session register call (session start and dataset switch) |
@@ -912,10 +959,20 @@ win over the shared file. Changes apply when a new hook process starts.
 | Variable | Default | Effect |
 |---|---|---|
 | `COGNEE_CAPTURE` | `true` | Set `false` to disable automatic prompt, answer and tool capture, including buffered replay. Recall and explicit remember remain available. |
-| `COGNEE_CAPTURE_TOOLS` | all registered tools | Pipe-separated tool names or globs, e.g. `Grep|Glob`; excludes other tools from capture. |
+| `COGNEE_CAPTURE_TOOLS` | all registered tools | Pipe-separated allowlist of tool names, globs or `Tool(prefix:*)` command matchers, e.g. `Bash(git:*)\|Bash(pytest:*)\|Read\|Edit`; everything else is not captured. |
+| `COGNEE_CAPTURE_DENY_TOOLS` | empty | Same syntax, applied after the allowlist: a matching call is not captured, e.g. `Bash(rg:*)\|Bash(grep:*)\|Bash(cat:*)` keeps every Bash call except search and inspection. |
 | `COGNEE_CAPTURE_DENY_PATHS` | sensitive file patterns | Comma-separated patterns or a JSON array extending the built-in `.env`, credential and private-key exclusions. |
 | `COGNEE_CAPTURE_REDACT` | `true` | Redacts common credentials, authorization values, database URLs and private-key blocks before truncation, persistence or upload. |
 | `COGNEE_CAPTURE_REDACT_PATTERNS` | empty | JSON array of additional regular expressions. Invalid expressions prevent the affected content from being captured. |
+
+`Tool(prefix:*)` borrows Claude Code's permission spelling: `Bash(git:*)` matches a
+Bash call whose command, after leading whitespace, is `git` or starts with `git `
+followed by anything. It is a prefix test on the first word, not a shell parser, so
+`gitx` does not match and `cd x && git status` is seen as `cd`. A bare name such as
+`Bash` keeps matching every call of that tool, and `[...]` remains an fnmatch
+character class. A pattern that is not understood (`Bash(rg)`, `Bash()`) switches
+automatic capture off and is reported on the next prompt, instead of silently
+matching nothing. Both variables also accept a JSON array of strings.
 
 Redaction is best effort. The master switch is the strict control for repositories
 where automatic content capture is inappropriate. Disabling capture does not erase
