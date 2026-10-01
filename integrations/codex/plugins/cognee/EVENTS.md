@@ -184,8 +184,11 @@ Names cover current hooks, configuration, transcript cleanup, and both watchers.
 | `hook:recall_breaker_open` | `recall.breaker_open` |
 | `hook:recall_budget_exceeded` | `recall.budget_exceeded` |
 | `hook:recall_dataset_hint` | `recall.dataset_hint` |
+| `hook:recall_context_unparsed` | `recall.context_unparsed` |
+| `hook:recall_context_trimmed` | `recall.context_trimmed` |
 | `hook:recall_error` | `recall.error` |
 | `hook:recall_graph_not_built` | `recall.graph_not_built` |
+| `hook:recall_guidance_absent` | `recall.guidance_absent` |
 | `hook:recall_health_accounting_failed` | `recall.health_accounting_failed` |
 | `hook:readable_datasets_refresh_failed` | `datasets.readable_refresh_failed` |
 | `hook:recall_server_down` | `recall.server_down` |
