@@ -48,6 +48,13 @@ _RULES = (
     ("bcrypt", r"\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}"),
 )
 _COMPILED = [(kind, re.compile(pattern)) for kind, pattern in _RULES]
+# ``Tool(prefix:*)`` borrows Claude Code's permission spelling, so the pattern a
+# user already writes to allow a command also selects whether it is remembered.
+_COMMAND_PATTERN = re.compile(r"^(?P<tool>[^()\s]+)\((?P<prefix>[^()]*):\*\)$")
+
+
+class CapturePatternError(ValueError):
+    """A ``COGNEE_CAPTURE_TOOLS`` / ``COGNEE_CAPTURE_DENY_TOOLS`` entry is not understood."""
 
 
 def capture_enabled() -> bool:
@@ -91,13 +98,80 @@ def _has_sensitive_path(value) -> bool:
     return False
 
 
+def _parse_pattern(pattern: str) -> tuple[str, str | None]:
+    """Split ``Tool(prefix:*)`` into (tool glob, command prefix); plain names get None."""
+    if "(" not in pattern and ")" not in pattern:
+        return pattern, None
+    match = _COMMAND_PATTERN.match(pattern)
+    prefix = match.group("prefix").strip() if match else ""
+    if not prefix:
+        # Matching nothing is how ``Bash(rg:*)`` used to switch capture off for
+        # every tool without a word of warning; a typo has to be loud.
+        raise CapturePatternError(
+            f"capture tool pattern {pattern!r} is not understood; "
+            "use a tool name, an fnmatch glob, or Tool(command-prefix:*)"
+        )
+    return match.group("tool"), prefix
+
+
+def _tool_patterns(env_name: str, default: list[str]) -> list[tuple[str, str | None]]:
+    """Parse every entry up front so a bad one fails whether or not it is reached."""
+    try:
+        entries = _list_env(env_name, separator="|") or default
+    except ValueError as exc:  # a JSON array that does not parse, or holds non-strings
+        raise CapturePatternError(f"{env_name} is not a valid JSON array: {exc}") from exc
+    try:
+        return [_parse_pattern(pattern) for pattern in entries]
+    except CapturePatternError as exc:
+        raise CapturePatternError(f"{env_name}: {exc}") from exc
+
+
+def _matches(tool: str, prefix: str | None, name: str, params) -> bool:
+    if not fnmatch.fnmatchcase(name, tool):
+        return False
+    if prefix is None:
+        return True
+    command = params.get("command") if isinstance(params, dict) else None
+    if not isinstance(command, str):
+        return False
+    # The prefix has to end on a word boundary: ``Bash(git:*)`` keeps ``git status``
+    # and drops ``gitx weird``. Compound commands (``cd x && git status``) are
+    # matched on their first word only; this is a prefix test, not a shell parser.
+    command = command.lstrip()
+    if not command.startswith(prefix):
+        return False
+    return len(command) == len(prefix) or command[len(prefix)].isspace()
+
+
 def allow_tool(name: str, params) -> bool:
+    """Whether a tool call may be captured.
+
+    Raises :class:`CapturePatternError` when an allow or deny entry cannot be
+    parsed, so a misspelled pattern never silently disables capture.
+    """
     if not capture_enabled():
         return False
-    tools = _list_env("COGNEE_CAPTURE_TOOLS", separator="|") or ["*"]
-    if not any(fnmatch.fnmatchcase(name, pattern) for pattern in tools):
+    allowed = _tool_patterns("COGNEE_CAPTURE_TOOLS", ["*"])
+    denied = _tool_patterns("COGNEE_CAPTURE_DENY_TOOLS", [])
+    if not any(_matches(tool, prefix, name, params) for tool, prefix in allowed):
+        return False
+    if any(_matches(tool, prefix, name, params) for tool, prefix in denied):
         return False
     return not _has_sensitive_path(params)
+
+
+def capture_pattern_error() -> str:
+    """The message for a malformed capture tool pattern in the environment, or ''.
+
+    Cheap enough for a per-prompt hook; lets a hook whose output the user sees
+    report a problem that only surfaces inside the silent PostToolUse path.
+    """
+    try:
+        _tool_patterns("COGNEE_CAPTURE_TOOLS", ["*"])
+        _tool_patterns("COGNEE_CAPTURE_DENY_TOOLS", [])
+    except CapturePatternError as exc:
+        return str(exc)
+    return ""
 
 
 def redact(value):

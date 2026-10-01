@@ -10,7 +10,36 @@ is the cache key and semver record, bumped on each release, not the update trigg
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.7.3]
+
+### Added
+- **`COGNEE_CAPTURE_TOOLS` filters Bash by command, and `COGNEE_CAPTURE_DENY_TOOLS`**
+  ([#423](https://github.com/topoteretes/cognee-integrations/issues/423)). The
+  allowlist accepts Claude Code's permission spelling, `Bash(git:*)`, which matches a
+  Bash call whose command starts with that word, so a Bash-heavy session can keep
+  `git`, build and test commands while dropping `rg`, `grep`, `cat` and `sed`
+  traffic, which was most of what reached the server. The new deny variable uses the
+  same syntax and runs after the allowlist, so "everything except search" is one
+  line. Bare names and globs behave as before.
+
+### Fixed
+- **A misspelled capture pattern no longer disables capture in silence.** `Bash(rg)`,
+  `Bash()` and the like used to match nothing, which switched off capture for every
+  tool with no message anywhere. They now raise in the policy: the store hook skips
+  the trace and logs `capture_tools_invalid`, the warmup drain leaves its buffer
+  untouched instead of consuming it, and the recall hook repeats the problem to the
+  user on every prompt until the value is fixed.
+
 ## [1.7.2]
+
+### Changed
+- **Bundled cognee is 1.6.1** (was 1.6.0; `_PINNED_COGNEE_VERSION`). The shared
+  `~/.cognee-plugin/venv` is upgraded on the next cold boot, which runs that
+  release's migrations. 1.6.1 is a patch release: chunks carry their document's
+  external metadata into hybrid retrieval, provenance is scoped to the caller's
+  readable datasets, and `dlt` is now a core dependency, which the venv install
+  pulls in on its own. The `postgres-binary`, `neo4j`, `fastembed` and `ollama`
+  extras the plugin probes for are unchanged in 1.6.1.
 
 ### Fixed
 - **No false `✕ (incorrect_llm_api_key)` for a server the plugin did not start**
