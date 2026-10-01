@@ -10,6 +10,50 @@ Code only offers an update when that string changes. Tag releases as
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.6.4]
+
+### Changed
+- **The prompt hook injects the retrieved context only — no conversation history,
+  no question template (SDK-904).** With `only_context=true` and a session id, a
+  cognee >= 1.6.0 completion recall returns the full prompt its own LLM would have
+  received, and the hook injected that string whole: the session's last ten Q&A
+  pairs in full (the agent's own previous turns, already in its context window),
+  the user's prompt echoed back inside an "answer using this context" template,
+  then the retrieved context. On a real install the injected block was a median
+  45k characters (~11k tokens) per prompt; the history alone was ~60% of a
+  mid-session payload, and 4 of the 5 retrieved passages were that same session's
+  own bridged turns. Now:
+  - the graph recall (`scope=["graph"]`, `HYBRID_COMPLETION`, `only_context`,
+    `top_k` unchanged) is sent **without** the session id, so no history comes back;
+  - a second, parallel `scope=["session_context"]` request with the session id
+    fetches the server-rendered guidance block (capped server-side), injected under
+    `=== Active agent guidance ===` as before SDK-741;
+  - `_recall_text.py` (new, shared verbatim by the hook suites) cuts the question
+    template away — anchored on the prompt the hook itself sent and the final
+    backtick, so it holds for every server template — and shrinks the context:
+    passages that are this session's own bridged chunks are dropped, each remaining
+    passage is capped at `COGNEE_RECALL_PASSAGE_CHARS` (default `2000`, cut at a
+    paragraph break and marked), entity bullets that say nothing (`X is a concept.`,
+    `X belongs to set …`) are pruned, facts are kept, and `COGNEE_RECALL_CONTEXT_CHARS`
+    (default `12000`) trims passages from the end as a last resort. An item the
+    trimmer cannot read is injected whole (fail-open) and logged.
+  - Measured on captured server output: 44.6k → 3.2k characters on a mid-session
+    prompt whose turns were already bridged; 34.7k → 6.9k when every passage came
+    from another session.
+  - New events: `recall.context_trimmed` (with the per-step counters),
+    `recall.context_unparsed`, and `recall.guidance_absent` for a 404 on the
+    guidance request (no guidance exists yet — an answer, not an error).
+- **The "Other Cognee datasets you can search" block rides along once per session**
+  — the first prompt the server answered — and again on any prompt memory answered
+  with nothing, instead of on every prompt. It is static text; repeating it cost
+  ~3k characters a prompt on an account with 40 datasets.
+- **The code lane injects only when it found something.** A `query_facts` payload
+  with an empty `facts` list — 36 of 57 armed turns on a real install — is a miss,
+  not a hit, and is no longer injected as raw JSON. Non-empty facts render one line
+  per symbol (`name [kind] file:line`, then `→ relation target`) instead of JSON.
+- `pre-compact.py` is unchanged: at compaction the conversation history is about to
+  be dropped, so the full item is still the right anchor there.
+
 ## [1.6.3]
 
 ### Changed
