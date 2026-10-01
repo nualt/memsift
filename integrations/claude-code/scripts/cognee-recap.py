@@ -506,11 +506,16 @@ def project_from_edits(edited: list[str], roots: tuple[str, ...] = ()) -> str:
 
 
 def _short_path(path: str, cwd: str) -> str:
-    if cwd and path.startswith(cwd.rstrip("/") + "/"):
-        return path[len(cwd.rstrip("/")) + 1 :]
-    home = str(Path.home())
-    if path.startswith(home + "/"):
-        return "~/" + path[len(home) + 1 :]
+    """``path`` relative to ``cwd``, else under ``~``, else as-is (display form, ``/``-joined)."""
+    try:
+        target = PurePath(path)
+        if cwd and target != PurePath(cwd) and target.is_relative_to(PurePath(cwd)):
+            return target.relative_to(PurePath(cwd)).as_posix()
+        home = PurePath(str(Path.home()))
+        if target != home and target.is_relative_to(home):
+            return "~/" + target.relative_to(home).as_posix()
+    except ValueError:
+        pass
     return path
 
 
@@ -557,7 +562,7 @@ def summarize_session(row: dict, detail: dict, launch_cwds: dict) -> dict:
     return {
         "session_id": sid,
         "agent": agent_of(sid),
-        "project": os.path.basename(cwd.rstrip("/")) if cwd else "",
+        "project": PurePath(cwd).name if cwd else "",
         "cwd": cwd,
         "started_at": started.isoformat() if started else None,
         "last_activity_at": last.isoformat() if last else None,
