@@ -45,6 +45,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
   HTTP status (401/403 name the key / identity) or a refused identity is one stderr
   line and exit 1; a failed graph lookup in timeline mode still renders the prompt
   lane.
+- **`COGNEE_CAPTURE_TOOLS` filters Bash by command, and `COGNEE_CAPTURE_DENY_TOOLS`**
+  ([#423](https://github.com/topoteretes/cognee-integrations/issues/423)). The
+  allowlist accepts Claude Code's permission spelling, `Bash(git:*)`, which matches a
+  Bash call whose command starts with that word, so a Bash-heavy session can keep
+  `git`, build and test commands while dropping `rg`, `grep`, `cat` and `sed`
+  traffic, which was most of what reached the server. The new deny variable uses the
+  same syntax and runs after the allowlist, so "everything except search" is one
+  line. Bare names and globs behave as before.
+
+### Fixed
+- **A misspelled capture pattern no longer disables capture in silence.** `Bash(rg)`,
+  `Bash()` and the like used to match nothing, which switched off capture for every
+  tool with no message anywhere. They now raise in the policy: the store hook skips
+  the trace and logs `capture_tools_invalid`, the warmup drain leaves its buffer
+  untouched instead of consuming it, and the recall hook repeats the problem to the
+  user on every prompt until the value is fixed.
 
 ### Changed
 - **The prompt hook injects the retrieved context only — no conversation history,

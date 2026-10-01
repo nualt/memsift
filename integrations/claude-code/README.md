@@ -959,10 +959,20 @@ win over the shared file. Changes apply when a new hook process starts.
 | Variable | Default | Effect |
 |---|---|---|
 | `COGNEE_CAPTURE` | `true` | Set `false` to disable automatic prompt, answer and tool capture, including buffered replay. Recall and explicit remember remain available. |
-| `COGNEE_CAPTURE_TOOLS` | all registered tools | Pipe-separated tool names or globs, e.g. `Grep|Glob`; excludes other tools from capture. |
+| `COGNEE_CAPTURE_TOOLS` | all registered tools | Pipe-separated allowlist of tool names, globs or `Tool(prefix:*)` command matchers, e.g. `Bash(git:*)\|Bash(pytest:*)\|Read\|Edit`; everything else is not captured. |
+| `COGNEE_CAPTURE_DENY_TOOLS` | empty | Same syntax, applied after the allowlist: a matching call is not captured, e.g. `Bash(rg:*)\|Bash(grep:*)\|Bash(cat:*)` keeps every Bash call except search and inspection. |
 | `COGNEE_CAPTURE_DENY_PATHS` | sensitive file patterns | Comma-separated patterns or a JSON array extending the built-in `.env`, credential and private-key exclusions. |
 | `COGNEE_CAPTURE_REDACT` | `true` | Redacts common credentials, authorization values, database URLs and private-key blocks before truncation, persistence or upload. |
 | `COGNEE_CAPTURE_REDACT_PATTERNS` | empty | JSON array of additional regular expressions. Invalid expressions prevent the affected content from being captured. |
+
+`Tool(prefix:*)` borrows Claude Code's permission spelling: `Bash(git:*)` matches a
+Bash call whose command, after leading whitespace, is `git` or starts with `git `
+followed by anything. It is a prefix test on the first word, not a shell parser, so
+`gitx` does not match and `cd x && git status` is seen as `cd`. A bare name such as
+`Bash` keeps matching every call of that tool, and `[...]` remains an fnmatch
+character class. A pattern that is not understood (`Bash(rg)`, `Bash()`) switches
+automatic capture off and is reported on the next prompt, instead of silently
+matching nothing. Both variables also accept a JSON array of strings.
 
 Redaction is best effort. The master switch is the strict control for repositories
 where automatic content capture is inappropriate. Disabling capture does not erase

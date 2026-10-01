@@ -151,9 +151,17 @@ async def _store_tool_call(payload: dict) -> None:
     tool_name = payload.get("tool_name", "unknown")
     tool_input = payload.get("tool_input") or {}
     tool_output = payload.get("tool_output") or payload.get("tool_response") or ""
-    from _capture_policy import allow_tool, redact
+    from _capture_policy import CapturePatternError, allow_tool, redact
 
-    if not allow_tool(tool_name, tool_input):
+    try:
+        allowed = allow_tool(tool_name, tool_input)
+    except CapturePatternError as exc:
+        # Fail closed, but not silently: this hook's output is never shown, so
+        # the recall hook repeats the problem to the user on the next prompt.
+        hook_log("capture_tools_invalid", {"tool": tool_name, "error": str(exc)[:200]})
+        notify(f"trace not captured: {exc}")
+        return
+    if not allowed:
         return
     tool_input = redact(tool_input)
     tool_output = redact(tool_output)

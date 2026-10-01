@@ -3393,13 +3393,37 @@ def base_url_change_notice(host_key: str = "") -> str:
     )
 
 
+def capture_policy_notice() -> str:
+    """A notice when a ``COGNEE_CAPTURE*_TOOLS`` pattern cannot be parsed, else "".
+
+    The PostToolUse hook that trips over the pattern runs async with no visible
+    output, so the user would otherwise only find out from an empty memory.
+    Repeated on every prompt until the value is fixed: it is a configuration
+    error, and capture is off for as long as it stands.
+    """
+    from _capture_policy import capture_pattern_error
+
+    error = capture_pattern_error()
+    if not error:
+        return ""
+    return f"Cognee: automatic capture is off until this is fixed: {error}"
+
+
 def with_base_url_notice(output: dict | None, hook_event: str) -> dict | None:
-    """Add ``base_url_change_notice`` to a hook's output (user- and model-visible)."""
-    try:
-        notice = base_url_change_notice()
-    except Exception as exc:
-        hook_log("base_url_notice_failed", {"error": str(exc)[:200]})
-        return output
+    """Add the session's notices to a hook's output (user- and model-visible).
+
+    Covers ``base_url_change_notice`` and ``capture_policy_notice``.
+    """
+    notices = []
+    for source in (base_url_change_notice, capture_policy_notice):
+        try:
+            text = source()
+        except Exception as exc:
+            hook_log("hook_notice_failed", {"source": source.__name__, "error": str(exc)[:200]})
+            continue
+        if text:
+            notices.append(text)
+    notice = "\n".join(notices)
     if not notice:
         return output
     result = dict(output or {})
@@ -5145,7 +5169,7 @@ def drain_warmup_entries(
     ``deduped``). If the detail read fails, everything replays as before: a
     rare duplicate beats a lost turn.
     """
-    from _capture_policy import allow_tool, capture_enabled, redact
+    from _capture_policy import CapturePatternError, allow_tool, capture_enabled, redact
 
     if not capture_enabled():
         return 0, 0
@@ -5245,6 +5269,11 @@ def drain_warmup_entries(
                     "warmup_drain_error",
                     {"error": str(exc)[:200], "drained": drained, "status": exc.code},
                 )
+                break
+            except CapturePatternError as exc:
+                # A typo in COGNEE_CAPTURE_TOOLS must not cost buffered traces:
+                # leave the buffer as it is and replay once the value is fixed.
+                hook_log("capture_tools_invalid", {"error": str(exc)[:200], "drained": drained})
                 break
             except Exception as exc:
                 hook_log("warmup_drain_error", {"error": str(exc)[:200], "drained": drained})
