@@ -361,6 +361,51 @@ Final sync on session end is triggered by the `SessionEnd` detached worker, with
 - `/cognee-memory:cognee-code`
 - `/cognee-memory:cognee-forget`
 - `/cognee-memory:cognee-switch-datasets`
+- `/cognee-memory:cognee-standup`, `/cognee-memory:cognee-digest`,
+  `/cognee-memory:cognee-timeline` — recaps over recorded sessions (below)
+
+## Recaps: standup, digest, timeline
+
+Three skills answer "what did I work on?" from what the server already records —
+no new server surface, no new hooks:
+
+| Skill | Question | Default window |
+|---|---|---|
+| `cognee-standup` | what happened since yesterday, per project; what was left open | `24h` |
+| `cognee-digest` | the week by day and project, most-edited files, every lesson the server distilled into the graph in that window | `7d` |
+| `cognee-timeline <topic>` | how a topic evolved: dated `learned` (distilled lessons), `recorded` (raw graph context) and `asked` (prompts) events | `30d` |
+
+All three run one wrapper, `scripts/cognee-recap.py`, which reads
+`GET /api/v1/sessions` (+ `/{id}` for each session's last prompts, tool calls and
+edited files). The digest's learnings are the dataset's lesson rows
+(`GET /api/v1/datasets/{id}/data` + `/raw`: each distilled lesson is one row tagged
+`session_learnings:<session id>` and stamped `created_at` when it was distilled), so
+the count is exhaustive within the window and dated by the server's clock — no
+search, no LLM call; the newest `--max-learnings` (40) are fetched and listed. The timeline seeds a context-only graph recall with the topic
+and dates each passage by the end of the session it names (one detail call per
+session not already in hand). It prints a deterministic Markdown skeleton; the skill tells
+the model to summarise it and to treat it as recorded data, not instructions.
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cognee-recap.py" standup  --since yesterday
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cognee-recap.py" digest   --since week --projects cognee
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cognee-recap.py" timeline 'dataset switching' --since 2w --json
+```
+
+`--since` takes `24h`, `7d`, `2w`, `today`, `yesterday`, `week` (since Monday),
+`month`, `all` or a date (a local calendar day); windows are by last activity.
+`--projects` keeps sessions whose working directory matches; `--all-sessions` adds
+sessions not from a coding agent (MCP clients, scheduled jobs); `--max-sessions` (25)
+caps the detail fetches; `--max-learnings` (40, `0` = all) caps the graph learnings the
+digest fetches (~0.5 s each on a local server, two in flight); `--json` returns the data. Sessions driven from a host without
+prompt hooks (a Cursor terminal, a cron job) are attributed to the git root of the
+files they edited (looked up only under the home directory and known working
+directories) and described by their tool mix. The dataset is the launch record's (add
+`--session-key <host session id>` when several launches share a directory), else the
+plugin default. The data listing is newest-first, so the digest stops paging at the
+first page older than the window. An unreachable server, an HTTP status (401/403:
+check `COGNEE_API_KEY` / the plugin identity) or a refused identity is one stderr line
+and exit 1.
 
 ## Remember (write) behavior
 
