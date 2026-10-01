@@ -45,7 +45,6 @@ project adheres to [Semantic Versioning](https://semver.org/).
   HTTP status (401/403 name the key / identity) or a refused identity is one stderr
   line and exit 1; a failed graph lookup in timeline mode still renders the prompt
   lane.
-
 - **`COGNEE_CAPTURE_TOOLS` filters Bash by command, and `COGNEE_CAPTURE_DENY_TOOLS`**
   ([#423](https://github.com/topoteretes/cognee-integrations/issues/423)). The
   allowlist accepts Claude Code's permission spelling, `Bash(git:*)`, which matches a
@@ -54,7 +53,6 @@ project adheres to [Semantic Versioning](https://semver.org/).
   traffic, which was most of what reached the server. The new deny variable uses the
   same syntax and runs after the allowlist, so "everything except search" is one
   line. Bare names and globs behave as before.
-
 
 ### Fixed
 - **A misspelled capture pattern no longer disables capture in silence.** `Bash(rg)`,
