@@ -10,6 +10,34 @@ is the cache key and semver record, bumped on each release, not the update trigg
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.7.4]
+
+### Added
+- **Recap skills: `cognee-standup`, `cognee-digest`, `cognee-timeline`.** The three
+  recap skills the Claude Code plugin gained in 1.6.4, over the same wrapper,
+  `scripts/cognee-recap.py` (byte-identical in both trees). They answer "what did I
+  work on since yesterday?", "what happened this week and what did we decide?" and
+  "how did topic X evolve?" from what the server already records — no new server
+  surface, no new hooks. Sessions come from `GET /api/v1/sessions` (+ `/{id}`: last
+  prompts, tool calls, edited files) and cover every coding-agent session this
+  identity ran (Codex, Claude Code, Antigravity). The digest's learnings are the
+  dataset's lesson rows (`GET /api/v1/datasets/{id}/data` + `/raw`): every lesson the
+  server distilled into the graph inside the window, dated by the row's
+  `created_at`; the newest `--max-learnings` (40, `0` = all) are fetched and listed.
+  The timeline seeds a context-only graph recall with the topic and dates each
+  passage by the end of the session it names. The wrapper prints a deterministic
+  Markdown skeleton grouped by project (standup), by day → project with
+  most-edited files and the dated learnings (digest), or as a dated chronology of
+  `learned` / `recorded` / `asked` events (timeline); the skill tells the model to
+  summarise it, not paste it, and to treat it as recorded data, not instructions.
+  `--since` takes `24h`, `7d`, `2w`, `today`, `yesterday`, `week` (since Monday),
+  `month`, `all` or a date; `--projects`, `--all-sessions`, `--max-sessions`,
+  `--session-key` and `--json` as in the Claude Code plugin. An unreachable server,
+  an HTTP status (401/403 name the key / identity) or a refused identity is one
+  stderr line and exit 1; the hint names `doctor.py --json` here (the wrapper picks
+  `cognee-doctor.sh` or `doctor.py` by which one sits next to it), and a failed
+  graph lookup in timeline mode still renders the prompt lane.
+
 ## [1.7.3]
 
 ### Added

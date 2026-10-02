@@ -103,6 +103,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
   per symbol (`name [kind] file:line`, then `→ relation target`) instead of JSON.
 - `pre-compact.py` is unchanged: at compaction the conversation history is about to
   be dropped, so the full item is still the right anchor there.
+- **`scripts/cognee-recap.py` is now byte-identical with the Codex plugin's copy** (Codex
+  1.7.4 ships the same three recap skills). The one host difference — the doctor the
+  error lines point at — is picked at runtime by which script sits next to the wrapper:
+  `cognee-doctor.sh` here, `doctor.py` in Codex. No behaviour change for Claude Code; no
+  version bump.
 
 ## [1.6.3]
 

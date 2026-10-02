@@ -972,13 +972,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _doctor_hint() -> str:
+    """Name the doctor this plugin ships: Claude Code wraps it as ``cognee-doctor.sh``,
+    Codex exposes ``doctor.py`` directly. Same script, so the hint follows the tree."""
+    here = Path(__file__).resolve().parent
+    tool = "cognee-doctor.sh" if (here / "cognee-doctor.sh").is_file() else "doctor.py"
+    return f"{tool} --json shows the mode/URL"
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     args.projects = [p.strip() for p in (args.projects or "").split(",") if p.strip()]
     cutoff, label = parse_since(args.since or DEFAULT_SINCE[args.mode])
     server: Server | None = None
     url = _local_api_url()
-    doctor = "cognee-doctor.sh --json shows the mode/URL"
+    doctor = _doctor_hint()
     try:
         server = Server(args.session_key)
         url = server.url
