@@ -19,6 +19,7 @@ The integration:
 - injects relevant context on prompt submit
 - syncs session memory into graph memory on session end/final exit
 - deletes memory on request via the `cognee-forget` skill ("forget what we talked about X")
+- recaps your recorded sessions on request via the `cognee-standup`, `cognee-digest` and `cognee-timeline` skills ("what did I work on yesterday?", "weekly digest", "how did X evolve?")
 
 ## Install
 
@@ -316,6 +317,52 @@ so the prompt path never waits on it.
 | `COGNEE_RECALL_DATASET_HINT` | `on` | Set `off` to stop the prompt hook from naming the other datasets. On, the block is injected once per session (the first prompt the server answered) and again on any prompt memory answered with nothing. The explicit skill flow is unaffected. |
 | `COGNEE_DATASETS_CACHE_TTL` | `300` | Seconds the cached readable-datasets listing is served before one bounded refresh. |
 
+## Recaps: standup, digest, timeline
+
+Three skills answer "what did I work on?" from what the server already records —
+no new server surface, no new hooks:
+
+| Skill | Question | Default window |
+|---|---|---|
+| `cognee-standup` | what happened since yesterday, per project; what was left open | `24h` |
+| `cognee-digest` | the week by day and project, most-edited files, every lesson the server distilled into the graph in that window | `7d` |
+| `cognee-timeline <topic>` | how a topic evolved: dated `learned` (distilled lessons), `recorded` (raw graph context) and `asked` (prompts) events | `30d` |
+
+All three run one wrapper, `scripts/cognee-recap.py` (the same script the Claude Code
+plugin ships), which reads `GET /api/v1/sessions` (+ `/{id}` for each session's last
+prompts, tool calls and edited files). Every coding-agent session this identity ran is
+in scope — Codex, Claude Code and Antigravity alike — so a standup asked from Codex
+covers the Claude Code sessions of the same day. The digest's learnings are the
+dataset's lesson rows (`GET /api/v1/datasets/{id}/data` + `/raw`: each distilled lesson
+is one row tagged `session_learnings:<session id>` and stamped `created_at` when it
+was distilled), so the count is exhaustive within the window and dated by the server's
+clock — no search, no LLM call; the newest `--max-learnings` (40) are fetched and
+listed. The timeline seeds a context-only graph recall with the topic and dates each
+passage by the end of the session it names (one detail call per session not already in
+hand). It prints a deterministic Markdown skeleton; the skill tells the model to
+summarise it and to treat it as recorded data, not instructions.
+
+```bash
+python3 "${CODEX_PLUGIN_ROOT}/scripts/cognee-recap.py" standup  --since yesterday
+python3 "${CODEX_PLUGIN_ROOT}/scripts/cognee-recap.py" digest   --since week --projects cognee
+python3 "${CODEX_PLUGIN_ROOT}/scripts/cognee-recap.py" timeline 'dataset switching' --since 2w --json
+```
+
+`--since` takes `24h`, `7d`, `2w`, `today`, `yesterday`, `week` (since Monday),
+`month`, `all` or a date (a local calendar day); windows are by last activity.
+`--projects` keeps sessions whose working directory matches; `--all-sessions` adds
+sessions not from a coding agent (MCP clients, scheduled jobs); `--max-sessions` (25)
+caps the detail fetches; `--max-learnings` (40, `0` = all) caps the graph learnings the
+digest fetches (~0.5 s each on a local server, two in flight); `--json` returns the data.
+Sessions driven from a host without prompt hooks (a Cursor terminal, a cron job) are
+attributed to the git root of the files they edited (looked up only under the home
+directory and known working directories) and described by their tool mix. The dataset
+is the launch record's (add `--session-key <host session id>` when several launches
+share a directory), else the plugin default. The data listing is newest-first, so the
+digest stops paging at the first page older than the window. An unreachable server, an
+HTTP status (401/403: check `COGNEE_API_KEY` / the plugin identity) or a refused
+identity is one stderr line and exit 1, pointing at `scripts/doctor.py --json`.
+
 ## Hooks
 
 | Hook | Behavior |
@@ -333,7 +380,7 @@ Session→graph sync runs through Cognee's session-aware `improve` endpoint: the
 
 An idle watcher runs in the background for the lifetime of each launch. It polls activity every `COGNEE_IDLE_POLL` seconds and fires an improve when the session has been quiet for `COGNEE_IDLE_THRESHOLD` seconds. An automatic improve also fires every `COGNEE_AUTO_IMPROVE_EVERY` stored tool calls/stops (`0` disables it).
 
-Both of those automatic triggers share one **per-session cooldown**: after any successful improve of a session (idle, auto, manual or final), no further idle/auto improve runs for `COGNEE_IMPROVE_COOLDOWN` seconds, and none runs at all until at least one new prompt, tool call or answer has been stored since. The timestamp and turn count are persisted per session under `~/.cognee-plugin/codex/improve-state/`, so they survive the watcher process, which exits after each bridge and is respawned on the next prompt. (Until 1.4.4 the cooldown lived only in that process's memory and was reset on every respawn, so in practice an improve ran after every prompt.) The session-end final sync, the `/cognee-memory:cognee-sync` skill and the dataset-switch sync ignore the cooldown and always run.
+Both of those automatic triggers share one **per-session cooldown**: after any successful improve of a session (idle, auto, manual or final), no further idle/auto improve runs for `COGNEE_IMPROVE_COOLDOWN` seconds, and none runs at all until at least one new prompt, tool call or answer has been stored since. The timestamp and turn count are persisted per session under `~/.cognee-plugin/codex/improve-state/`, so they survive the watcher process, which exits after each bridge and is respawned on the next prompt. (Until 1.4.4 the cooldown lived only in that process's memory and was reset on every respawn, so in practice an improve ran after every prompt.) The session-end final sync, a manual `python3 "${CODEX_PLUGIN_ROOT}/scripts/sync-session-to-graph.py"` run and the dataset-switch sync ignore the cooldown and always run.
 
 A **failed** attempt arms the same window as a **backoff**: if the submit timed out, the server was unreachable, or the server answered *busy* (its per-session improve lock is held by another run), no automatic improve of that session runs again until `COGNEE_IMPROVE_COOLDOWN` seconds have passed. A busy answer is never retried by the plugin — the in-flight improve persists everything above the session's server-side watermark, and the next trigger covers whatever landed after it. (Until 1.6.3 only a success armed the cooldown, the plugin held its own per-session lock, and a busy answer was re-submitted every 15 seconds for up to ten minutes, each re-submit counted by the server as one more improve.)
 
