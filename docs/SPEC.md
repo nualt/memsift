@@ -134,6 +134,7 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 > scope); draft entries are raw turns with labels, cut at 1 500 / 1 000 tokens.
 > Corrections: pending entry, confirmation appended as a line, action notes of
 > the last 5 turns with short diffs.
+> Repo key: directory name + 6 hex characters of the path hash.
 > Everything else in this part is a proposal. The format of `digest.md`, written
 > by the compactor, is decided in part 5.
 
