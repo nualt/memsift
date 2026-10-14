@@ -125,3 +125,240 @@ Everything else, about 20 000 lines:
 
 Python 3.9 or later, standard library only. No virtualenv, nothing to
 install: a hook runs `python3 run.py <event>` with the system interpreter.
+
+## 2. Files on disk
+
+### Overview
+
+```
+~/.memsift/
+├── preferences.md          how the user works, every project     ≤ 1 000 tokens
+├── datasets.md             one line per Cognee dataset
+├── state.json              breaker state: failures, paused or not (part 6)
+├── debug.log               Jev decisions in plain text, if MEMSIFT_DEBUG=1
+├── sessions/<session>.json one per running session, deleted at session end
+└── repos/<repo-key>/
+    ├── digest.md           compacted project memory, written by the compactor  ≤ 3 000 tokens
+    ├── draft.md            entries added since the last compaction
+    ├── pending.jsonl       turns noted while Jev was unreachable
+    └── cognee-index.json   what Cognee holds, rebuilt each session
+
+<repo root>/jev.md          project card, owned by the user
+```
+
+**Working notes** means `digest.md` followed by `draft.md`. Jev always reads
+both, plus `preferences.md`. Compaction starts when digest + draft reach
+8 000 tokens; it rewrites `digest.md` and empties `draft.md` (part 5).
+
+### Common rules
+
+- **Encoding.** UTF-8, `\n` line endings.
+- **Tokens** are estimated as `ceil(characters / 4)`. Jev's responses report
+  the real input count (`usage.input_tokens`); the debug log records both so the
+  ratio can be checked.
+- **Secrets.** Every text is passed through `vendor/redact.py` before it is
+  written, so no file under `~/.memsift/` ever holds a secret.
+- **Appends** (`draft.md`, `pending.jsonl`, `debug.log`, `preferences.md`) are a
+  single `write` of whole lines on a file opened in append mode. Concurrent
+  sessions may append to the same file at any time.
+- **Rewrites** (`digest.md`, `preferences.md` at compaction, `draft.md` when it
+  is emptied, `state.json`, `cognee-index.json`, session files) happen under
+  `vendor/file_lock.py` on `<file>.lock`: write `<file>.tmp`, then rename over
+  `<file>`. A reader never sees a half-written file.
+- **Missing files** are treated as empty. memsift creates directories on demand.
+
+### Repo key
+
+A repo is the git top-level of the session's working directory, or the working
+directory itself outside git. Its key is the directory name plus 6 hex
+characters of the SHA-256 of its absolute path, so two repos with the same
+name never share notes:
+
+```
+~/code/acme-shop   →  acme-shop-3f2a91
+~/code              →  code-8c04d2
+```
+
+### Entries
+
+`preferences.md`, `digest.md` and `draft.md` hold entries, one per line:
+
+```
+- [<id>] <date> <nature>: <text>
+```
+
+| Field | Format |
+|---|---|
+| `id` | `p` (preferences), `g` (digest) or `d` (draft), then a number unique in that file |
+| `date` | `YYYY-MM-DD`, day the entry was learned |
+| `nature` | `working_rule`, `decision`, `project_fact` or `lesson` (part 4) |
+| `text` | one sentence or two, self-contained: it names its subject and never says "it" or "this" |
+
+A `decision` states the choice, then the reason, then what was rejected when
+known. Each file starts with a one-line title (`# Preferences`,
+`# Digest: <repo-key>`, `# Draft: <repo-key>`) and has nothing else.
+
+```
+# Draft: acme-shop-3f2a91
+- [d1] 2026-10-13 decision: The header reuses the footer's 12-column grid so both stay aligned; a separate header grid was rejected as two sources of truth.
+- [d2] 2026-10-13 lesson: pnpm 10 blocks dependency build scripts until they are listed in onlyBuiltDependencies; sharp failed silently until it was added.
+- [d3] 2026-10-14 project_fact: Stock is decremented when the order is placed, not when it is paid.
+```
+
+### Corrections
+
+A correction is an entry that replaces an older one. It is written with the id
+it replaces and stays pending until confirmed (part 4):
+
+```
+- [d4] 2026-10-14 decision (corrects g7, pending): The product grid has 12 columns, not 10.
+```
+
+Confirmation or abandonment is appended as a status line, never by editing the
+entry:
+
+```
+- [d4] confirmed
+- [d4] abandoned
+```
+
+At compaction, a confirmed correction replaces the entry it corrects, and an
+abandoned one is dropped together with its status line. A correction still
+pending is carried over to the new `draft.md` unchanged.
+
+A correction of how the user works goes to `draft.md` like any other, and only
+moves to `preferences.md` once confirmed.
+
+### preferences.md
+
+Global. Entries of nature `working_rule` whose scope is "always" (part 4),
+appended as soon as Jev classifies them. When the file passes 1 000 tokens,
+the compactor rewrites it, keeping the rules that come back most often, then
+the most recent.
+
+```
+# Preferences
+- [p1] 2026-10-13 working_rule: Explain with an ASCII diagram before prose; long prose explanations do not land.
+- [p2] 2026-10-13 working_rule: Ask before committing.
+- [p3] 2026-10-14 working_rule: Name every file and doc in English for anything meant to be open source.
+```
+
+### digest.md
+
+Per repo. Written only by the compactor, never appended to. Entries of nature
+`decision` and `project_fact`, work in progress first, then most recent first.
+`lesson` entries never go here: they live in Cognee only.
+
+### draft.md
+
+Per repo. Entries appended by Jev at the end of each turn, all four natures,
+plus correction status lines. Emptied by compaction, except the lines appended
+while the compaction was running and corrections still pending.
+
+### datasets.md
+
+What each Cognee dataset is for, in the user's words. Jev reads it to choose
+where to search. One line per dataset:
+
+```
+# Datasets
+- agent_sessions: memsift's own memory, written at compaction.
+- playbooks: how we run recurring work: deploys, onboarding, client handover.
+- projects: one file per client project: stack, contacts, decisions.
+- lessons: technical problems we hit and what fixed them.
+- articles: IGNORED
+- posts: IGNORED
+```
+
+`IGNORED` datasets are never searched and are left out of `cognee-index.json`.
+At session start, a dataset on the server that has no line here raises a flag:
+the agent is asked to propose a description to the user, and writes the line
+once the user approves. memsift never writes this file itself.
+
+### cognee-index.json
+
+A cache of item names, so Jev can tell whether a topic is in Cognee without
+asking it. Rebuilt in the background at each session start from
+`GET /api/v1/datasets` and `GET /api/v1/datasets/{id}/data`; never edited.
+
+```json
+{
+  "fetched_at": "2026-10-14T07:02:11Z",
+  "datasets": [
+    {
+      "name": "agent_sessions",
+      "id": "6f1c…",
+      "items": ["acme-shop 2026-10-13 header grid and footer alignment",
+                "acme-shop 2026-10-12 pnpm build scripts and sharp"]
+    }
+  ]
+}
+```
+
+Item names matching `text_<hex>` (raw uploads, unreadable) are skipped. Names
+are kept newest first and cut so the whole file stays under 1 000 tokens.
+Packets sent by the compactor are named `<repo name> <date> <topics>` for that
+reason (part 5).
+
+### pending.jsonl
+
+Per repo. One JSON object per turn while Jev is paused (part 6), sorted by Jev
+on `/memory-resume`, then the file is deleted.
+
+```json
+{"ts": "2026-10-14T07:31:02Z", "session": "a1b2…", "prompt": "…", "answer": "…", "actions": ["Edit src/header.tsx", "git commit"]}
+```
+
+`answer` is cut to its last 4 000 characters.
+
+### sessions/\<session\>.json
+
+Short-lived state of one running session, rewritten by its own hooks only.
+
+```json
+{
+  "repo_key": "acme-shop-3f2a91",
+  "host": "claude-code",
+  "source": "startup",
+  "started_at": "2026-10-14T07:02:10Z",
+  "actions": ["Edit src/header.tsx", "Bash: git commit (ok)"],
+  "flags": ["jev_md_missing"],
+  "outage_notice_sent": false
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `source` | how the session started: `startup`, `resume`, `clear`, `compact` |
+| `actions` | the action note of the current turn (part 3), emptied after each turn |
+| `flags` | messages for the agent at the next prompt: `jev_md_missing`, `jev_md_outdated`, `dataset_undescribed:<name>` |
+| `outage_notice_sent` | the one-line outage notice was already given (part 6) |
+
+### jev.md
+
+The project card, at the repo root, next to `CLAUDE.md`. Jev reads it on every
+call; it is never pasted into the agent's context. It describes what weighs in
+this project, not how to work in it. At most 3 000 tokens, in practice a dozen
+lines.
+
+```
+# jev.md
+project: acme-shop, a Medusa e-commerce store
+stakes: payments, stock, orders, customer data
+        → any decision touching these is essential
+phase: setup, before launch
+documented in: README.md, docs/, knowledge/acme-shop/
+do not keep: commit status, one-off visual tweaks
+```
+
+| Line | Purpose |
+|---|---|
+| `project` | what the repo is, in one line |
+| `stakes` | where the important decisions are; the line that does most of the work |
+| `phase` | where the project stands; changes what counts as news |
+| `documented in` | files that already hold knowledge: counts as "already known" |
+| `do not keep` | what this project never needs remembered |
+
+memsift never writes `jev.md`. When it is missing or looks outdated, a flag asks
+the agent to propose a version, and the agent writes it once the user approves.
+A repo that must not show it adds it to its `.gitignore`.
