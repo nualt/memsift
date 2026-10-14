@@ -136,6 +136,7 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 > the last 5 turns with short diffs.
 > Repo key: directory name + 6 hex characters of the path hash.
 > Session file: one JSON per session; stale ones older than 7 days removed at session start.
+> `state.json`: one per machine, failure counters for Jev, compactor and Cognee.
 > Everything else in this part is a proposal. The format of `digest.md`, written
 > by the compactor, is decided in part 5.
 
@@ -144,7 +145,7 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 ```
 ~/.memsift/
 ├── datasets.md             one line per Cognee dataset
-├── state.json              breaker state: failures, paused or not (part 6)
+├── state.json              per machine: consecutive failures and pause, for Jev, compactor, Cognee (part 6)
 ├── debug.log               Jev decisions in plain text, if MEMSIFT_DEBUG=1
 ├── sessions/<session>.json one per running session, deleted at session end
 └── repos/<repo-key>/
