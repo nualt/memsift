@@ -75,8 +75,9 @@ class HookTests(IsolatedTest):
         store.append_draft(self.repo, turn(), "project", False, 3)
         for host in ("claude-code", "codex"):
             core.prepare(event(self.repo, "start", host=host))
-            self.fake.push({"answers": {"missing": noul(1), "entry_d1": noul(1),
-                                        "cognee": noul(0)}, "usage": {"input_tokens": 500}})
+            for _ in range(3):
+                self.fake.push({"answers": {"has_info": noul(0), "entry_d1": noul(1),
+                                            "cognee": noul(0)}, "usage": {"input_tokens": 500}})
             result, output = self.invoke(["prompt", "--host", host], json.dumps(
                 {"session_id": "a1", "cwd": str(self.repo), "prompt": "Continue"}))
             self.assertEqual(result, 0)
@@ -110,8 +111,9 @@ class HookTests(IsolatedTest):
             self.assertLess(elapsed, 1)
             index = store.repo_dir(self.repo) / "cognee-index.json"
             self.wait_for(index.exists)
-            self.fake.push({"answers": {"missing": noul(0), "cognee": noul(0)},
-                            "usage": {"input_tokens": 500}}, path="/api/alpha/decisions")
+            for _ in range(3):
+                self.fake.push({"answers": {"has_info": noul(1), "cognee": noul(0)},
+                                "usage": {"input_tokens": 500}}, path="/api/alpha/decisions")
             result, _ = self.cli("prompt", payload("prompt"), host)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("jev.md", json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"])
@@ -172,7 +174,8 @@ class HookTests(IsolatedTest):
         from memsift import breaker, core
         (self.repo / "jev.md").write_text("Grid", encoding="utf-8")
         core.prepare(event(self.repo, "start"))
-        self.fake.push({}, delay=3, path="/api/alpha/decisions")
+        for _ in range(3):
+            self.fake.push({}, delay=3, path="/api/alpha/decisions")
         result, elapsed = self.cli("prompt", {"session_id": "a1", "cwd": str(self.repo), "prompt": "Continue"})
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
         self.assertGreater(elapsed, 1.8)
@@ -312,9 +315,10 @@ class HookTests(IsolatedTest):
         store.write_text(store.home() / "datasets.md", "- A: Lessons\n- B: Decisions\n")
         store.write_text(store.repo_dir(self.repo) / "cognee-index.json", json.dumps({"datasets": [
             {"name": "A", "id": "a", "items": []}, {"name": "B", "id": "b", "items": []}]}))
-        self.fake.push({"answers": {"missing": noul(1), "cognee": noul(1),
-                                    "dataset_A": noul(1), "dataset_B": noul(1)},
-                        "usage": {"input_tokens": 500}}, path="/api/alpha/decisions")
+        for _ in range(3):
+            self.fake.push({"answers": {"has_info": noul(0), "cognee": noul(1),
+                                        "dataset_A": noul(1), "dataset_B": noul(1)},
+                            "usage": {"input_tokens": 500}}, path="/api/alpha/decisions")
         self.fake.push(["fast passage"], path="/api/v1/recall")
         self.fake.push_chunks([b'["late', b' passage"]'], interval=13, path="/api/v1/recall")
         result, elapsed = self.cli("prompt", {"session_id": "a1", "cwd": str(self.repo), "prompt": "Continue"})
@@ -322,7 +326,7 @@ class HookTests(IsolatedTest):
         self.assertGreater(elapsed, 11.8)
         self.assertLess(elapsed, 13)
         self.assertEqual(breaker.state()["services"]["cognee"]["failures"], 1)
-        self.assertEqual(len(self.fake.requests), 3)
+        self.assertEqual(len(self.fake.requests), 5)
 
     def test_manifest_routes_and_command_discovery(self):
         for host, manifest, root_variable in (("claude-code", ".claude-plugin", "CLAUDE_PLUGIN_ROOT"),

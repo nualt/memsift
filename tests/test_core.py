@@ -47,10 +47,11 @@ class CoreTests(IsolatedTest):
         from memsift import store
         return store.read_json(store.session_path(session_id), {})
 
-    def push_prompt(self, missing=0, cognee=0, **answers):
-        self.fake.push({"answers": {"missing": noul(missing), "cognee": noul(cognee),
-                                    **{key: noul(value) for key, value in answers.items()}},
-                        "usage": {"input_tokens": 500}})
+    def push_prompt(self, has_info=1, cognee=0, **answers):
+        for _ in range(3):
+            self.fake.push({"answers": {"has_info": noul(has_info), "cognee": noul(cognee),
+                                        **{key: noul(value) for key, value in answers.items()}},
+                            "usage": {"input_tokens": 500}})
 
     def test_missing_card_flag_is_given_once_without_memory(self):
         from memsift import core
@@ -111,14 +112,13 @@ class CoreTests(IsolatedTest):
         store.write_text(store.repo_dir(self.repo) / "digest.md", "## Decisions\n- [g1] Twelve columns (2026-10-12)\n")
         entry = store.append_draft(self.repo, turn(), "project", False, 3)
         self.prepare("start", source="compact")
-        self.push_prompt(1, 1, entry_g1=1, entry_d1=1)
+        self.push_prompt(0, 1, entry_g1=1, entry_d1=1)
         result = core.prompt(self.prepare("prompt", prompt="Back to the header"), self.config)
         self.assertEqual(result, "memsift, from the working notes:\n- [g1] Twelve columns (2026-10-12)\n" + entry["text"])
-        state = self.fake.requests[0]["body"]["state"]
-        self.assertEqual(state["session_start"], "only the compaction summary and what followed")
-        self.assertNotIn("instruction_files", state)
-        self.assertNotIn("private instructions", repr(state))
-        self.assertEqual(len(self.fake.requests), 1)
+        states = [r["body"]["state"] for r in self.fake.requests]
+        self.assertTrue(all("instruction_files" not in state for state in states))
+        self.assertNotIn("private instructions", repr(states))
+        self.assertEqual(len(self.fake.requests), 3)
 
     def test_stop_keeps_raw_labels_confirms_and_emits_flags_once(self):
         from memsift import core, store
@@ -243,23 +243,24 @@ class CoreTests(IsolatedTest):
             {"name": "projects", "id": "projects-id", "items": []},
             {"name": "articles", "id": "ignored-id", "items": ["excluded"]}]})
         self.prepare("start")
-        for useful, known, expected in ((0.7, 0, "memsift, from Cognee (dataset lessons):\nAllow sharp."),
-                                        (0.7, 0.5, ""), (0.69, 0, "")):
-            with self.subTest(useful=useful, known=known):
+        for probability, expected in ((0.7, "memsift, from Cognee (dataset lessons):\nAllow sharp."),
+                                      (0.69, "")):
+            with self.subTest(probability=probability):
                 before = len(self.fake.requests)
-                self.push_prompt(1, 1, dataset_lessons=1, dataset_projects=0)
+                self.push_prompt(0, 1, dataset_lessons=1, dataset_projects=0)
                 self.fake.push([{"source": "graph", "text": "Allow sharp."}])
-                self.fake.push({"answers": {"useful_1": noul(useful), "known_1": noul(known)},
+                self.fake.push({"answers": {"passage_1": noul(probability)},
                                 "usage": {"input_tokens": 500}})
                 result = core.prompt(self.prepare("prompt", prompt="What fixed sharp?"), self.config)
                 self.assertEqual(result, expected)
-                first, recall, passage = self.fake.requests[before:]
+                *firsts, recall, passage = self.fake.requests[before:]
+                first = next(r for r in firsts if "cognee" in r["body"]["questions"])
                 self.assertEqual(first["body"]["state"]["datasets"], {
                     "lessons": {"description": "technical fixes", "items": ["sharp build scripts"]},
                     "projects": {"description": "past projects", "items": []}})
                 self.assertEqual(recall["body"]["dataset_ids"], ["lessons-id"])
-                self.assertEqual(set(passage["body"]["state"]), {"prompt", "compaction_summary", "recent_exchanges", "passages"})
-                self.assertEqual(passage["body"]["state"]["passages"], {"p1": "Allow sharp."})
+                self.assertEqual(passage["body"]["state"], {"prompt": "What fixed sharp?"})
+                self.assertEqual(passage["body"]["questions"]["passage_1"]["instructions"]["passage"], "Allow sharp.")
                 self.assertLessEqual(first["timeout"], 2)
                 self.assertLessEqual(recall["timeout"], 12)
                 self.assertLessEqual(passage["timeout"], 2)
@@ -269,17 +270,17 @@ class CoreTests(IsolatedTest):
         (self.repo / "jev.md").write_text("acme-shop card", encoding="utf-8")
         store.write_text(store.home() / "datasets.md", "- lessons: technical fixes\n")
         self.prepare("start")
-        self.push_prompt(1, 1, dataset_lessons=1)
+        self.push_prompt(0, 1, dataset_lessons=1)
         self.fake.push([])
         self.assertEqual(core.prompt(self.prepare("prompt", prompt="Past fixes?"), self.config), "")
-        self.assertEqual(len(self.fake.requests), 2)
+        self.assertEqual(len(self.fake.requests), 4)
         breaker.record("cognee", {"kind": "auth", "reason": "key refused", "status": 401})
-        self.push_prompt(1, 1, dataset_lessons=1)
+        self.push_prompt(0, 1, dataset_lessons=1)
         result = core.prompt(self.prepare("prompt", prompt="Past fixes?"), self.config)
         self.assertIn("packets wait to be sent", result)
-        self.assertEqual(len(self.fake.requests), 3)
+        self.assertEqual(len(self.fake.requests), 7)
         entry = store.append_draft(self.repo, turn(), "project", False, breaker.ratio())
-        self.push_prompt(1, 1, dataset_lessons=1, entry_d1=1)
+        self.push_prompt(0, 1, dataset_lessons=1, entry_d1=1)
         result = core.prompt(self.prepare("prompt", prompt="Grid?"), self.config)
         self.assertEqual(result, "memsift, from the working notes:\n" + entry["text"])
         self.assertTrue(breaker.paused("cognee"))
@@ -287,8 +288,9 @@ class CoreTests(IsolatedTest):
     def test_prompt_timeout_delivers_flags_without_memory_or_pending_turn(self):
         from memsift import core, store
         self.prepare("start")
-        self.fake.push({"answers": {"missing": noul(1), "cognee": noul(1)},
-                        "usage": {"input_tokens": 500}}, delay=3)
+        for _ in range(3):
+            self.fake.push({"answers": {"has_info": noul(0), "cognee": noul(1)},
+                            "usage": {"input_tokens": 500}}, delay=3)
         started = time.monotonic()
         result = core.prompt(self.prepare("prompt", prompt="Earlier grid?"), self.config)
         self.assertLess(time.monotonic() - started, 2.4)
@@ -301,13 +303,13 @@ class CoreTests(IsolatedTest):
         from memsift import core, store
         self.prepare("start")
         store.write_text(store.home() / "datasets.md", "- lessons: technical fixes\n")
-        self.push_prompt(1, 1, dataset_lessons=1)
+        self.push_prompt(0, 1, dataset_lessons=1)
         self.fake.push(["Unsorted secret-free passage."])
         self.fake.push({"error": "unavailable"}, status=500)
         result = core.prompt(self.prepare("prompt", prompt="Earlier fix?"), self.config)
         self.assertIn("This repo has no jev.md", result)
         self.assertNotIn("Unsorted", result)
-        self.assertEqual(len(self.fake.requests), 3)
+        self.assertEqual(len(self.fake.requests), 5)
 
     def test_prompt_protected_oversize_and_file_fault_keep_flags(self):
         from memsift import core, store
@@ -342,7 +344,8 @@ class CoreTests(IsolatedTest):
                     self.push_prompt()
                     captured = core.prepare(host.normalize("UserPromptSubmit", raw, host_name))
                     self.assertEqual(core.dispatch(captured, self.config), "")
-                    self.assertEqual(self.fake.requests[-1]["body"]["state"]["session_start"], description)
+                    self.assertTrue(all("session_start" not in r["body"]["state"]
+                                        for r in self.fake.requests[-3:]))
                     self.assertEqual(captured["repo_root"], str(self.repo.resolve()))
 
     def test_retraction_tail_is_sent_for_both_hosts_and_replay(self):
@@ -476,12 +479,12 @@ class CoreTests(IsolatedTest):
     def test_new_flags_survive_prompt_and_action_work(self):
         from memsift import core, jev, store
         self.prepare("start")
-        request = jev.request
+        request = jev._request
         def classify(*args, **kwargs):
             store.update_session_if_exists("a1", lambda s: dict(s, flags=s["flags"] + ["jev_md_outdated"]))
             return request(*args, **kwargs)
         self.push_prompt()
-        with patch("memsift.jev.request", side_effect=classify):
+        with patch("memsift.jev._request", side_effect=classify):
             result = core.prompt(self.prepare("prompt", prompt="Continue"), self.config)
         self.assertIn("This repo has no jev.md", result)
         self.assertIn("jev.md looks outdated", result)
@@ -661,16 +664,16 @@ class CoreTests(IsolatedTest):
         self.assertEqual(breaker.state()["services"]["jev"]["failures"], 1)
         self.assertIn("Traceback", store.read_text(store.home() / "debug.log"))
 
-    def test_oversize_card_is_protected_in_prompt_and_stop(self):
+    def test_oversize_card_is_absent_at_prompt_and_protected_at_stop(self):
         from memsift import core, store
         (self.repo / "jev.md").write_text("x" * 100000, encoding="utf-8")
         self.prepare("start")
         self.push_prompt()
-        self.fake.push(stop_body())
         captured = self.prepare("prompt", prompt="Keep twelve columns.")
         self.assertEqual(core.prompt(captured, self.config), "")
         core.stop(self.prepare("stop", answer="Applied."), self.config)
-        self.assertEqual(self.fake.requests, [])
+        self.assertEqual(len(self.fake.requests), 3)
+        self.assertTrue(all("project_card" not in r["body"]["state"] for r in self.fake.requests))
         self.assertEqual(len(store.pending_turns(self.repo)), 1)
         self.assertEqual(store.read_notes(self.repo)["entries"], [])
 
@@ -732,3 +735,98 @@ class CoreTests(IsolatedTest):
         with self.assertRaises(ValueError):
             self.prepare("start", source="unknown")
 
+    def test_prompt_requests_are_parallel_and_isolate_each_note(self):
+        from memsift import core, jev, store
+        (self.repo / "jev.md").write_text("excluded card")
+        self.prepare("start")
+        store.append_draft(self.repo, turn("First unique entry"), "project", False, 3)
+        store.append_draft(self.repo, turn("Second unique entry"), "project", False, 3)
+        transcript = self.home / "transcript.jsonl"
+        transcript.write_text(json.dumps({"type": "user", "isCompactSummary": True,
+                                         "message": {"content": "excluded summary"}}) + "\n" +
+                              json.dumps({"type": "user", "message": {"content": "Current exchange"}}))
+        store.write_text(store.home() / "datasets.md", "- lessons: past fixes\n")
+        for _ in range(3):
+            self.fake.push({"answers": {"has_info": noul(0), "entry_d1": noul(1),
+                                        "entry_d2": noul(1), "cognee": noul(0),
+                                        "dataset_lessons": noul(0)},
+                            "usage": {"input_tokens": 500}}, delay=0.25)
+        work = self.prepare("prompt", prompt="Back to that decision", transcript_path=str(transcript))
+        started = time.monotonic()
+        result = core.prompt(work, self.config)
+        self.assertLess(time.monotonic() - started, 0.65)
+        self.assertIn("First unique entry", result)
+        self.assertIn("Second unique entry", result)
+        self.assertEqual(len(self.fake.requests), 3)
+        bodies = {next(iter(r["body"]["questions"])): r["body"] for r in self.fake.requests}
+        self.assertEqual(set(bodies["has_info"]["state"]), {"prompt", "conversation"})
+        self.assertEqual(set(bodies["cognee"]["state"]), {"prompt", "datasets"})
+        entries = bodies["entry_d1"]
+        self.assertEqual(entries["state"], {"prompt": work["event"]["prompt"]})
+        self.assertEqual(set(entries["questions"]), {"entry_d1", "entry_d2"})
+        for identifier, other in (("d1", "Second"), ("d2", "First")):
+            question = entries["questions"]["entry_" + identifier]
+            self.assertNotIn(other + " unique entry", repr(question))
+            self.assertEqual(question["instructions"]["note"],
+                             store.read_notes(self.repo)["entries"][int(identifier[1:]) - 1]["text"])
+        self.assertNotIn("excluded card", repr(bodies))
+        self.assertNotIn("excluded summary", repr(bodies))
+        for name in ("has_info", "cognee"):
+            self.assertNotIn("unique entry", repr(bodies[name]))
+        self.assertEqual(jev.choose_prompt({"has_info": noul(0.5)}, [], []),
+                         {"entries": [], "datasets": [], "recall": False})
+
+    def test_slow_transcript_read_expires_the_whole_prompt_before_model_work(self):
+        from memsift import core, store
+        self.prepare("start")
+        work = self.prepare("prompt", prompt="Earlier decision?")
+        def slow_read(*args):
+            time.sleep(0.3)
+            return {"summary": "", "exchanges": []}
+        started = time.monotonic()
+        with patch("memsift.core.PROMPT_DEADLINE", 0.1, create=True), \
+                patch("memsift.host.read_conversation", side_effect=slow_read):
+            result = core.prompt(work, self.config)
+            self.assertLess(time.monotonic() - started, 0.22)
+            time.sleep(0.3)
+        self.assertNotIn("from the", result)
+        self.assertEqual(self.fake.requests, [])
+        log = store.read_text(store.home() / "debug.log")
+        self.assertIn("Traceback", log)
+        self.assertIn("deadline", log.lower())
+
+    def test_huge_tool_record_pastes_nothing_and_logs_without_calling_jev(self):
+        from memsift import core, store
+        self.prepare("start")
+        transcript = self.home / "transcript.jsonl"
+        with transcript.open("wb") as stream:
+            stream.write(b'{"type":"user","message":{"content":[{"type":"tool_result","content":"')
+            stream.write(b"x" * (9 * 1024 * 1024))
+            stream.write(b'"}]}}\n{"type":"user","message":{"content":"newest"}}\n')
+        started = time.monotonic()
+        result = core.prompt(self.prepare("prompt", prompt="Earlier grid?",
+                                         transcript_path=str(transcript)), self.config)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertNotIn("from the", result)
+        self.assertEqual(self.fake.requests, [])
+        self.assertIn("Transcript record", store.read_text(store.home() / "debug.log"))
+
+    def test_passage_uses_only_time_left_after_local_work_and_recall(self):
+        from memsift import core, store
+        (self.repo / "jev.md").write_text("acme-shop")
+        self.prepare("start")
+        store.write_text(store.home() / "datasets.md", "- lessons: past fixes\n")
+        for _ in range(3):
+            self.fake.push({"answers": {"has_info": noul(0), "cognee": noul(1),
+                                        "dataset_lessons": noul(1)},
+                            "usage": {"input_tokens": 500}}, delay=0.05)
+        self.fake.push(["Unsorted passage"], delay=0.1)
+        self.fake.push({"answers": {"passage_1": noul(1)}, "usage": {"input_tokens": 500}}, delay=0.4)
+        started = time.monotonic()
+        with patch("memsift.core.PROMPT_DEADLINE", 0.35):
+            result = core.prompt(self.prepare("prompt", prompt="Past fix?"), self.config)
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertNotIn("Unsorted passage", result)
+        self.assertEqual(len(self.fake.requests), 5)
+        self.assertLess(self.fake.requests[-1]["timeout"], 0.22)
+        time.sleep(0.3)

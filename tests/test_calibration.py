@@ -16,11 +16,11 @@ def noul(value):
     return {"type": "noul", "noul": value}
 
 
-def prompt_response(questions, missing=0.9, cognee=0.9, dataset=0.6):
+def prompt_response(questions, has_info=0.1, cognee=0.9, dataset=0.6):
     answers = {}
     for name, question in questions.items():
         if question["type"] == "noul":
-            value = missing if name == "missing" else cognee if name == "cognee" else dataset
+            value = has_info if name == "has_info" else cognee if name == "cognee" else dataset
             answers[name] = noul(value)
     return answers
 
@@ -94,7 +94,7 @@ class CalibrationTests(IsolatedTest):
 
         output = io.StringIO()
         with patch("builtins.input", return_value="yes"), \
-                patch("memsift.jev.request", side_effect=lambda config, state, questions, **kwargs:
+                patch("memsift.jev._request", side_effect=lambda config, state, questions, **kwargs:
                       answer(questions)) as request, redirect_stdout(output):
             result = calibrate_jev.main([str(labels)])
         return result, output.getvalue(), request
@@ -108,7 +108,7 @@ class CalibrationTests(IsolatedTest):
             encoding="utf-8",
         )
         with patch("builtins.input", return_value="n"), \
-                patch("memsift.jev.request") as request:
+                patch("memsift.jev._request") as request:
             self.assertEqual(calibrate_jev.main([str(labels)]), 0)
         request.assert_not_called()
 
@@ -126,7 +126,7 @@ class CalibrationTests(IsolatedTest):
         for main, path, service in ((calibrate_jev.main, self.label(), "calibrate-jev-consent"),
                                     (compare_compactors.main, self.draft(), "compare-compactors-consent")):
             with self.subTest(service=service), patch("builtins.input", side_effect=EOFError), \
-                    patch("memsift.jev.request") as jev_request, \
+                    patch("memsift.jev._request") as jev_request, \
                     patch("memsift.compactor.request") as compactor_request:
                 self.assertEqual(main([str(path)]), 0)
             jev_request.assert_not_called()
@@ -142,7 +142,7 @@ class CalibrationTests(IsolatedTest):
         with labels.open("a", encoding="utf-8") as stream:
             stream.write('{"prompt": 3}\n')
         stderr = io.StringIO()
-        with patch("builtins.input") as consent, patch("memsift.jev.request") as request, \
+        with patch("builtins.input") as consent, patch("memsift.jev._request") as request, \
                 redirect_stderr(stderr):
             self.assertEqual(calibrate_jev.main([str(labels)]), 2)
         consent.assert_not_called()
@@ -163,34 +163,24 @@ class CalibrationTests(IsolatedTest):
                 self.assertEqual(main(argv), 2)
             consent.assert_not_called()
 
-    def test_i6_full_and_minimal_requests_use_exact_defaults_and_routing(self):
+    def test_three_requests_match_the_hook_and_ignore_summary_and_card(self):
         from memsift import jev
-
-        labels = self.label(session_start="new session", datasets={
-            "memory": {"description": "past work, decisions and lessons of this project",
-                       "items": ["acme-shop payment flow decision"]}
-        })
-        thresholds = (jev.MISSING, jev.ENTRY, jev.COGNEE, jev.DATASET)
+        from tests import calibrate_jev
+        labels = self.label(project_card="excluded card", session_start="resume",
+                            conversation={"summary": "excluded summary", "exchanges": []},
+                            notes={"d1": "First note", "g2": "Second note"})
+        label = calibrate_jev._load(labels)[0]
+        plans = calibrate_jev._plans([label])
+        self.assertEqual(len(plans), 3)
+        self.assertEqual([(s, q) for _, _, s, q in plans], jev.prompt_requests({
+            "prompt": label["prompt"], "conversation": [],
+            "notes": label["notes"], "datasets": label["datasets"]}))
+        self.assertNotIn("excluded", repr(plans))
         result, output, request = self.run_calibration(labels)
         self.assertEqual(result, 0)
-        self.assertEqual(request.call_count, 2)
-        full_state = request.call_args_list[0].args[1]
-        full_questions = request.call_args_list[0].args[2]
-        minimal_state = request.call_args_list[1].args[1]
-        minimal_questions = request.call_args_list[1].args[2]
-        self.assertEqual(full_state["session_start"], "new session")
-        self.assertEqual(full_state["datasets"], {
-            "memory": {"description": "past work, decisions and lessons of this project",
-                       "items": ["acme-shop payment flow decision"]}
-        })
-        self.assertIn("dataset_memory", full_questions)
-        self.assertEqual(set(minimal_state), {"prompt", "project_card", "notes"})
-        self.assertNotIn("dataset_memory", minimal_questions)
-        self.assertIn("Full: 1/1 correct", output)
-        self.assertIn("Minimal: 1/1 correct", output)
-        self.assertEqual(output.count("Cognee call frequency 100.0%"), 2)
-        self.assertIn("dataset selection: unmeasured", output)
-        self.assertEqual((jev.MISSING, jev.ENTRY, jev.COGNEE, jev.DATASET), thresholds)
+        self.assertEqual(request.call_count, 3)
+        self.assertIn("Prompt: 0/1 correct", output)
+        self.assertNotIn("Minimal", output)
 
     def test_missing_optional_fields_use_defaults_without_memory_reads(self):
         from tests import calibrate_jev
@@ -218,11 +208,11 @@ class CalibrationTests(IsolatedTest):
 
         result, output, request = self.run_calibration(labels, answers)
         self.assertEqual(result, 0)
-        self.assertEqual(request.call_count, 4)
-        self.assertIn("(4 requests;", output)
+        self.assertEqual(request.call_count, 5)
+        self.assertIn("(5 requests;", output)
         self.assertIn("Nature-choice ordering sensitivity: 1/1 choices changed.", output)
-        baseline = request.call_args_list[2].args[2]["nature"]["criteria"]
-        alternate = request.call_args_list[3].args[2]["nature"]["criteria"]
+        baseline = request.call_args_list[3].args[2]["nature"]["criteria"]
+        alternate = request.call_args_list[4].args[2]["nature"]["criteria"]
         self.assertEqual(list(baseline), list(reversed(list(alternate))))
         self.assertEqual(set(baseline), set(alternate))
 
@@ -231,17 +221,17 @@ class CalibrationTests(IsolatedTest):
         from tests import calibrate_jev
 
         label = calibrate_jev._load(self.label(expected="nothing"))[0]
-        result = {"label": label, "answers": {"missing": noul(0.69), "cognee": noul(0.9),
+        result = {"label": label, "answers": {"has_info": noul(0.69), "cognee": noul(0.9),
                                                "dataset_memory": noul(0.6)}}
         thresholds, correct = calibrate_jev._best_thresholds([result])
-        self.assertEqual(thresholds, (jev.MISSING, jev.ENTRY, jev.COGNEE))
+        self.assertEqual(thresholds, (jev.HAS_INFO, jev.ENTRY, jev.COGNEE))
         self.assertEqual(correct, 1)
 
     def test_unknown_price_and_missing_comparative_metadata_gate_before_consent(self):
         from tests import calibrate_jev, compare_compactors
 
         os.environ["MEMSIFT_JEV_MODEL"] = "invented-unknown-model"
-        with patch("builtins.input") as consent, patch("memsift.jev.request") as request, \
+        with patch("builtins.input") as consent, patch("memsift.jev._request") as request, \
                 redirect_stderr(io.StringIO()):
             self.assertEqual(calibrate_jev.main([str(self.label())]), 2)
         consent.assert_not_called()
@@ -297,7 +287,7 @@ class CalibrationTests(IsolatedTest):
     def test_model_exceptions_return_failure_and_log_tracebacks(self):
         from tests import calibrate_jev, compare_compactors
 
-        cases = ((calibrate_jev.main, [str(self.label())], "memsift.jev.request"),
+        cases = ((calibrate_jev.main, [str(self.label())], "memsift.jev._request"),
                  (compare_compactors.main, [str(self.draft())], "memsift.compactor.request"))
         for main, argv, target in cases:
             with self.subTest(target=target), patch("builtins.input", return_value="yes"), \
@@ -342,17 +332,16 @@ class CalibrationTests(IsolatedTest):
     def test_accepted_direct_clis_use_only_guarded_fake_models(self):
         scripts = Path(__file__).parent
         labels = self.label()
-        full = {"missing": noul(0.9), "cognee": noul(0.9), "dataset_memory": noul(0.6)}
-        minimal = {"missing": noul(0.9), "cognee": noul(0.9)}
-        self.fake.push({"answers": full, "usage": {"input_tokens": 100}})
-        self.fake.push({"answers": minimal, "usage": {"input_tokens": 80}})
+        answers = {"has_info": noul(0), "cognee": noul(0.9), "dataset_memory": noul(0.6)}
+        for _ in range(3):
+            self.fake.push({"answers": answers, "usage": {"input_tokens": 100}})
         env = child_env(self.fake.url, self.home)
         env["MEMSIFT_JEV_MODEL"] = "typesafe/jev-1.13"
         result = subprocess.run([sys.executable, str(scripts / "calibrate_jev.py"), labels.name],
                                 input="yes\n", text=True, capture_output=True, cwd=self.home,
                                 env=env, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Full: 1/1 correct", result.stdout)
+        self.assertIn("Prompt: 1/1 correct", result.stdout)
 
         draft = self.draft()
         self.fake.push(envelope(compacted()))
@@ -361,9 +350,9 @@ class CalibrationTests(IsolatedTest):
                                 input="yes\n", text=True, capture_output=True, cwd=self.home,
                                 env=env, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(self.fake.requests), 4)
+        self.assertEqual(len(self.fake.requests), 5)
         self.assertEqual(result.stdout.count("Measured provider token use"), 2)
         self.assertEqual(sum(request["url"].endswith("/chat/completions")
                              for request in self.fake.requests), 2)
         self.assertEqual(sum("/api/alpha/decisions" in request["url"]
-                             for request in self.fake.requests), 2)
+                             for request in self.fake.requests), 3)

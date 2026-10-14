@@ -3,6 +3,7 @@
 import copy
 from datetime import datetime, timezone
 from pathlib import Path
+import threading
 import time
 from typing import Optional
 
@@ -10,6 +11,8 @@ from . import breaker, cognee, compactor, host, jev, store
 from .vendor.file_lock import file_lock
 from .vendor.logfiles import decision, error
 from .vendor.redact import redact
+
+PROMPT_DEADLINE = 16.0
 
 SESSION_START = {
     "startup": "new session: the agent knows nothing of this repo",
@@ -169,7 +172,7 @@ def _answers(answers):
     return view
 
 
-def _prompt_memory(work, config):
+def _prompt_memory(work, config, deadline):
     root = Path(work["repo_root"])
     ratio = breaker.ratio()
     notes = store.read_notes(root)
@@ -180,13 +183,9 @@ def _prompt_memory(work, config):
     datasets = {name: {"description": descriptions.get(name, ""), "items": rows.get(name, {}).get("items", [])}
                 for name in dict.fromkeys(list(descriptions) + list(rows))
                 if descriptions.get(name) != "IGNORED"}
-    state = {"prompt": work["event"]["prompt"],
-             "session_start": SESSION_START[work["session"].get("source", "startup")],
-             "project_card": store.read_text(root / "jev.md"),
-             "compaction_summary": conversation["summary"], "recent_exchanges": conversation["exchanges"],
+    state = {"prompt": work["event"]["prompt"], "conversation": conversation["exchanges"],
              "notes": {entry["id"]: entry["text"] for entry in notes["entries"]}, "datasets": datasets}
-    state = host.fit_prompt(state, jev.prompt_questions(state), ratio)
-    answers = jev.request(config, state, jev.prompt_questions(state), timeout=jev.PROMPT_TIMEOUT)
+    answers = jev.request_prompt(config, state, timeout=_remaining(deadline, jev.PROMPT_TIMEOUT))
     choice = jev.choose_prompt(answers, list(state["notes"]), list(state["datasets"]))
     decision("core-prompt", {"prompt": work["event"]["prompt"][:80], "answers": _answers(answers), **choice})
     if choice["entries"]:
@@ -194,12 +193,14 @@ def _prompt_memory(work, config):
     if not choice["recall"] or breaker.paused("cognee"):
         return ""
     passages = cognee.recall(config, state["prompt"],
-                             [rows.get(name, {"name": name, "id": ""}) for name in choice["datasets"]], timeout=12.0)
+                             [rows.get(name, {"name": name, "id": ""}) for name in choice["datasets"]],
+                             timeout=_remaining(deadline, 12.0))
     if not passages:
         return ""
-    passage_state = {key: state[key] for key in ("prompt", "compaction_summary", "recent_exchanges")}
-    passage_state["passages"] = {passage["id"]: passage["text"] for passage in passages}
-    answers = jev.request(config, passage_state, jev.passage_questions(passage_state), timeout=jev.PASSAGE_TIMEOUT)
+    passage_state = {"prompt": state["prompt"],
+                     "passages": {passage["id"]: passage["text"] for passage in passages}}
+    answers = jev.request(config, {"prompt": state["prompt"]}, jev.passage_questions(passage_state),
+                         timeout=_remaining(deadline, jev.PASSAGE_TIMEOUT))
     kept = jev.choose_passages(answers, passages)
     blocks = []
     for name in dict.fromkeys(passage["dataset"] for passage in kept):
@@ -208,15 +209,41 @@ def _prompt_memory(work, config):
     return "\n\n".join(blocks)
 
 
+def _remaining(deadline, cap):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Prompt deadline expired")
+    return min(cap, remaining)
+
+
 def prompt(work: dict, config: dict) -> str:
-    memory = ""
-    if not breaker.paused("jev"):
+    deadline = time.monotonic() + PROMPT_DEADLINE
+    result = {}
+    completed = threading.Event()
+
+    def read_context():
         try:
-            memory = _prompt_memory(work, config)
+            memory = ""
+            if not breaker.paused("jev"):
+                try:
+                    memory = _prompt_memory(work, config, deadline)
+                except Exception as exc:
+                    _log("core-prompt", exc)
+            _remaining(deadline, PROMPT_DEADLINE)
+            result["text"] = "\n\n".join(block for block in (memory, _advisories(work)) if block)
         except Exception as exc:
             _log("core-prompt", exc)
-    advisory = _advisories(work)
-    return "\n\n".join(block for block in (memory, advisory) if block)
+        finally:
+            completed.set()
+
+    threading.Thread(target=read_context, daemon=True).start()
+    if not completed.wait(max(0, deadline - time.monotonic())):
+        try:
+            raise TimeoutError("Prompt deadline expired during local or service work")
+        except TimeoutError as exc:
+            _log("core-prompt", exc)
+        return ""
+    return result.get("text", "")
 
 
 def tool(work: dict, config: dict) -> str:

@@ -33,16 +33,22 @@ class JevTests(IsolatedTest):
     def test_question_text_criteria_and_conditional_fields(self):
         from memsift import jev
         questions = jev.prompt_questions({"notes": {"g1": "grid"}, "datasets": {"lessons": {}}})
-        self.assertEqual(questions["missing"]["instructions"], "Does the agent lack information, needed to act on `prompt`, that already exists: said or decided before this conversation, and not in `compaction_summary` or `recent_exchanges`?")
-        self.assertEqual(questions["missing"]["criteria"]["true"], "the prompt refers to work, a decision or a preference from before this conversation, which the agent cannot see")
-        self.assertEqual(questions["missing"]["criteria"]["false"], "the information does not exist yet (it is being decided now), or the agent already has it, or the prompt needs no memory")
-        self.assertEqual(questions["entry_g1"]["instructions"], "Does `notes.g1` hold information the agent needs to act on `prompt` and does not have yet?")
+        self.assertEqual(questions["has_info"]["instructions"], "Does `conversation` already contain everything the agent needs to act on `prompt`?")
+        self.assertEqual(questions["has_info"]["criteria"], {
+            "true": "the information the prompt relies on is stated in the conversation, or the prompt needs no past information at all (a new instruction, ok, commit, a general question)",
+            "false": "the prompt relies on a past decision, rule, fact or state of the work that the conversation does not contain"})
+        self.assertEqual(questions["entry_g1"]["instructions"], {"note": "grid", "question": "Does `note` answer `prompt` or give information needed to act on it?"})
+        self.assertEqual(questions["entry_g1"]["criteria"], {
+            "true": "the note is about what the prompt asks or needs",
+            "false": "the note is about something else, or the prompt needs nothing from it"})
         self.assertEqual(questions["dataset_lessons"]["instructions"], "Given its description and items, would `datasets.lessons` hold what the agent needs for `prompt`?")
         self.assertEqual(questions["cognee"]["instructions"], "Is it worth searching the long-term memory?")
         self.assertEqual(questions["cognee"]["criteria"], {"true": "the prompt refers to past work, a decision or a preference, absent from the conversation and the notes, and the agent would act differently knowing it", "false": "a general question, an answer found in the code or the docs, or memory would only be a bonus without changing what the agent does"})
         passage = jev.passage_questions({"passages": {"p2": "grid"}})
-        self.assertEqual(passage["useful_2"]["instructions"], "Would `passages.p2` change what the agent does for `prompt`?")
-        self.assertEqual(passage["known_2"]["instructions"], "Is the information in `passages.p2` already in `compaction_summary` or `recent_exchanges`?")
+        self.assertEqual(passage, {"passage_2": {"type": "noul", "instructions": {
+            "passage": "grid", "question": "Does `passage` answer `prompt` or give information needed to act on it?"},
+            "criteria": {"true": "the passage is about what the prompt asks or needs",
+                         "false": "the passage is about something else, or the prompt needs nothing from it"}}})
         plain = jev.stop_questions({})
         self.assertNotIn("card_outdated", plain)
         self.assertFalse(any(k.startswith("confirmed_") for k in plain))
@@ -140,17 +146,19 @@ class JevTests(IsolatedTest):
                 time.sleep(0.2)
                 self.assertEqual(breaker.state()["services"]["jev"]["failures"], 1)
 
-    def test_size_retry_halves_recent_exchanges_and_succeeds_once(self):
+    def test_size_retry_halves_exchanges_not_characters(self):
         from memsift import breaker, jev
-        state = {"prompt": "grid", "recent_exchanges": "abcdefgh", "notes": {}, "datasets": {}}
-        questions = jev.prompt_questions(state)
+        exchanges = [{"role": "user", "text": text, "actions": []}
+                     for text in ("old" * 1000, "second", "third", "newest")]
+        state = {"prompt": "grid", "conversation": exchanges}
+        questions = {"has_info": jev.prompt_questions(state)["has_info"]}
         self.fake.push({"error": {"code": "context_length_exceeded"}}, status=400, delay=0.05)
-        self.fake.push({"answers": {"missing": noul(0), "cognee": noul(0)}, "usage": {"input_tokens": 100}})
+        self.fake.push({"answers": {"has_info": noul(0)}, "usage": {"input_tokens": 100}})
         result = jev.request(self.config, state, questions, timeout=1)
-        self.assertEqual(result["missing"], noul(0))
-        self.assertEqual(self.fake.requests[1]["body"]["state"]["recent_exchanges"], "efgh")
+        self.assertEqual(result["has_info"], noul(0))
+        self.assertEqual(self.fake.requests[1]["body"]["state"]["conversation"], exchanges[2:])
         self.assertLess(self.fake.requests[1]["timeout"], self.fake.requests[0]["timeout"])
-        self.assertEqual(state["recent_exchanges"], "abcdefgh")
+        self.assertEqual(state["conversation"], exchanges)
         self.assertEqual(breaker.state()["services"]["jev"]["failures"], 0)
 
     def test_second_size_refusal_is_one_failure(self):
@@ -216,10 +224,10 @@ class JevTests(IsolatedTest):
         state = {"prompt": "grid PASSWORD=invented-private-value", "passages": {"p1": "twelve"},
                  "compaction_summary": "summary", "recent_exchanges": "conversation",
                  "notes": {"d1": "unused"}, "instruction_files": "unused", "project_card": "unused"}
-        self.fake.push({"answers": {"useful_1": noul(0.7), "known_1": noul(0)}, "usage": {"input_tokens": 100}})
+        self.fake.push({"answers": {"passage_1": noul(0.7)}, "usage": {"input_tokens": 100}})
         jev.request(self.config, state, jev.passage_questions(state), timeout=1)
         sent = self.fake.requests[0]["body"]["state"]
-        self.assertEqual(set(sent), {"prompt", "passages", "compaction_summary", "recent_exchanges"})
+        self.assertEqual(set(sent), {"prompt"})
         self.assertNotIn("invented-private-value", repr(sent))
 
     def test_token_decisions_log_estimated_and_actual(self):
@@ -245,11 +253,11 @@ class JevTests(IsolatedTest):
     def test_real_prompt_deadline_discards_slow_body(self):
         from memsift import breaker, jev
         state = {"prompt": "grid", "notes": {}, "datasets": {}}
-        wire = json.dumps({"answers": {"missing": noul(1), "cognee": noul(1)}, "usage": {"input_tokens": 100}}).encode()
+        wire = json.dumps({"answers": {"has_info": noul(0)}, "usage": {"input_tokens": 100}}).encode()
         self.fake.push_chunks([wire[:10], wire[10:20], wire[20:30], wire[30:40], wire[40:]], interval=0.55)
         start = time.monotonic()
         with self.assertRaises(breaker.ServiceError) as caught:
-            jev.request(self.config, state, jev.prompt_questions(state), timeout=jev.PROMPT_TIMEOUT)
+            jev.request(self.config, state, {"has_info": jev.prompt_questions(state)["has_info"]}, timeout=jev.PROMPT_TIMEOUT)
         self.assertLess(time.monotonic() - start, 2.3)
         self.assertEqual(caught.exception.status, 200)
         self.assertEqual(breaker.ratio(), 3)
@@ -366,3 +374,33 @@ class JevTests(IsolatedTest):
         self.assertEqual(len(fitted["recent_exchanges"]), 1)
         self.assertTrue(fitted["recent_exchanges"][0]["text"].endswith("I take back the correction"))
         self.assertLessEqual(len(json.dumps(fitted["recent_exchanges"], ensure_ascii=False)), 9000)
+
+    def test_parallel_prompt_failure_counts_once_and_cannot_be_reset_by_siblings(self):
+        from memsift import breaker, jev
+        for statuses in ((500, 500, 500), (500, 200, 200)):
+            with self.subTest(statuses=statuses):
+                breaker.resume("jev")
+                breaker.record("jev", {"kind": "failure", "reason": "previous failure", "status": 500})
+                for status in statuses:
+                    body = ({"answers": {"has_info": noul(0), "cognee": noul(0)},
+                             "usage": {"input_tokens": 500}} if status == 200 else {"error": "unavailable"})
+                    self.fake.push(body, status=status, delay=0.05 if status == 200 else 0)
+                with self.assertRaises(breaker.ServiceError):
+                    jev.request_prompt(self.config, {"prompt": "grid"}, timeout=0.5)
+                self.assertEqual(breaker.state()["services"]["jev"]["failures"], 2)
+
+    def test_embedded_notes_and_passages_are_redacted_on_the_wire(self):
+        from memsift import jev
+        state = {"prompt": "Use the account", "notes": {"d1": "PASSWORD=invented-private-value"}}
+        for _ in range(3):
+            self.fake.push({"answers": {"has_info": noul(0), "entry_d1": noul(1), "cognee": noul(0)},
+                            "usage": {"input_tokens": 500}})
+        jev.request_prompt(self.config, state, timeout=1)
+        self.fake.push({"answers": {"passage_1": noul(1)}, "usage": {"input_tokens": 500}})
+        passage_state = {"prompt": state["prompt"], "passages": {"p1": "PASSWORD=invented-private-value"}}
+        jev.request(self.config, {"prompt": state["prompt"]}, jev.passage_questions(passage_state), timeout=1)
+        self.assertEqual(len(self.fake.requests), 4)
+        self.assertNotIn("invented-private-value", repr(self.fake.requests))
+        entries = next(r["body"]["questions"] for r in self.fake.requests
+                       if "entry_d1" in r["body"]["questions"])
+        self.assertEqual(entries["entry_d1"]["instructions"]["note"], "[redacted:credential]")

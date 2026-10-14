@@ -64,12 +64,13 @@ class IntegrationTests(IsolatedTest):
             self.assertEqual(text, "")
         return text
 
-    def push_prompt(self, missing=0, cognee=0, **choices):
-        self.fake.push({"answers": {"missing": noul(missing), "cognee": noul(cognee),
-                                    "dataset_memsift": noul(0),
-                                    **{key: noul(value) for key, value in choices.items()}},
-                        "usage": {"input_tokens": 500}},
-                       path="/api/alpha/decisions")
+    def push_prompt(self, has_info=1, cognee=0, **choices):
+        for _ in range(3):
+            self.fake.push({"answers": {"has_info": noul(has_info), "cognee": noul(cognee),
+                                        "dataset_memsift": noul(0),
+                                        **{key: noul(value) for key, value in choices.items()}},
+                            "usage": {"input_tokens": 500}},
+                           path="/api/alpha/decisions")
 
     def push_index(self):
         self.fake.push([{"id": "acme-memory", "name": "memsift"}], path="/api/v1/datasets")
@@ -120,9 +121,10 @@ class IntegrationTests(IsolatedTest):
         prompt = "Use the footer grid because the header must align."
         self.push_prompt()
         self.assertEqual(self.invoke("prompt", host_name, prompt=prompt + "\n" + secret_input), "")
-        state = self.fake.requests[-1]["body"]["state"]
-        self.assertEqual({row["role"] for row in state["recent_exchanges"]}, {"user", "assistant"})
-        self.assertEqual(state["notes"], {})
+        state = next(r["body"]["state"] for r in self.fake.requests[-3:]
+                     if "has_info" in r["body"]["questions"])
+        self.assertEqual({row["role"] for row in state["conversation"]}, {"user", "assistant"})
+        self.assertNotIn("notes", state)
         self.assertEqual(breaker.state()["services"]["jev"]["failures"], 0)
         self.invoke("tool", host_name)
         self.fake.push(stop_body(), path="/api/alpha/decisions")
@@ -135,7 +137,7 @@ class IntegrationTests(IsolatedTest):
 
         self.push_index()
         self.invoke("start", host_name, sid="acme-shop-b")
-        self.push_prompt(1, entry_d1=1, dataset_memsift=0)
+        self.push_prompt(0, entry_d1=1, dataset_memsift=0)
         self.assertEqual(self.invoke("prompt", host_name, sid="acme-shop-b", prompt="Back to the header."),
                          "memsift, from the working notes:\n" + first["text"])
         self.push_prompt(entry_d1=0, dataset_memsift=0)
@@ -190,13 +192,14 @@ class IntegrationTests(IsolatedTest):
         for sid in ("acme-shop-a", "acme-shop-c"):
             self.assertEqual(store.read_json(store.session_path(sid), {})["outage_notices"], [])
         before = len(self.fake.requests)
-        self.push_prompt(1, 1, entry_g1=0, entry_d1=0, dataset_memsift=1)
+        self.push_prompt(0, 1, entry_g1=0, entry_d1=0, dataset_memsift=1)
         self.fake.push([{"text": "Allow sharp build scripts.\n" + secret_input}], path="/api/v1/recall")
-        self.fake.push({"answers": {"useful_1": noul(1), "known_1": noul(0)},
+        self.fake.push({"answers": {"passage_1": noul(1)},
                         "usage": {"input_tokens": 500}}, path="/api/alpha/decisions")
         result = self.invoke("prompt", host_name, sid="acme-shop-c", prompt="What fixed sharp?\n" + secret_input)
         self.assertIn("memsift, from Cognee (dataset memsift):\nAllow sharp build scripts.", result)
-        first_request, recall, passage = self.fake.requests[before:]
+        *first_requests, recall, passage = self.fake.requests[before:]
+        first_request = first_requests[0]
         self.assertEqual(recall["body"]["dataset_ids"], ["acme-memory"])
         self.assertLessEqual(first_request["timeout"], 2)
         self.assertLessEqual(recall["timeout"], 12)

@@ -7,15 +7,15 @@ import time
 import urllib.error
 import urllib.request
 
-from . import breaker, store
+from . import breaker, host, store
 from .vendor.logfiles import decision, error
 from .vendor.redact import redact
 
-MISSING = 0.7
+HAS_INFO = 0.5
 ENTRY = 0.5
 COGNEE = 0.8
 DATASET = 0.5
-USEFUL = 0.7
+PASSAGE = 0.7
 KNOWN = 0.5
 GENERAL_RULE = 0.5
 CORRECTION = 0.5
@@ -48,13 +48,19 @@ def _noul(instructions, criteria=None):
 
 def prompt_questions(state):
     questions = {
-        "missing": _noul("Does the agent lack information, needed to act on `prompt`, that already exists: said or decided before this conversation, and not in `compaction_summary` or `recent_exchanges`?", {
-            "true": "the prompt refers to work, a decision or a preference from before this conversation, which the agent cannot see",
-            "false": "the information does not exist yet (it is being decided now), or the agent already has it, or the prompt needs no memory",
+        "has_info": _noul("Does `conversation` already contain everything the agent needs to act on `prompt`?", {
+            "true": "the information the prompt relies on is stated in the conversation, or the prompt needs no past information at all (a new instruction, ok, commit, a general question)",
+            "false": "the prompt relies on a past decision, rule, fact or state of the work that the conversation does not contain",
         }),
     }
-    for identifier in state.get("notes", {}):
-        questions["entry_" + identifier] = _noul("Does `notes.%s` hold information the agent needs to act on `prompt` and does not have yet?" % identifier)
+    for identifier, text in state.get("notes", {}).items():
+        questions["entry_" + identifier] = _noul({
+            "note": text,
+            "question": "Does `note` answer `prompt` or give information needed to act on it?",
+        }, {
+            "true": "the note is about what the prompt asks or needs",
+            "false": "the note is about something else, or the prompt needs nothing from it",
+        })
     questions["cognee"] = _noul("Is it worth searching the long-term memory?", {
         "true": "the prompt refers to past work, a decision or a preference, absent from the conversation and the notes, and the agent would act differently knowing it",
         "false": "a general question, an answer found in the code or the docs, or memory would only be a bonus without changing what the agent does",
@@ -64,15 +70,73 @@ def prompt_questions(state):
     return questions
 
 
+def prompt_requests(state):
+    """Build the three isolated judgments shared by the hook and calibration."""
+    questions = prompt_questions(state)
+    return [
+        ({"prompt": state["prompt"], "conversation": state.get("conversation", [])},
+         {"has_info": questions["has_info"]}),
+        ({"prompt": state["prompt"]},
+         {key: value for key, value in questions.items() if key.startswith("entry_")}),
+        ({"prompt": state["prompt"], "datasets": state.get("datasets", {})},
+         {key: value for key, value in questions.items() if key == "cognee" or key.startswith("dataset_")}),
+    ]
+
+
+def request_prompt(config, state, *, timeout=PROMPT_TIMEOUT, probe=False):
+    """Run all three requests under one deadline; discard incomplete judgments."""
+    if not probe:
+        breaker.require_active("jev")
+    deadline = time.monotonic() + timeout
+    try:
+        ratio = breaker.ratio()
+        plans = [(host.fit_prompt(fields, questions, ratio), questions)
+                 for fields, questions in prompt_requests(state)]
+        completed = [threading.Event() for _ in plans]
+        results = [{} for _ in plans]
+        failures = []
+
+        def send(index):
+            try:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Jev prompt deadline expired")
+                fields, questions = plans[index]
+                results[index] = _request(config, fields, questions, timeout=remaining, probe=probe, record=False)
+            except Exception as exc:
+                error("jev-prompt-part", exc, "jev")
+                failures.append(exc)
+            finally:
+                completed[index].set()
+
+        for index in range(len(plans)):
+            threading.Thread(target=send, args=(index,), daemon=True).start()
+        for ready in completed:
+            if not ready.wait(max(0, deadline - time.monotonic())):
+                raise TimeoutError("Jev prompt deadline expired")
+        if failures:
+            raise failures[0]
+        if not probe:
+            breaker.record("jev", {"kind": "success", "reason": "", "status": 200})
+        return {key: value for result in results for key, value in result.items()}
+    except Exception as exc:
+        error("jev-prompt", exc, "jev")
+        if not probe and not isinstance(exc, breaker.PausedError):
+            breaker.record("jev", breaker.classify(exc))
+        raise
+
+
 def passage_questions(state):
-    questions = {}
     passages = state.get("passages", {})
-    identifiers = passages if isinstance(passages, dict) else [p["id"] for p in passages]
-    for identifier in identifiers:
-        number = identifier[1:]
-        questions["useful_" + number] = _noul("Would `passages.%s` change what the agent does for `prompt`?" % identifier)
-        questions["known_" + number] = _noul("Is the information in `passages.%s` already in `compaction_summary` or `recent_exchanges`?" % identifier)
-    return questions
+    if not isinstance(passages, dict):
+        passages = {passage["id"]: passage["text"] for passage in passages}
+    return {"passage_" + identifier[1:]: _noul({
+        "passage": text,
+        "question": "Does `passage` answer `prompt` or give information needed to act on it?",
+    }, {
+        "true": "the passage is about what the prompt asks or needs",
+        "false": "the passage is about something else, or the prompt needs nothing from it",
+    }) for identifier, text in passages.items()}
 
 
 def stop_questions(state):
@@ -102,7 +166,7 @@ def stop_questions(state):
 
 def choose_prompt(answers, entry_ids, dataset_names):
     choice = {"entries": [], "datasets": [], "recall": False}
-    if answers["missing"]["noul"] < MISSING:
+    if answers["has_info"]["noul"] >= HAS_INFO:
         return choice
     choice["entries"] = [i for i in entry_ids if answers["entry_" + i]["noul"] >= ENTRY]
     if choice["entries"] or answers["cognee"]["noul"] < COGNEE or not dataset_names:
@@ -115,8 +179,7 @@ def choose_prompt(answers, entry_ids, dataset_names):
 
 
 def choose_passages(answers, passages):
-    return [p for p in passages if answers["useful_" + p["id"][1:]]["noul"] >= USEFUL
-            and answers["known_" + p["id"][1:]]["noul"] < KNOWN]
+    return [p for p in passages if answers["passage_" + p["id"][1:]]["noul"] >= PASSAGE]
 
 
 def choose_stop(answers, pending_ids):
@@ -274,10 +337,12 @@ def _minimize(state, questions):
         fields = {"turn", "recent_actions", "project_card", "instruction_files", "notes", "pending_corrections"}
         if state.get("pending_corrections"):
             fields.add("recent_exchanges")
-    elif any(i.startswith("useful_") for i in questions):
-        fields = {"prompt", "compaction_summary", "recent_exchanges", "passages"}
-    elif "missing" in questions:
-        fields = {"prompt", "session_start", "project_card", "compaction_summary", "recent_exchanges", "notes", "datasets"}
+    elif "has_info" in questions:
+        fields = {"prompt", "conversation"}
+    elif "cognee" in questions or any(i.startswith("dataset_") for i in questions):
+        fields = {"prompt", "datasets"}
+    elif any(i.startswith(("entry_", "passage_")) for i in questions):
+        fields = {"prompt"}
     else:
         fields = set(state)
     return redact({k: v for k, v in state.items() if k in fields})
@@ -337,6 +402,10 @@ def _size_refusal(exc):
 
 
 def request(config, state, questions, *, timeout, probe=False):
+    return _request(config, state, questions, timeout=timeout, probe=probe)
+
+
+def _request(config, state, questions, *, timeout, probe=False, record=True):
     if not probe:
         breaker.require_active("jev")
     start = time.monotonic()
@@ -364,25 +433,28 @@ def request(config, state, questions, *, timeout, probe=False):
                 decision("jev-tokens", {"estimated_tokens": store.estimate(payload, ratio), "input_tokens": tokens})
                 if not probe:
                     breaker.update_ratio(len(payload), tokens)
-                    breaker.record("jev", {"kind": "success", "reason": "", "status": status})
+                    if record:
+                        breaker.record("jev", {"kind": "success", "reason": "", "status": status})
                 return answers
             except Exception as exc:
                 status = getattr(exc, "status", 0) or status
                 error("jev-attempt", exc, "jev", status, time.monotonic() - start, response_text)
                 if attempt or probe or not _size_refusal(exc):
                     raise
-                recent = fitted.get("recent_exchanges")
-                if recent is not None:
-                    fitted["recent_exchanges"] = _tail(recent, len(recent) // 2 if isinstance(recent, str) else len(_json(recent)) // 2)
-                if "nature" in questions:
+                if "has_info" in questions:
+                    recent = fitted.get("conversation", [])
+                    count = len(recent) // 2
+                    fitted["conversation"] = recent[-count:] if count else []
+                elif "nature" in questions:
+                    recent = fitted.get("recent_exchanges")
+                    if recent is not None:
+                        fitted["recent_exchanges"] = _tail(recent, len(recent) // 2 if isinstance(recent, str) else len(_json(recent)) // 2)
                     fitted = fit_stop(fitted, questions, ratio)
                     questions = stop_questions(fitted)
-                elif "missing" in questions:
-                    questions = prompt_questions(fitted)
     except Exception as exc:
         error("jev-request", exc, "jev", status, time.monotonic() - start, response_text)
         failure = breaker.ServiceError("jev", str(exc), status, response_text, time.monotonic() - start)
-        if not probe:
+        if not probe and record:
             breaker.record("jev", breaker.classify(failure))
         raise failure from exc
 

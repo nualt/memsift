@@ -18,7 +18,7 @@ class TranscriptTests(IsolatedTest):
                 value = host.read_conversation(FIXTURES / "transcripts" / name,
                                                name.split("-plain")[0].split("-compacted")[0],
                                                case["actions"], 3.0)
-                self.assertEqual(value["summary"], case["expected"]["latest_summary"])
+                self.assertEqual(value["summary"], "")
                 users = [e for e in value["exchanges"] if e["role"] == "user"]
                 self.assertEqual(users[-1]["text"], case["expected"]["recent_user"])
                 self.assertEqual(users[-1]["actions"], [])
@@ -106,11 +106,11 @@ class TranscriptTests(IsolatedTest):
         self.assertEqual([e["role"] for e in value["exchanges"]], ["user", "assistant"])
         self.assertEqual(value["exchanges"][0]["text"], "acme-shop latest prompt")
         self.assertIn("answer end", value["exchanges"][1]["text"])
-        self.assertLessEqual(len(json.dumps(value["exchanges"], ensure_ascii=False)), 15000)
+        self.assertLessEqual(len(json.dumps(value["exchanges"], ensure_ascii=False)), 75000)
         actions = [{"turn": 1, "prompt": "acme-shop latest prompt", "items": ["Edit x: " + "x" * 190] * 20}]
         value = host.read_conversation(path, "claude-code", actions, 3.0)
         self.assertEqual(value["exchanges"][0]["actions"], actions[0]["items"])
-        self.assertLessEqual(len(json.dumps(value["exchanges"], ensure_ascii=False)), 15000)
+        self.assertLessEqual(len(json.dumps(value["exchanges"], ensure_ascii=False)), 75000)
 
     def test_malformed_nested_shapes_never_become_text(self):
         from memsift import host
@@ -148,7 +148,7 @@ class TranscriptTests(IsolatedTest):
         self.assertEqual(value["exchanges"][0]["text"], "acme-shop valid")
         self.assertIn("UnicodeDecodeError", (self.home / ".memsift/debug.log").read_text())
 
-    def test_multi_megabyte_reverse_reads_find_summary_after_recent_budget_is_full(self):
+    def test_multi_megabyte_reverse_reads_stop_when_recent_budget_is_full(self):
         from memsift import host
         summary = self.user("acme-shop latest summary")
         summary["isCompactSummary"] = True
@@ -180,10 +180,10 @@ class TranscriptTests(IsolatedTest):
 
         with patch.object(Path, "open", checked_open):
             value = host.read_conversation(path, "claude-code", [], 3.0)
-        self.assertEqual(value["summary"], "acme-shop latest summary")
+        self.assertEqual(value["summary"], "")
         self.assertEqual(value["exchanges"][-1]["text"], "acme-shop newest café")
-        self.assertLess(len(repr(value)), 18000)
-        self.assertGreater(len(reads), 40)
+        self.assertLess(len(repr(value)), 78000)
+        self.assertLess(len(reads), 3)
 
     def test_utf8_character_split_at_reverse_chunk_boundary(self):
         from memsift import host
@@ -207,77 +207,106 @@ class TranscriptTests(IsolatedTest):
         self.assertNotIn("invented-password", repr(value))
 
 
-class PromptBudgetTests(IsolatedTest):
-    def state(self):
-        return {"prompt": "acme-shop question", "project_card": "acme-shop card",
-                "session_start": "new session", "compaction_summary": "",
-                "recent_exchanges": [], "notes": {}, "datasets": {}}
-
-    def test_fit_copies_and_redacts_without_changing_protected_fields(self):
+    def test_last_compaction_marker_excludes_all_earlier_text(self):
         from memsift import host
-        state = self.state()
-        state["notes"] = {"d1": "PASSWORD=invented-password"}
+        for name in ("claude-code", "codex"):
+            def user(text):
+                if name == "claude-code":
+                    return self.user(text)
+                return {"type": "response_item", "payload": {"type": "message", "role": "user",
+                        "content": [{"type": "input_text", "text": text}]}}
+            boundary = ({"type": "system", "content": "Conversation compacted",
+                         "subtype": "compact_boundary"} if name == "claude-code" else
+                        {"type": "compacted", "payload": {"message": "excluded summary",
+                         "replacement_history": [dict(user("excluded clear user").get("payload", {}))]}})
+            path = self.write_rows([user("excluded oldest"), boundary, user("excluded middle"),
+                                    boundary, user("newest")])
+            self.assertEqual(host.read_conversation(path, name, [], 3),
+                             {"summary": "", "exchanges": [{"role": "user", "text": "newest", "actions": []}]})
+
+    def test_huge_single_record_aborts_in_bounded_time(self):
+        import time
+        from memsift import host
+        path = self.home / "transcript.jsonl"
+        with path.open("wb") as stream:
+            stream.write(b'{"type":"user","message":{"content":[{"type":"tool_result","content":"')
+            for _ in range(96):
+                stream.write(b"x" * 1024 * 1024)
+            stream.write(b'"}]}}\n')
+            stream.write(json.dumps(self.user("newest")).encode() + b"\n")
+        started = time.monotonic()
+        with self.assertRaises(ValueError):
+            host.read_conversation(path, "claude-code", [], 3)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertIn("Traceback", (self.home / ".memsift/debug.log").read_text())
+
+    def test_conversation_uses_25000_tokens_newest_first_and_stops_scanning(self):
+        from memsift import host, store
+        rows = [self.user("old" + "x" * 1000) for _ in range(2000)]
+        rows += [self.user("recent" + "y" * 1000) for _ in range(30)]
+        rows += [self.user("newest")]
+        path = self.write_rows(rows)
+        with patch("memsift.host._message", wraps=host._message) as messages:
+            value = host.read_conversation(path, "claude-code", [], 2)
+        self.assertLess(messages.call_count, 60)
+        self.assertEqual(value["exchanges"][-1]["text"], "newest")
+        estimate = store.estimate(json.dumps(value["exchanges"], ensure_ascii=False), 2)
+        self.assertGreater(estimate, 24000)
+        self.assertLessEqual(estimate, 25000)
+
+
+    def test_oversized_latest_answer_keeps_newest_text_with_json_escaping(self):
+        from memsift import host, store
+        path = self.write_rows([self.user("old user"), {"type": "assistant", "message": {
+            "content": '"' * 100000 + "latest answer tail"}}])
+        value = host.read_conversation(path, "claude-code", [], 3)
+        self.assertTrue(value["exchanges"])
+        self.assertTrue(value["exchanges"][-1]["text"].endswith("latest answer tail"))
+        self.assertLessEqual(store.estimate(json.dumps(value["exchanges"], ensure_ascii=False), 3), 25000)
+
+    def test_transcript_read_deadline_is_logged(self):
+        import time
+        from memsift import host
+        path = self.write_rows([self.user("acme-shop")])
+        clock = time.monotonic
+        started = clock()
+        with patch("memsift.host.time") as clock:
+            clock.monotonic.side_effect = [started, started + 17]
+            with self.assertRaises(TimeoutError):
+                host.read_conversation(path, "claude-code", [], 3)
+        self.assertIn("Traceback", (self.home / ".memsift/debug.log").read_text())
+
+
+class PromptBudgetTests(IsolatedTest):
+    def test_fit_copies_redacts_and_preserves_prompt(self):
+        from memsift import host
+        state = {"prompt": "Back to the grid", "conversation": [
+            {"role": "user", "text": "PASSWORD=invented-password", "actions": []}]}
         before = copy.deepcopy(state)
-        value = host.fit_prompt(state, {"missing": {"instructions": "Question?"}}, 3.0)
+        value = host.fit_prompt(state, {"has_info": {"instructions": "Question?"}}, 3)
         self.assertEqual(state, before)
         self.assertNotIn("invented-password", repr(value))
-        for key in ("prompt", "project_card", "session_start"):
-            self.assertEqual(value[key], state[key])
+        self.assertEqual(value["prompt"], state["prompt"])
 
-    def test_cut_order_preserves_digest_and_newest_draft(self):
+    def test_oldest_exchanges_are_cut_first_at_25000_tokens(self):
         from memsift import host
-        state = self.state()
-        state.update(compaction_summary="s" * 18000,
-                     recent_exchanges=[{"role": "user", "text": "old" + "x" * 12000, "actions": []},
-                                       {"role": "user", "text": "new" + "x" * 12000, "actions": []}],
-                     notes={"g1": "digest" + "x" * 23000, "d1": "old draft" + "x" * 23000,
-                            "d2": "new draft" + "x" * 23000})
-        # At ratio=1 all three cuts are needed to reach the actual 32,000 limit.
-        value = host.fit_prompt(state, {"missing": {"instructions": "Question?"}}, 1.0)
-        self.assertEqual(value["recent_exchanges"], [])
-        self.assertEqual(value["compaction_summary"], "")
-        self.assertEqual(value["notes"], {"g1": state["notes"]["g1"]})
-        self.assertEqual(state["notes"]["d2"], "new draft" + "x" * 23000)
+        state = {"prompt": "p" * 10000, "conversation": [
+            {"role": "user", "text": "old" + "x" * 12000, "actions": []},
+            {"role": "user", "text": "new" + "x" * 12000, "actions": []}]}
+        value = host.fit_prompt(state, {"has_info": {"instructions": "Question?"}}, 1)
+        self.assertEqual(value["conversation"], state["conversation"][1:])
+        self.assertEqual(value["prompt"], state["prompt"])
+        self.assertEqual(len(state["conversation"]), 2)
 
-    def test_summary_end_cut_keeps_start_after_oldest_exchange_removed(self):
+    def test_prompt_is_never_cut_when_it_exceeds_the_request_budget(self):
         from memsift import host
-        state = self.state()
-        state.update(compaction_summary="START" + "s" * 18000 + "END",
-                     recent_exchanges=[{"role": "user", "text": "old" + "x" * 5000, "actions": []}],
-                     notes={"g1": "digest" + "x" * 20000})
-        value = host.fit_prompt(state, {"missing": "?"}, 1.0)
-        self.assertEqual(value["recent_exchanges"], [])
-        self.assertTrue(value["compaction_summary"].startswith("START"))
-        self.assertFalse(value["compaction_summary"].endswith("END"))
-        self.assertEqual(value["notes"], state["notes"])
-
-    def test_string_recent_exchanges_drop_whole_oldest_turn(self):
-        from memsift import host
-        state = self.state()
-        state["notes"] = {"g1": "g" * 31000}
-        state["recent_exchanges"] = "User: old\nAgent: " + "a" * 2000 + "\nUser: new\nAgent: ready\n"
-        value = host.fit_prompt(state, {"missing": "?"}, 1.0)
-        self.assertEqual(value["recent_exchanges"], "User: new\nAgent: ready\n")
-
-    def test_json_escaping_counts_toward_budget(self):
-        from memsift import host
-        state = self.state()
-        state["prompt"] = '"' * 50000
-        with self.assertRaises(ValueError):
-            host.fit_prompt(state, {"missing": "?"}, 3.0)
-
-    def test_protected_oversize_longest_question_and_total_request_are_rejected(self):
-        from memsift import host
-        for field in ("prompt", "project_card", "questions", "total_questions"):
-            with self.subTest(field=field):
-                state = self.state()
-                questions = {"missing": "?"}
-                if field == "questions":
-                    questions = {"missing": "x" * 96000}
-                elif field == "total_questions":
-                    questions = {str(i): "x" * 60000 for i in range(4)}
-                else:
-                    state[field] = "x" * 96000
+        for state, questions in [
+            ({"prompt": '"' * 50000}, {"has_info": "?"}),
+            ({"prompt": "x" * 96000}, {"has_info": "?"}),
+            ({"prompt": "grid"}, {"entry_d1": "x" * 96000}),
+            ({"prompt": "grid"}, {str(i): "x" * 60000 for i in range(4)}),
+        ]:
+            with self.subTest(state_length=len(state["prompt"])):
                 with self.assertRaises(ValueError):
-                    host.fit_prompt(state, questions, 3.0)
+                    host.fit_prompt(state, questions, 3)
         self.assertIn("Traceback", (self.home / ".memsift/debug.log").read_text())

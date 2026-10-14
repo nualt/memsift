@@ -181,30 +181,17 @@ def _load(path):
     return labels
 
 
-def _states(label):
-    full = {
-        "prompt": label["prompt"],
-        "session_start": label["session_start"],
-        "project_card": label["project_card"],
-        "compaction_summary": label["conversation"]["summary"],
-        "recent_exchanges": label["conversation"]["exchanges"],
-        "notes": label["notes"],
-        "datasets": label["datasets"],
-    }
-    minimal = {"prompt": label["prompt"], "project_card": label["project_card"],
-               "notes": label["notes"]}
-    questions = jev.prompt_questions(full)
-    minimal_questions = {key: question for key, question in jev.prompt_questions(minimal).items()
-                         if key == "missing" or key == "cognee" or key.startswith("entry_")}
-    return full, questions, minimal, minimal_questions
+def _state(label):
+    return {"prompt": label["prompt"], "conversation": label["conversation"]["exchanges"],
+            "notes": label["notes"], "datasets": label["datasets"]}
 
 
 def _plans(labels):
     plans = []
     for index, label in enumerate(labels):
-        full, full_questions, minimal, minimal_questions = _states(label)
-        plans.extend((("full", index, full, full_questions),
-                      ("minimal", index, minimal, minimal_questions)))
+        plans.extend((kind, index, state, questions)
+                     for kind, (state, questions) in zip(
+                         ("conversation", "notes", "cognee"), jev.prompt_requests(_state(label))))
         if label["stop"] is not None:
             questions = jev.stop_questions(label["stop"])
             alternate = copy.deepcopy(questions)
@@ -231,8 +218,8 @@ def _expected_key(expected):
     return expected["kind"], tuple(expected.get("entries", []))
 
 
-def _choose(answers, entry_ids, dataset_names, missing, entry, cognee, dataset):
-    if answers["missing"]["noul"] < missing:
+def _choose(answers, entry_ids, dataset_names, has_info, entry, cognee, dataset):
+    if answers["has_info"]["noul"] >= has_info:
         return {"entries": [], "datasets": [], "recall": False}
     entries = [identifier for identifier in entry_ids
                if answers["entry_" + identifier]["noul"] >= entry]
@@ -255,14 +242,14 @@ def _candidates(values, current):
 
 
 def _best_thresholds(results):
-    observed_missing = [item["answers"]["missing"]["noul"] for item in results]
+    observed_has_info = [item["answers"]["has_info"]["noul"] for item in results]
     observed_entry = [answer["noul"] for item in results for key, answer in item["answers"].items()
                       if key.startswith("entry_")]
     observed_cognee = [item["answers"]["cognee"]["noul"] for item in results]
-    candidates = (_candidates(observed_missing, jev.MISSING),
+    candidates = (_candidates(observed_has_info, jev.HAS_INFO),
                   _candidates(observed_entry, jev.ENTRY),
                   _candidates(observed_cognee, jev.COGNEE))
-    current = (jev.MISSING, jev.ENTRY, jev.COGNEE)
+    current = (jev.HAS_INFO, jev.ENTRY, jev.COGNEE)
     best = None
     for thresholds in itertools.product(*candidates):
         correct = 0
@@ -345,36 +332,27 @@ def main(argv=None):
     if consent not in ("y", "yes"):
         return 0
 
-    full_results = []
-    minimal_results = []
+    results = []
     stop_results = {}
     try:
-        for kind, index, state, questions in plans:
-            answers = jev.request(config, redact(state), questions, timeout=30.0, probe=True)
-            label = labels[index]
-            if kind in ("full", "minimal"):
-                adapted = dict(answers)
-                if kind == "minimal":
-                    adapted.update({"dataset_" + name: {"type": "noul", "noul": 0.0}
-                                    for name in label["datasets"]})
-                choice = jev.choose_prompt(adapted, list(label["notes"]), list(label["datasets"]))
-                result = {"label": label, "answers": adapted, "choice": choice}
-                (full_results if kind == "full" else minimal_results).append(result)
-            else:
-                pending = list(label["stop"]["pending_corrections"])
-                choice = jev.choose_stop(answers, pending)
-                stop_results.setdefault(index, {})[kind] = choice
+        for index, label in enumerate(labels):
+            answers = jev.request_prompt(config, _state(label), timeout=jev.PROMPT_TIMEOUT, probe=True)
+            choice = jev.choose_prompt(answers, list(label["notes"]), list(label["datasets"]))
+            results.append({"label": label, "answers": answers, "choice": choice})
+            for kind, plan_index, state, questions in plans:
+                if plan_index == index and kind.startswith("stop-"):
+                    answers = jev.request(config, redact(state), questions, timeout=30.0, probe=True)
+                    choice = jev.choose_stop(answers, list(label["stop"]["pending_corrections"]))
+                    stop_results.setdefault(index, {})[kind] = choice
     except Exception as exc:
         error("calibrate-jev-run", exc, "jev")
         print("Calibration failed: " + str(exc), file=sys.stderr)
         return 1
 
-    _summarize("Full", full_results)
-    _summarize("Minimal", minimal_results)
-    thresholds, correct = _best_thresholds(full_results)
-    print("Best matching prompt thresholds: missing %.6g, entry %.6g, cognee %.6g, dataset %.6g (%d/%d correct)" %
-          (*thresholds, jev.DATASET, correct, len(full_results)))
-    print("Minimal dataset selection: unmeasured; zero dataset scores were supplied only for offline routing.")
+    _summarize("Prompt", results)
+    thresholds, correct = _best_thresholds(results)
+    print("Best matching prompt thresholds: has_info %.6g, entry %.6g, cognee %.6g, dataset %.6g (%d/%d correct)" %
+          (*thresholds, jev.DATASET, correct, len(results)))
     if not stop_results:
         print("Nature-choice ordering sensitivity: not run (labels lack Stop examples).")
     else:

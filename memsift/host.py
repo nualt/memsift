@@ -19,21 +19,39 @@ _PENDING = " (failed pending)"
 _EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
+# shortcut: records above 8 MiB abort recall; use streaming JSON if these must be supported.
+_MAX_RECORD_BYTES = 8 * 1024 * 1024
+
+
 def _reverse_lines(path):
+    deadline = time.monotonic() + 16.0
     with path.open("rb") as stream:
         position = stream.seek(0, 2)
-        carry = b""
+        fragments = []
+        length = 0
         while position:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Transcript read deadline expired")
             size = min(65536, position)
             position -= size
             stream.seek(position)
-            pieces = (stream.read(size) + carry).split(b"\n")
-            carry = pieces[0]
-            for line in reversed(pieces[1:]):
+            pieces = stream.read(size).split(b"\n")
+            for piece in reversed(pieces[1:]):
+                if len(piece) + length > _MAX_RECORD_BYTES:
+                    raise ValueError("Transcript record exceeds the foreground read budget")
+                line = piece + b"".join(reversed(fragments))
+                fragments = []
+                length = 0
                 if line.strip():
                     yield line
-        if carry.strip():
-            yield carry
+            fragments.append(pieces[0])
+            length += len(pieces[0])
+            if length > _MAX_RECORD_BYTES:
+                raise ValueError("Transcript record exceeds the foreground read budget")
+        if fragments:
+            line = b"".join(reversed(fragments))
+            if line.strip():
+                yield line
 
 
 def _records(path):
@@ -49,6 +67,9 @@ def _records(path):
                 yield row
             except (UnicodeError, ValueError) as exc:
                 error("host-transcript-record", exc)
+    except (TimeoutError, ValueError) as exc:
+        error("host-transcript-budget", exc)
+        raise
     except OSError as exc:
         error("host-transcript-read", exc)
 
@@ -85,47 +106,37 @@ def _message(row, host_name):
 
 
 def read_conversation(path: Path, host_name: str, actions: list, ratio: float) -> dict:
-    summary = ""
     newest = []
-    characters = 0
-    full = False
+    characters = 2
+    budget = max(0, int(25000 * ratio))
     for row in _records(path):
         if host_name == "claude-code":
-            if row.get("type") == "system" and row.get("subtype") == "compact_boundary":
+            if (row.get("type") == "system" and
+                    (row.get("subtype") == "compact_boundary" or row.get("content") == "Conversation compacted")):
                 break
             if row.get("isCompactSummary"):
-                message = _message(row, host_name)
-                summary = message["text"] if message else ""
-                # The boundary immediately precedes this summary in the transcript.
                 break
         elif row.get("type") == "compacted":
-            payload = row.get("payload", {})
-            history = payload.get("replacement_history", []) if isinstance(payload, dict) else []
-            clear = []
-            for item in history:
-                if isinstance(item, dict) and item.get("type") == "message" and item.get("role") == "user":
-                    text = _text(item.get("content"), ("input_text",))
-                    if text:
-                        clear.append(text)
-            summary = redact("\n".join(clear))
             break
         message = _message(row, host_name)
-        if full:
-            if message and message["role"] == "user" and newest and newest[-1]["role"] == "assistant":
-                message["text"] = store.clip(message["text"], 5000, ratio)
-                newest.append(message)
-            continue
         if message:
-            cost = len(json.dumps(message, ensure_ascii=False))
-            available = max(0, int(5000 * ratio) - characters)
-            if cost > available:
-                if not newest or (message["role"] == "user" and newest[-1]["role"] == "assistant"):
-                    message["text"] = store.clip(message["text"], 5000, ratio)
+            cost = len(json.dumps(message, ensure_ascii=False)) + (2 if newest else 0)
+            if characters + cost > budget:
+                if not newest:
+                    text = message["text"]
+                    low, high = 0, len(text)
+                    while low < high:
+                        middle = (low + high + 1) // 2
+                        message["text"] = text[-middle:]
+                        if len(_serialized([message])) <= budget:
+                            low = middle
+                        else:
+                            high = middle - 1
+                    message["text"] = text[-low:] if low else ""
                     newest.append(message)
-                full = True
-            else:
-                newest.append(message)
-                characters += cost
+                break
+            newest.append(message)
+            characters += cost
     exchanges = list(reversed(newest))
     matched = set()
     # shortcut: repeated prompt excerpts can be ambiguous, use transcript IDs if hosts later expose them.
@@ -140,29 +151,9 @@ def read_conversation(path: Path, host_name: str, actions: list, ratio: float) -
                                        if not item.endswith(_PENDING)]
                 matched.add(index)
                 break
-    # Keep complete user/assistant pairs when trimming the selected tail.
-    while exchanges and exchanges[0]["role"] == "assistant":
+    while exchanges and store.estimate(_serialized(exchanges), ratio) > 25000:
         exchanges.pop(0)
-    while store.estimate(_serialized(exchanges), ratio) > 5000 and exchanges:
-        next_user = next((i for i in range(1, len(exchanges)) if exchanges[i]["role"] == "user"), None)
-        if next_user is not None:
-            exchanges = exchanges[next_user:]
-            continue
-        exchange = max(exchanges, key=lambda item: len(item["text"]))
-        text = exchange["text"]
-        if not text:
-            exchanges = []
-            break
-        low, high = 0, len(text) - 1
-        while low < high:
-            middle = (low + high + 1) // 2
-            exchange["text"] = store.clip(text, middle, 1.0)
-            if store.estimate(_serialized(exchanges), ratio) <= 5000:
-                low = middle
-            else:
-                high = middle - 1
-        exchange["text"] = store.clip(text, low, 1.0)
-    return {"summary": summary[:max(0, int(6000 * ratio))], "exchanges": exchanges}
+    return {"summary": "", "exchanges": exchanges}
 
 
 def _command_exit(payload):
@@ -251,7 +242,7 @@ def _serialized(value):
 
 def _fits(state, questions, ratio):
     encoded = _serialized(state)
-    longest = max((len(_serialized(q)) for q in questions.values()), default=0)
+    longest = max((len(_serialized({i: q})) for i, q in questions.items()), default=0)
     request = {"model": "typesafe/jev-1.13", "state": state, "questions": questions}
     return (store.estimate(encoded + " " * longest, ratio) <= 32000
             and store.estimate(_serialized(request), ratio) <= 64000)
@@ -259,35 +250,11 @@ def _fits(state, questions, ratio):
 
 def fit_prompt(state: dict, questions: dict, ratio: float) -> dict:
     fitted = redact(copy.deepcopy(state))
-    recent = fitted.get("recent_exchanges", [])
-    if isinstance(recent, str):
-        recent = re.split(r"(?=^User:)", recent, flags=re.MULTILINE)
-        recent = [part for part in recent if part]
-    else:
-        recent = list(recent)
-    while recent and not _fits(fitted, questions, ratio):
+    recent = list(fitted.get("conversation", []))
+    while recent and (store.estimate(_serialized(recent), ratio) > 25000
+                      or not _fits(fitted, questions, ratio)):
         recent.pop(0)
-        if recent and isinstance(recent[0], dict):
-            while recent and recent[0].get("role") == "assistant":
-                recent.pop(0)
-        fitted["recent_exchanges"] = "".join(recent) if isinstance(state.get("recent_exchanges"), str) else recent
-    summary = fitted.get("compaction_summary", "")
-    if summary and not _fits(fitted, questions, ratio):
-        low, high = 0, len(summary)
-        while low < high:
-            middle = (low + high + 1) // 2
-            fitted["compaction_summary"] = summary[:middle]
-            if _fits(fitted, questions, ratio):
-                low = middle
-            else:
-                high = middle - 1
-        fitted["compaction_summary"] = summary[:low]
-    notes = fitted.get("notes", {})
-    for entry_id in list(notes):
-        if _fits(fitted, questions, ratio):
-            break
-        if re.fullmatch(r"d\d+", entry_id):
-            del notes[entry_id]
+        fitted["conversation"] = recent
     if not _fits(fitted, questions, ratio):
         try:
             raise ValueError("Jev prompt exceeds the request budget with protected fields intact")
