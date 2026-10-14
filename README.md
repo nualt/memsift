@@ -222,7 +222,7 @@ project. At the end of a session, whatever is left goes the same way.
 
 ══════════════════════════════════════════════════════════════ COGNEE SERVER ═══
 
-   ┌─────────────────── COGNEE · memsift dataset ────────────────────┐
+   ┌──────────────────── COGNEE · memsift dataset ────────────────────┐
    │ receives only clean, deduplicated packets                        │
    │ stores and links them (graph)                                    │
    │ → queried only at ①, when Jev judges it worth it                 │
