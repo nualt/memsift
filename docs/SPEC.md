@@ -244,9 +244,10 @@ the older statement they replace, and carries pending ones over to the new
 
 ### digest.md
 
-Per repo. Written only by the compactor, never appended to. Entries of nature
-`decision` and `project_fact`, work in progress first, then most recent first.
-`lesson` entries never go here: they live in Cognee only.
+Per repo. Written only by the compactor, never appended to. Holds what entries
+of nature `working_rule`, `decision` and `project_fact` say, work in progress
+first, then most recent first. `lesson` entries never go here: they live in
+Cognee only. Format in part 5.
 
 ### draft.md
 
@@ -298,7 +299,7 @@ For the `memsift` dataset, only this repo's packets are listed (their names
 start with the repo name), newest first. Every other dataset not marked
 `IGNORED` is listed in full. The file is cut, oldest `memsift` packets first, so
 it stays under 1 000 tokens. Packets sent by the compactor are named
-`<repo name> <date> <topics>` so that Jev can read them (part 5).
+`<repo name> <date> <time> <topics>` so that Jev can read them (part 5).
 
 memsift writes only to its own dataset, `memsift` by default
 (`MEMSIFT_DATASET`), never to datasets other tools write to.
@@ -784,3 +785,124 @@ the labels best are kept. Calibration also checks:
   notes only), keeping whichever errs less;
 - the `nature` answer with its options in another order, since Jev can lean
   toward the first option.
+
+## 5. Compactor
+
+The compactor is the only part of memsift that writes sentences. It runs
+Gemma 4 26B-A4B by default, through any OpenAI-compatible API
+(`MEMSIFT_COMPACTOR_URL`, `MEMSIFT_COMPACTOR_API_KEY`,
+`MEMSIFT_COMPACTOR_MODEL`).
+
+### When
+
+- At the end of a turn, when the working notes reach 8 000 tokens.
+- At session end, when `draft.md` holds at least one entry.
+
+Always in the background. One compaction at a time per repo, under a lock on
+`repos/<repo-key>/compaction.lock`; a compaction that finds the lock taken
+does nothing, since the running one will empty the draft.
+
+### What it does
+
+```
+1. reads digest.md and draft.md, and remembers where draft.md ended
+2. Gemma, one request → new digest + packet
+3. code checks the answer (schema, ids, length); invalid → one retry;
+   invalid again → nothing is written, the notes stay as they were
+4. rewrites digest.md
+5. rewrites draft.md: keeps the lines appended since step 1 and the
+   corrections still pending
+6. sends the packet to Cognee, dataset memsift (part 6 if Cognee is down)
+```
+
+Jev keeps reading the old notes until step 4; nothing is lost if a turn ends
+during the compaction.
+
+### Gemma request
+
+```
+POST $MEMSIFT_COMPACTOR_URL/chat/completions
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "temperature": 0.2,
+  "messages": [{"role": "system", "content": "<instructions>"},
+               {"role": "user", "content": "<digest.md>\n\n<draft.md>"}],
+  "response_format": {"type": "json_schema", "json_schema": {"strict": true, …}}
+}
+```
+
+The system message never starts with `<|think|>`, so Gemma does not reason:
+compaction needs fidelity, not reasoning.
+
+Instructions:
+
+- Keep the user's words. Invent nothing, add nothing.
+- Merge duplicates. When two entries contradict each other, the most recent wins.
+- Apply each confirmed correction: replace the statement it corrects.
+  Leave pending corrections out; code carries them over.
+- Lessons go to the packet only, never to the digest.
+- Digest: work in progress first, then most recent first. Drop what is no
+  longer true.
+- Write in the language of the entries.
+
+Answer schema:
+
+```json
+{
+  "digest": {
+    "in_progress":   [{"text": "…", "date": "YYYY-MM-DD"}],
+    "decisions":     [{"text": "…", "date": "YYYY-MM-DD"}],
+    "project_facts": [{"text": "…", "date": "YYYY-MM-DD"}],
+    "working_rules": [{"text": "…", "date": "YYYY-MM-DD"}]
+  },
+  "packet": {
+    "topics": "2 to 4 words",
+    "text": "…"
+  }
+}
+```
+
+### digest.md
+
+Code writes the file from the answer and numbers the lines; Gemma never
+handles ids. Ids start again from `g1` at each compaction.
+
+```
+# Digest: acme-shop-3f2a91
+## In progress
+- [g1] header: reuses the footer grid, 12 columns (2026-10-12)
+## Decisions
+- [g2] payment through Stripe Elements; Stripe Checkout ruled out, not customisable enough (2026-10-08)
+## Project facts
+- [g3] sharp must be allowed in pnpm (2026-10-09)
+## Working rules
+- [g4] no Tailwind in this project (2026-10-07)
+```
+
+**Length.** If the digest goes over 3 000 tokens, code removes the oldest
+lines of the last non-empty section, then the one before, until it fits.
+Gemma cannot count tokens reliably, and a digest that grows would leave less
+room for the draft, until a compaction ran at every turn. The removed lines are
+already in Cognee, sent by this packet or an earlier one.
+
+### Packet
+
+The packet holds only what is new since the last compaction: the draft
+entries, cleaned and merged, lessons included. The digest is not sent again;
+it was sent piece by piece by earlier packets.
+
+It is uploaded as a text file whose name is its identity in Cognee:
+
+```
+<repo name> <date> <time> <topics>.txt
+acme-shop 2026-10-14 15h32 header grid, sharp.txt
+```
+
+The time keeps names unique: Cognee refuses a known name with different
+content.
+
+### Calibration
+
+On two or three real drafts: the compacted digest and packet must keep what
+the user said without changing it. If Gemma 4 26B-A4B distorts, try Gemma 4
+31B.
