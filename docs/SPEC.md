@@ -154,7 +154,9 @@ both; nothing is copied from one to the other. Compaction starts when digest + d
   public and there is no endpoint to count in advance, but every Jev response
   reports the real input count (`usage.input_tokens`). After each call the ratio
   is updated (moving average of real ratios), kept in `state.json` and shared by
-  every session. It starts at 4. The debug log records estimate and real count.
+  every session. It starts at 3, the ratio measured on real requests mixing
+  French text and a JSON state (3.0 to 3.2). The debug log records estimate and
+  real count.
   Jev's limits: 32 000 tokens for `state` plus the longest question, 64 000 per
   request (docs.typesafe.ai/models).
 - **Secrets.** Every text is passed through `vendor/redact.py` before it is
@@ -810,8 +812,10 @@ does nothing, since the running one will empty the draft.
 ```
 1. reads digest.md and draft.md, and remembers where draft.md ended
 2. the compactor, one request → new digest + packet
-3. code checks the answer (schema, ids, length); invalid → one retry;
-   invalid again → nothing is written, the notes stay as they were
+3. code checks the answer (schema, ids, length, and a digest that comes back
+   empty while the notes had lines); invalid → one retry; invalid again →
+   nothing is written, the notes stay as they were
+   every invalid answer is written to debug.log with its reason (part 7)
 4. rewrites digest.md
 5. rewrites draft.md: keeps the lines appended since step 1 and the
    corrections still pending
@@ -1050,8 +1054,8 @@ compactor answer. memsift never fails the host, so this file is where a
 failure must show.
 
 ```
-09:58:31 ERROR stop    compactor: answer invalid (missing "packet"), retry 1/1
-09:58:44 ERROR stop    compactor: answer invalid again → nothing written · failures 1/3
+09:58:31 ERROR stop    compactor: answer invalid (digest empty, notes had 14 lines), retry 1/1
+09:58:44 ERROR stop    compactor: answer invalid again (missing "packet") → nothing written · failures 1/3
 10:02:10 ERROR prompt  cognee: timeout after 12.0 s · failures 2/3
 10:04:55 ERROR tool    KeyError: 'tool_input'
                        Traceback (most recent call last): …
@@ -1098,7 +1102,7 @@ What each module checks:
 | `test_transcript` | Claude Code: only the last summary after the last marker is read; tool calls replaced by action notes · Codex: the encrypted summary is skipped, the user messages kept in clear are read · the over-budget cut order of part 3 · a transcript of several MB is read from the end, not loaded whole |
 | `test_actions` | in a temporary git repo: an edit in the repo is noted with a diff of at most 200 characters · a write keeps the file name only · edits outside the repo are ignored · a read-only command is ignored · a command changing an already modified file is noted · a commit is noted · outside git, commands are not noted · failed then succeeded is marked · Codex `apply_patch` is noted like an edit · only the last 5 turns are kept |
 | `test_decisions` | table-driven, probabilities in, outcome out: the prompt cascade (thresholds and their boundaries, dataset fallback to the highest) · the passage rule · the stop rule, including the lower bar for corrections · confirmed corrections · each flag given once, then removed |
-| `test_compaction` | lines appended during a compaction survive it · pending corrections are carried over · an invalid answer twice writes nothing and counts one failure · an over-long digest loses its oldest lines of the last section · lines are numbered `g1`… by code · a second compaction finding the lock does nothing · packet names carry the time · Cognee down puts the packet in the outbox |
+| `test_compaction` | lines appended during a compaction survive it · pending corrections are carried over · an invalid answer twice writes nothing and counts one failure · an empty digest from notes that had lines is refused, retried and logged with its reason · an over-long digest loses its oldest lines of the last section · lines are numbered `g1`… by code · a second compaction finding the lock does nothing · packet names carry the time · Cognee down puts the packet in the outbox |
 | `test_failures` | 3 timeouts pause a service · 401 pauses at once · 429 and 529 are not counted · a success resets the counter · the notice is given once per session · a pause seen by one session applies to all · `/memsift-resume` tests, resumes, sends the outbox, sorts this repo's `pending.jsonl` and prints its summary · another repo's pending turns are sorted by its first stop |
 | `test_hooks` | `run.py` end to end for every event and host, against the fake server: output shape per host · background hooks return in under a second · the prompt hook returns nothing within about 2 s when Jev takes 3 s · an exception inside the core still exits 0 and is in `debug.log` with its traceback |
 | `test_doctor` | each check reports ✓ and ✗ correctly · no key value appears in the output |
