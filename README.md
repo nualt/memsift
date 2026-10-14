@@ -83,6 +83,166 @@ When the working notes reach 8 000 tokens, a cheap model (Gemma) cleans and
 deduplicates them, sends them to Cognee, and rewrites a short digest of the
 project. At the end of a session, whatever is left goes the same way.
 
+<details>
+<summary>The full picture</summary>
+
+```
+  WHAT JEV HAS AT HAND  (almost free, never pasted as is into the agent)
+  ┌────────────────┐ ┌────────────────┐ ┌──────────────────────┐ ┌────────────────┐
+  │ jev.md         │ │ CLAUDE.md      │ │ what the agent has   │ │ preferences.md │
+  │ project, what  │ │ "already       │ │ in mind: last        │ │ + the repo's   │
+  │ matters, phase │ │ written" (③)   │ │ /compact + recent    │ │ WORKING NOTES  │
+  └────────────────┘ └────────────────┘ └──────────────────────┘ └────────────────┘
+
+
+ ⓪ SESSION START ─────────────────────────────────────────────── hook SessionStart
+     │
+     ├─ the WORKING NOTES start with preferences.md (how you work)
+     │  + this repo's digest.md (work in progress): nothing to ask Cognee
+     ├─ note how the session starts (new, /clear, /compact, resume)
+     │  → Jev will know whether the agent starts from scratch
+     ├─ Cognee: list of what it holds ──► cognee-index.json
+     │  (in the background, ~1-3 s, rewritten each session)
+     ├─ Cognee datasets compared to datasets.md: a new one?
+     │  ──► flag "propose a description"
+     └─ no jev.md?  ──► flag "propose a first draft"
+
+
+ ① YOU TYPE A PROMPT ─────────────────────────────────────── hook UserPromptSubmit
+     │
+     ▼
+   ┌─────────────── JEV · one request · ~0.1-0.5 s ───────────────┐
+   │ ① "Is the agent missing something that ALREADY EXISTS?"      │
+   │ ② "Is it in the WORKING NOTES?"  → if so, which lines        │
+   │ ③ "Is it worth asking COGNEE?"                               │
+   │    (is the topic in cognee-index.json?)                      │
+   │    if so: in which datasets (read from datasets.md)          │
+   │ → each answer comes with a probability (0 to 1)              │
+   └───────────────────────────────┬──────────────────────────────┘
+          ┌────────────────────────┴─────────────────────────┐
+          ▼                        ▼                         ▼
+   nothing missing       it is in the notes          not in the notes,
+   (most prompts)        → the useful lines          and Jev ≥ 80 % sure
+   → NOTHING ADDED         are added                 (otherwise: nothing)
+                           │                                   │
+                           │                                   ▼
+                           │                         COGNEE: we wait
+                           │                         (~6 s, 12 s max)
+                           │                         it returns its 5
+                           │                         passages CLOSEST to
+                           │                         the question (not the
+                           │                         most useful ones)
+                           │                                   │
+                           │                                   ▼
+                           │               ┌────────────────── JEV ───────────────────┐
+                           │               │ ④ for each passage:                      │
+                           │               │    already in front of it? → dropped     │
+                           │               │    off topic / useless?    → dropped     │
+                           │               │    changes its next move?  → kept        │
+                           │               └───────────────────┬──────────────────────┘
+                           │                                   │
+                           └───────────────────────────────────┤
+                                                               ▼
+   ┌────────────────────────────── AGENT CONTEXT ───────────────────────────────┐
+   │ … our conversation …                                                       │
+   │ [ what the sorting kept, often nothing. For example:                       │
+   │   "Preference: ask before committing" ]                                    │
+   │ [ if flagged: "jev.md looks outdated, propose an update" ]                 │
+   │ your prompt                                                                │
+   └────────────────────────────────────────────────────────────────────────────┘
+
+   WAIT   usual plugin: ~6 s on EVERY prompt (median, up to 12 s)
+          memsift     : ~0.1-0.5 s when the notes are enough,
+                        a few seconds only when Jev judges
+                        that Cognee is worth it
+
+
+ ② THE AGENT WORKS ───────────────────────────────────────────── hook PostToolUse
+     │   nothing is sent anywhere
+     ▼
+   ┌────────────── ACTION NOTE · local, plain code ───────────────┐
+   │ Bash that reads (git status, ls…)      ✗ ignored             │
+   │ Bash that changes (git commit…)        ✔ noted               │
+   │ Edit / Write in the repo               ✔ noted               │
+   │ Edit / Write in /tmp, scratch dirs     ✗ ignored             │
+   │ Python script via Bash                 ✔ if the repo changed │
+   │ failure, then success                  ✔ marked "lesson?"    │
+   └──────────────────────────────────────────────────────────────┘
+
+
+ ③ THE AGENT ANSWERED ─────────────────────────── hook Stop · in the background
+     │   your prompt + its answer + action note
+     ▼
+   ┌──────────────────────────── JEV ─────────────────────────────┐
+   │ "What kind of information is this?"                          │
+   │   nothing important · how you work · this project ·          │
+   │   a technical lesson                                         │
+   │ "Already known?"  in preferences.md, the notes, CLAUDE.md    │
+   │ "Is jev.md outdated?"                                        │
+   └──────────────────────────────┬───────────────────────────────┘
+     ┌──────────────┬─────────────┴─────┬─────────────────────┐
+     ▼              ▼                   ▼                     ▼
+   NOTHING         HOW YOU WORK       PROJECT, LESSON       JEV.MD TO REVIEW
+   "commit pls"    "ask before        "header: footer       → FLAG, added
+   → dropped         committing"        grid"                 to the next prompt:
+                   → preferences.md   "pnpm blocks            the agent proposes,
+                     right away,        build scripts"        you approve
+                     every repo       → repo WORKING NOTES
+                                        │
+                                        ▼
+                          notes full?  (≥ 8 000 tokens)
+                          no → carry on
+                                        │ yes
+                                        ▼
+   ┌───────────────── COMPACTION · in the background ─────────────────┐
+   │ GEMMA reads ALL of the repo's notes, in one pass:                │
+   │   ├─ cleans, deduplicates ──────────► SENDS TO COGNEE            │
+   │   │    technical lessons go there only: Jev will                 │
+   │   │    fetch them the day the problem comes back                 │
+   │   └─ rewrites the repo's digest.md  (≤ 3 000 tokens)             │
+   │        this project: decisions, work in progress                 │
+   │        priority: work in progress, then most recent              │
+   │                                                                  │
+   │ meanwhile, Jev keeps using the old notes                         │
+   └──────────────────────────────┬───────────────────────────────────┘
+                                  │
+                                  ▼
+          NEXT TURN: old notes dropped
+          new notes = digest.md
+                        + the turns added during compaction
+
+   LONG SESSIONS: each compaction rewrites digest.md with the new turns
+   → never more than 3 000 tokens. Same for preferences.md: past
+   1 000 tokens, Gemma compacts it.
+   What drops out of digest.md is not lost: it is already in Cognee.
+
+   SESSION END: Gemma sends what is left in the notes to Cognee,
+   even if they are not full, and rewrites digest.md for the next ⓪.
+
+══════════════════════════════════════════════════════════════ COGNEE SERVER ═══
+
+   ┌──────────────────── COGNEE · agent_sessions ─────────────────────┐
+   │ receives only clean, deduplicated packets                        │
+   │ stores and links them (graph)                                    │
+   │ → queried only at ①, when Jev judges it worth it                 │
+   └──────────────────────────────────────────────────────────────────┘
+
+   ┌─────────────────── YOUR CURATED KNOWLEDGE ───────────────────┐
+   │ your other datasets: playbooks, projects, lessons…           │
+   │ read at ① when Jev picks them (datasets.md) · NEVER written  │
+   │ datasets marked IGNORED in datasets.md: never queried        │
+   └──────────────────────────────────────────────────────────────┘
+
+
+  EXAMPLE: "I need a diagram to get it"
+    ③  Jev: how you work → added to preferences.md right away
+    other repo, next prompt: preferences.md is global, the line is there
+    ① "walk me through the checkout": Jev ② finds it
+       → added, without asking Cognee
+```
+
+</details>
+
 ## Why it is built this way
 
 1. **A decision model, not a chat model, decides what to inject.** Jev returns
