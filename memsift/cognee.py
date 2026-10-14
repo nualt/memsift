@@ -296,6 +296,8 @@ def queue_packet(root, name, text):
             with temporary.open("w", encoding="utf-8", newline="\n") as output:
                 if output.write(text) != len(text):
                     raise OSError("Incomplete Cognee packet write")
+                output.flush()
+                os.fsync(output.fileno())
             # Publish complete bytes exclusively; a drain cannot see a partial packet.
             os.link(temporary, path)
             temporary.unlink()

@@ -127,6 +127,12 @@ class CogneeTests(IsolatedTest):
         self.cognee.send_outbox(self.store.repo_dir(self.repo), self.config)
         self.assertNotIn(b"invented-", self.fake.requests[0]["body"])
 
+    def test_queued_packet_is_synced_to_disk_before_it_is_published(self):
+        with patch("memsift.cognee.os.fsync") as fsync:
+            path = self.cognee.queue_packet(self.repo, NAME, "staged before the notes are rewritten")
+        self.assertEqual(fsync.call_count, 1)
+        self.assertEqual(path.read_text(), "staged before the notes are rewritten")
+
     def test_409_renames_without_overwriting_local_collision(self):
         first = self.cognee.queue_packet(self.repo, NAME, "first")
         second = self.cognee.queue_packet(self.repo, NAME, "second")
