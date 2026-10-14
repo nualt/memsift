@@ -132,6 +132,8 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 > `digest.md` + `draft.md` read together, no copy; no `preferences.md` (general
 > working rules belong in the host's `CLAUDE.md` / `AGENTS.md`, outside memsift's
 > scope); draft entries are raw turns with labels, cut at 1 500 / 1 000 tokens.
+> Corrections: pending entry, confirmation appended as a line, action notes of
+> the last 5 turns with short diffs.
 > Everything else in this part is a proposal. The format of `digest.md`, written
 > by the compactor, is decided in part 5.
 
@@ -222,24 +224,29 @@ next line starting with `- [`. `draft.md` starts with `# Draft: <repo-key>`.
 
 ### Corrections
 
-A correction is an entry that replaces an older one. It is written with the id
-it replaces and stays pending until confirmed (part 4):
+A correction is a turn where the user corrects the agent. Its entry is marked
+pending:
 
 ```
-- [d4] 2026-10-14 decision (corrects g7, pending): The product grid has 12 columns, not 10.
+- [d4] 2026-10-14 decision · correction · pending
+  User: no, the product grid has 12 columns, not 10
+  Agent: ok, switching the product grid to 12 columns
+  Actions: Edit src/product-grid.tsx
 ```
 
-Confirmation or abandonment is appended as a status line, never by editing the
-entry:
+While it is pending, each following stop hook adds one question to its Jev
+request: is this correction confirmed by what happened since (part 4)? Jev reads
+the correction, the recent turns and the action notes of the last 5 turns. When
+the answer passes the threshold, the hook appends one line at the end of the
+file; the entry itself is never edited:
 
 ```
 - [d4] confirmed
-- [d4] abandoned
 ```
 
-At compaction, a confirmed correction replaces the entry it corrects, and an
-abandoned one is dropped together with its status line. A correction still
-pending is carried over to the new `draft.md` unchanged.
+At compaction, the compactor applies confirmed corrections, finding by itself
+the older statement they replace, and carries pending ones over to the new
+`draft.md`. A change of mind is a new correction; the most recent wins.
 
 ### digest.md
 
@@ -319,7 +326,10 @@ Short-lived state of one running session, rewritten by its own hooks only.
   "host": "claude-code",
   "source": "startup",
   "started_at": "2026-10-14T07:02:10Z",
-  "actions": ["Edit src/header.tsx", "Bash: git commit (ok)"],
+  "actions": [
+    {"turn": 2, "items": ["Edit src/product-grid.tsx: grid-cols-10 → grid-cols-12"]},
+    {"turn": 3, "items": ["Bash: git commit -m \"product grid in 12 columns\" (ok)"]}
+  ],
   "flags": ["jev_md_missing"],
   "outage_notice_sent": false
 }
@@ -328,7 +338,7 @@ Short-lived state of one running session, rewritten by its own hooks only.
 | Field | Meaning |
 |---|---|
 | `source` | how the session started: `startup`, `resume`, `clear`, `compact` |
-| `actions` | the action note of the current turn (part 3), emptied after each turn |
+| `actions` | the action notes of the last 5 turns (part 3); an `Edit` keeps a diff of about 200 characters, a `Write` only its file name |
 | `flags` | messages for the agent at the next prompt: `jev_md_missing`, `jev_md_outdated`, `dataset_undescribed:<name>` |
 | `outage_notice_sent` | the one-line outage notice was already given (part 6) |
 
