@@ -137,6 +137,7 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 > Repo key: directory name + 6 hex characters of the path hash.
 > Session file: one JSON per session; stale ones older than 7 days removed at session start.
 > `state.json`: one per machine, failure counters for Jev, compactor and Cognee.
+> Token estimate: characters ÷ ratio, the ratio learned from Jev's `usage.input_tokens`.
 > Everything else in this part is a proposal. The format of `digest.md`, written
 > by the compactor, is decided in part 5.
 
@@ -164,9 +165,13 @@ both; nothing is copied from one to the other. Compaction starts when digest + d
 ### Common rules
 
 - **Encoding.** UTF-8, `\n` line endings.
-- **Tokens** are estimated as `ceil(characters / 4)`. Jev's responses report
-  the real input count (`usage.input_tokens`); the debug log records both so the
-  ratio can be checked.
+- **Tokens** are estimated as `ceil(characters / ratio)`. Jev's tokenizer is not
+  public and there is no endpoint to count in advance, but every Jev response
+  reports the real input count (`usage.input_tokens`). After each call the ratio
+  is updated (moving average of real ratios), kept in `state.json` and shared by
+  every session. It starts at 4. The debug log records estimate and real count.
+  Jev's limits: 32 000 tokens for `state` plus the longest question, 64 000 per
+  request (docs.typesafe.ai/models).
 - **Secrets.** Every text is passed through `vendor/redact.py` before it is
   written, so no file under `~/.memsift/` ever holds a secret.
 - **Appends** (`draft.md`, `pending.jsonl`, `debug.log`) are a
