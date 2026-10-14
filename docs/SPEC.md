@@ -136,6 +136,8 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
     ├── digest.md           compacted project memory, written by the compactor  ≤ 3 000 tokens
     ├── draft.md            entries added since the last compaction
     ├── pending.jsonl       turns noted while Jev was unreachable
+    ├── outbox/             packets waiting for Cognee (part 6)
+    ├── compaction.lock     held while a compaction runs (part 5)
     └── cognee-index.json   what Cognee holds, rebuilt each session
 
 <repo root>/jev.md          project card, owned by the user
@@ -906,3 +908,107 @@ content.
 On two or three real drafts, Gemma 4 26B-A4B is compared with Gemma 4 31B and
 Claude Haiku 5.5: the compacted digest and packet must keep what the user said
 without changing it. The cheapest model that does not distort is the default.
+
+## 6. Failures
+
+Memory never blocks work, and no model runs for nothing. A service that keeps
+failing is paused, and the agent tells the user.
+
+### Counting failures
+
+Each of the three services (Jev, the compactor, Cognee) has its own counter in
+`state.json`, shared by every session on the machine.
+
+| Result of a call | Effect |
+|---|---|
+| success | counter back to 0 |
+| no answer, timeout, HTTP 5xx | counter + 1; at 3, the service is paused |
+| HTTP 401 or 403 (key refused) | paused at once: retrying cannot help |
+| HTTP 429 or 529 (rate limited, overloaded) | not counted: this turn goes without the service |
+| compactor answer invalid twice (part 5) | counter + 1 |
+
+```json
+{
+  "token_ratio": 3.7,
+  "services": {
+    "jev":       {"failures": 0, "paused": false, "reason": ""},
+    "compactor": {"failures": 0, "paused": false, "reason": ""},
+    "cognee":    {"failures": 3, "paused": true, "reason": "timeout", "since": "2026-10-14T09:12:40Z"}
+  }
+}
+```
+
+A pause covers every session on the machine at once, and one
+`/memsift-resume` lifts it. memsift never resumes on its own.
+
+### While paused
+
+| Paused | What keeps running |
+|---|---|
+| Jev | nothing: without sorting, memsift has nothing to decide. Each turn is appended to `pending.jsonl` (part 2), without any model |
+| compactor | everything but compaction. Notes keep growing; Jev reads the newest within its budget (part 3) |
+| Cognee | everything on the local notes. The prompt hook never asks Cognee, `cognee-index.json` is not rebuilt, packets wait in the outbox |
+
+### Telling the agent
+
+At the next prompt of each session, the prompt hook adds one line for each
+paused service, once per session (`outage_notice_sent`):
+
+```
+memsift is paused: Jev stopped answering (3 failures: timeout). Memory is off.
+Tell the user; they can run /memsift-resume once it is fixed.
+
+memsift: Cognee stopped answering (3 failures). Memory keeps working from the
+local notes; packets wait to be sent. Tell the user; /memsift-resume restarts it.
+
+memsift: the compactor stopped answering (3 failures). Notes are no longer
+compacted. Tell the user; /memsift-resume restarts it.
+```
+
+No system notification: the agent is the one channel that works on every host
+without installing anything.
+
+### Outbox
+
+A packet that cannot be sent waits as one file per packet:
+
+```
+repos/<repo-key>/outbox/acme-shop 2026-10-14 15h32 header grid, sharp.txt
+```
+
+Sending is retried, oldest first, at session start (memsift already talks to
+Cognee for the index), after each compaction, and on `/memsift-resume`. A file
+is deleted once Cognee has accepted it.
+
+### /memsift-resume
+
+```
+1. tests each paused service with one small call
+2. the ones that answer are resumed, counters back to 0;
+   the others stay paused, and the summary says why
+3. Cognee resumed → sends the outbox
+4. Jev resumed    → sorts this repo's pending.jsonl now (one stop request per
+                    turn, part 4), then deletes it
+5. prints a summary:
+   Jev ✓ · 12 turns sorted, 3 kept · Cognee ✗ still unreachable (timeout)
+```
+
+Other repos' `pending.jsonl` are sorted by the first stop hook in that repo
+once Jev is back, in the background: sorting needs the repo's own `jev.md`.
+
+### /memsift-doctor
+
+One line per check, `✓` or `✗` with what to do. Key values are never printed.
+
+```
+✓ Python 3.12
+✓ configuration found: COGNEE_BASE_URL, COGNEE_API_KEY, OPENROUTER_API_KEY,
+  MEMSIFT_COMPACTOR_URL, MEMSIFT_COMPACTOR_API_KEY
+✓ Cognee reachable, key accepted, dataset memsift
+✓ Jev reachable (one minimal request)
+✗ compactor: HTTP 401, check MEMSIFT_COMPACTOR_API_KEY
+✓ ~/.memsift writable
+✓ nothing paused · 0 turns pending · 0 packets waiting
+✗ datasets.md: "clients" has no description
+✓ this repo: jev.md found
+```
