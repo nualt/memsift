@@ -384,8 +384,9 @@ behind, so session start removes session files older than 7 days.
 
 ### jev.md
 
-The project card, at the repo root, next to `CLAUDE.md`. Jev reads it on every
-call; it is never pasted into the agent's context. It describes what weighs in
+The project card, at the repo root, next to `CLAUDE.md`. Jev reads it at the
+end of each turn, to judge what is worth keeping; it is not sent at the prompt,
+and it is never pasted into the agent's context. It describes what weighs in
 this project, not how to work in it. At most 3 000 tokens, in practice a dozen
 lines.
 
@@ -463,16 +464,20 @@ The only hook the user waits for.
 input    session_id, prompt, transcript_path
 does     1. turn + 1; keeps the prompt in the session file
          2. memsift paused (part 6)?  → outage notice once, then nothing
-         3. Jev, one request, 2 s at most:
-              ① is the agent missing information that already exists?
-              ② for each notes entry: does it hold what is missing?
+         3. Jev, all questions sent at once, 2 s at most (part 4):
+              ① does the conversation already hold what the agent needs?
+                 reads: the prompt + the end of the conversation
+              ② for each notes entry, one entry per question: does it answer the prompt?
+                 reads: the prompt + that entry only
               ③ is it worth asking Cognee, and in which datasets?
+                 reads: the prompt + the datasets
          4. decides:
-              P① < 0.7                            → nothing from memory
-              P① ≥ 0.7, entries with P② ≥ 0.5     → those entries
-              P① ≥ 0.7, no such entry, P③ ≥ 0.8   → Cognee
-         5. Cognee: recall on the chosen datasets, 12 s at most,
-            then Jev ④ sorts the passages, 2 s at most
+              P① ≥ 0.5                            → nothing from memory
+              otherwise, entries with P② ≥ 0.5    → those entries
+              no such entry, P③ ≥ 0.8             → Cognee
+         5. Cognee: recall on the chosen datasets, 12 s at most, then Jev
+            asks of each passage, one passage per question, whether it
+            answers the prompt (≥ 0.7), 2 s at most
 returns  what was kept, then the pending flags, as additionalContext
 ```
 
@@ -483,41 +488,27 @@ their criteria are in part 4.
 the worst case is 2 + 12 + 2 = 16 s. Any step that times out ends the hook
 with nothing from memory; unsorted Cognee passages are never pasted.
 
-**What Jev reads.** Budget for one request, about 26 000 tokens, inside Jev's
-32 000:
+**What the agent has, and only that.** Question ① judges what the agent
+actually has in front of it: the conversation since the last compaction. The
+compaction summary is not counted: it says "we worked on payment", not "Stripe,
+because PayPal's fees are too high", so an entry the summary mentions vaguely
+may be pasted again; a line in double reads as a reminder. `jev.md`,
+`CLAUDE.md` and `AGENTS.md` are not sent at the prompt: they do not help to
+judge what this prompt needs.
 
-| Part | Tokens |
-|---|---|
-| prompt, questions, how the session started | 2 000 |
-| `jev.md` | ≤ 3 000 |
-| last compaction summary | ≤ 6 000 |
-| recent exchanges | ~ 5 000 |
-| working notes (`digest.md` + `draft.md`) | ≤ 8 000 |
-| `cognee-index.json` | ≤ 1 000 |
-
-How the session started, as told to Jev:
-
-| `source` | What the agent has in mind |
-|---|---|
-| `startup`, `clear` | nothing: new session, the agent knows nothing of this repo |
-| `compact` | only the compaction summary and what followed |
-| `resume` | the whole previous conversation |
-
-`CLAUDE.md` and `AGENTS.md` are not sent here: the agent already has them.
+**How much conversation.** The agent's context can reach a million tokens;
+Jev reads 32 000. Question ① gets the end of the conversation, up to
+25 000 tokens, newest kept. Reading the whole of a long conversation in pieces
+would cost about 40 times more on every prompt, and what lies far back is
+poorly used by the agent anyway: something said 300 messages ago is better
+reminded.
 
 **Reading the conversation.** memsift reads the host's transcript
-(`transcript_path`) from the end and never loads the whole file:
-
-- **Claude Code.** Each compaction adds a `Conversation compacted` marker
-  followed by the summary; nothing is removed. Only the last summary counts,
-  since each one includes the previous.
-- **Codex.** Each compaction adds a `compacted` record whose summary is
-  encrypted. memsift sends instead the user messages that Codex keeps in clear
-  in that record. Jev then knows what was discussed but not all the agent
-  retained, so it may sometimes paste an entry the agent already has.
-- **Recent exchanges.** The text of the prompts and answers since the last
-  compaction, newest kept first. Tool calls and their output are dropped; each
-  turn carries its action note instead, when the session file still has it.
+(`transcript_path`) from the end and never loads the whole file. It keeps the
+prompts and answers since the last compaction marker (Claude Code's
+`Conversation compacted`, Codex's `compacted` record), newest first. Tool calls
+and their output are dropped; each turn carries its action note instead, when
+the session file still has it.
 
 ```
 transcript                                 sent to Jev
@@ -532,12 +523,9 @@ Agent: added the border on the left, …
 User: same for the header
 ```
 
-**Over budget.** Cut in this order: oldest recent exchanges, then the end of
-the summary, then the oldest draft entries. The prompt, the questions and
-`jev.md` are never cut. If Jev still refuses the request as too large, it is
-retried once with half the recent exchanges; if that fails, nothing is pasted.
-If the prompt, the questions and `jev.md` alone are too large, nothing is pasted
-and the error is logged.
+**Over budget.** The oldest exchanges are cut first; the prompt is never cut.
+If Jev still refuses the request as too large, it is retried once with half
+the exchanges; if that fails, nothing is pasted and the error is logged.
 
 **What the agent receives.** One block per source, entries pasted as they are,
 since Jev cannot write. When nothing was kept and no flag is pending, the hook
@@ -689,38 +677,50 @@ Rules that follow from how Jev works:
 
 ### Prompt request
 
-Sent by the prompt hook. 2 s timeout.
+Sent by the prompt hook as three requests in parallel, 2 s at most in all.
+Each request carries only what its questions need: the doc of Jev lists a large
+state full of unrelated text, and several judgments in one question, among its
+known weak spots.
 
-```json
-{
-  "prompt": "…",
-  "session_start": "new session: the agent knows nothing of this repo",
-  "project_card": "<jev.md>",
-  "compaction_summary": "…",
-  "recent_exchanges": "…",
-  "notes": {"g1": "…", "d3": "…"},
-  "datasets": {"lessons": {"description": "<datasets.md line>", "items": ["…"]}}
-}
+```
+request          state                                        questions
+① conversation   {"prompt", "conversation"}                   has_info
+② notes          {"prompt"}                                   entry_<id>, one per entry,
+                                                              the entry inside its question
+③ Cognee         {"prompt", "datasets"}                       cognee, dataset_<name>
 ```
 
-`notes` holds every entry of `digest.md` and `draft.md` under its id.
+`conversation` is the end of the conversation since the last compaction, up to
+25 000 tokens (part 3). Entries are every entry of `digest.md` and `draft.md`.
 `datasets` merges `datasets.md` and `cognee-index.json`, without `IGNORED`
 datasets.
 
 | Id | Type | Question |
 |---|---|---|
-| `missing` | noul | Does the agent lack information, needed to act on `prompt`, that already exists: said or decided before this conversation, and not in `compaction_summary` or `recent_exchanges`? |
-| `entry_<id>` | noul | Does `notes.<id>` hold information the agent needs to act on `prompt` and does not have yet? |
+| `has_info` | noul | Does `conversation` already contain everything the agent needs to act on `prompt`? |
+| `entry_<id>` | noul | Does `note` answer `prompt` or give information needed to act on it? (`note` is the entry's text, given inside the question) |
 | `cognee` | noul | Is it worth searching the long-term memory? |
 | `dataset_<name>` | noul | Given its description and items, would `datasets.<name>` hold what the agent needs for `prompt`? |
 
-Criteria for `missing`:
+An entry question is sent as a structured instruction, so Jev compares the
+prompt with one entry at a time:
+
+```json
+"entry_g3": {"type": "noul",
+             "instructions": {"note": "Payment with Stripe; PayPal ruled out, fees too high.",
+                              "question": "Does `note` answer `prompt` or give information needed to act on it?"},
+             "criteria": {"true": "the note is about what the prompt asks or needs",
+                          "false": "the note is about something else, or the prompt needs nothing from it"}}
+```
+
+Criteria for `has_info`:
 
 ```
-true    the prompt refers to work, a decision or a preference from before this
-        conversation, which the agent cannot see
-false   the information does not exist yet (it is being decided now), or the
-        agent already has it, or the prompt needs no memory
+true    the information the prompt relies on is stated in the conversation, or
+        the prompt needs no past information at all (a new instruction, ok,
+        commit, a general question)
+false   the prompt relies on a past decision, rule, fact or state of the work
+        that the conversation does not contain
 ```
 
 Criteria for `cognee`:
@@ -736,7 +736,7 @@ false   a general question, an answer found in the code or the docs, or memory
 Code:
 
 ```
-missing < 0.7                                → nothing
+has_info ≥ 0.5                               → nothing
 entries with entry_<id> ≥ 0.5                → those entries, in notes order
 no such entry, cognee ≥ 0.8                  → Cognee, in datasets with
                                                dataset_<name> ≥ 0.5, or the
@@ -744,19 +744,36 @@ no such entry, cognee ≥ 0.8                  → Cognee, in datasets with
 otherwise                                    → nothing
 ```
 
+**Why this shape.** A first version sent everything in one request (the
+prompt, `jev.md`, the compaction summary, recent exchanges, every entry and
+the datasets) and asked whether the agent "lacks information, needed to act on
+the prompt, that already exists and is not in the conversation". On a hundred
+prompts typed the way a real user types, it pasted no entry when ten were
+needed, and gave "commit" 0.77 on an entry that had nothing to do with it. With
+one entry per question and a question about the conversation alone, five of six
+recalls whose entry existed were pasted, 81 of 84 noise prompts got nothing,
+and prompts about an invented past ("the client's dog's name") got nothing.
+
 ### Passage request
 
-Sent after a Cognee recall. 2 s timeout. Its state holds only what the
-judgment needs: `prompt`, `compaction_summary`, `recent_exchanges` and
-`passages` (`p1` to `p5`). The notes are not sent: the prompt request already
-found the answer was not there.
+Sent after a Cognee recall. 2 s timeout. State: `{"prompt"}`; one question per
+passage, the passage inside its question, as for entries.
 
 | Id | Type | Question |
 |---|---|---|
-| `useful_<n>` | noul | Would `passages.p<n>` change what the agent does for `prompt`? |
-| `known_<n>` | noul | Is the information in `passages.p<n>` already in `compaction_summary` or `recent_exchanges`? |
+| `passage_<n>` | noul | Does `passage` answer `prompt` or give information needed to act on it? |
 
-Code: a passage is pasted when `useful ≥ 0.7` and `known < 0.5`.
+Criteria: true when the passage is about what the prompt asks or needs; false
+when it is about something else, or the prompt needs nothing from it.
+
+Code: a passage is pasted when `passage_<n> ≥ 0.7`. There is no question about
+whether the agent already has it: question ① of the prompt request already
+established that the conversation lacks the information.
+
+Measured on full passages returned by Cognee, the right passages scored 0.88
+to 0.92 and the wrong ones at most 0.63. The first version (all five passages
+in one state, "would it change what the agent does?") scored the right ones
+0.40 to 0.67 and kept none of them at 0.7.
 
 ### Stop request
 
@@ -1132,10 +1149,10 @@ failure must show.
 and token counts:
 
 ```
-09:41:02 prompt  "back to the header"  missing 0.85 · g1 0.92 → 1 entry pasted
+09:41:02 prompt  "back to the header"  has_info 0.10 · g1 0.92 → 1 entry pasted
                  jev 0.4 s · 21 300 tokens (estimated 22 100)
 09:41:40 stop    project · this task · 0.81 → d7 appended
-09:52:13 prompt  "pick up the footer from two weeks ago"  missing 0.95 · cognee 0.90
+09:52:13 prompt  "pick up the footer from two weeks ago"  has_info 0.05 · cognee 0.90
                  → Cognee lessons, memsift 5.8 s → p2 kept · total 6.6 s
 ```
 
@@ -1166,7 +1183,7 @@ What each module checks:
 |---|---|
 | `test_store` | two processes appending 200 entries each to one `draft.md`: no line lost or interleaved · a rewrite under lock is never seen half-written · cuts at 1 500 / 1 000 tokens keep start and end with `[…]` · two repos with the same name get different keys · outside git the working directory is the repo · missing files read as empty |
 | `test_redact` | API keys, tokens, private keys and `PASSWORD=`-style values are masked in `draft.md`, `pending.jsonl`, `debug.log`, the outbox, and in every request the fake server records |
-| `test_transcript` | Claude Code: only the last summary after the last marker is read; tool calls replaced by action notes · Codex: the encrypted summary is skipped, the user messages kept in clear are read · the over-budget cut order of part 3 · a transcript of several MB is read from the end, not loaded whole |
+| `test_transcript` | Claude Code and Codex: only the exchanges after the last compaction marker are read, the summary is not sent; tool calls replaced by action notes · the end of the conversation is kept up to 25 000 tokens, oldest cut first · a transcript of several MB is read from the end, not loaded whole |
 | `test_actions` | in a temporary git repo: an edit in the repo is noted with a diff of at most 200 characters · a write keeps the file name only · edits outside the repo are ignored · a read-only command is ignored · a command changing an already modified file is noted · a commit is noted · outside git, commands are not noted · failed then succeeded is marked · Codex `apply_patch` is noted like an edit · only the last 5 turns are kept |
 | `test_decisions` | table-driven, probabilities in, outcome out: the prompt cascade (thresholds and their boundaries, dataset fallback to the highest) · the passage rule · the stop rule, including the lower bar for corrections · confirmed corrections · each flag given once, then removed |
 | `test_compaction` | lines appended during a compaction survive it · pending corrections are carried over · an invalid answer twice writes nothing and counts one failure · an empty digest from notes that had lines is refused, retried and logged with its reason · an over-long digest loses its oldest lines of the last section · lines are numbered `g1`… by code · a second compaction finding the lock does nothing · packet names carry the time, and a taken name gets ` (2)` · the packet is in the outbox before `digest.md` is rewritten · Cognee down leaves the packet in the outbox · a draft of pending corrections only makes no model call · a lessons-only draft may give an empty digest · a confirmation appended during a compaction is carried over with its correction |
@@ -1208,4 +1225,4 @@ first on Claude Code, then on Codex:
 | 5 | state a structuring decision without a reason | the agent asks why at the next prompt |
 | 6 | fill the draft | compaction runs; a packet reaches Cognee |
 | 7 | set a wrong Cognee key | pause after the first call, one line to the agent, `/memsift-resume` after fixing |
-| 8 | `/compact`, then ask about something from before | Jev reads the summary; nothing redundant pasted |
+| 8 | `/compact`, then ask about something from before | the entry is pasted, since the summary does not count as having it |

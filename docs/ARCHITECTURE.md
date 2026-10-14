@@ -57,20 +57,19 @@ A session, moment by moment. Probabilities and thresholds are starting points,
 set at calibration (SPEC part 4).
 
 ```
-  WHAT JEV HAS AT HAND  (cheap for Jev, never pasted as is into the agent)
+  WHAT JEV READS  (cheap for Jev, never pasted as is into the agent)
   ┌────────────────┐ ┌────────────────┐ ┌──────────────────────┐ ┌────────────────┐
-  │ jev.md         │ │ CLAUDE.md,     │ │ what the agent has   │ │ the repo's     │
-  │ project, what  │ │ AGENTS.md      │ │ in mind: last        │ │ WORKING NOTES  │
-  │ matters, phase │ │ "already       │ │ /compact summary +   │ │ digest.md +    │
-  │                │ │ written" (③)   │ │ recent exchanges     │ │ draft.md       │
+  │ jev.md         │ │ CLAUDE.md,     │ │ the conversation     │ │ the repo's     │
+  │ project, what  │ │ AGENTS.md      │ │ since the last       │ │ WORKING NOTES  │
+  │ matters, phase │ │ "already       │ │ /compact, its end    │ │ digest.md +    │
+  │ (③ only)       │ │ written" (③)   │ │ (≤ 25 000 tokens)    │ │ draft.md       │
   └────────────────┘ └────────────────┘ └──────────────────────┘ └────────────────┘
 
 
  ⓪ SESSION START ───────────────────────────────────────── hook SessionStart
      │   returns nothing
      ├─ session file: repo, host, how the session started
-     │  (new, /clear, /compact, resume) → Jev will know whether the agent
-     │  starts from scratch
+     │  (new, /clear, /compact, resume)
      ├─ no jev.md at the repo root?  ──► flag "propose a first version"
      └─ in the background:
           Cognee: list of what it holds ──► cognee-index.json
@@ -81,16 +80,19 @@ set at calibration (SPEC part 4).
  ① YOU TYPE A PROMPT ──────────────────────────────── hook UserPromptSubmit
      │   the only hook you wait for
      ▼
-   ┌──────────────── JEV · one request · 2 s at most ─────────────────┐
-   │ ① "Is the agent missing information that ALREADY EXISTS?"        │
-   │ ② for each notes entry: "Does it hold what is missing?"          │
+   ┌──────────── JEV · questions sent at once · 2 s at most ──────────┐
+   │ ① "Does the conversation already hold what the agent needs?"     │
+   │     reads: the prompt + the end of the conversation              │
+   │ ② for each notes entry, ONE per question:                        │
+   │     "Does this entry answer the prompt?"                         │
+   │     reads: the prompt + that entry only                          │
    │ ③ "Is it worth asking COGNEE?" and, for each dataset:            │
    │    "Would it hold the answer?" (datasets.md + cognee-index.json) │
    │ → each answer is a probability (0 to 1); code decides            │
    └────────────────────────────────┬─────────────────────────────────┘
           ┌─────────────────────────┴─────────────────────────┐
           ▼                         ▼                         ▼
-   ① < 0.7                   entries with ② ≥ 0.5      no such entry, ③ ≥ 0.8
+   ① ≥ 0.5                   entries with ② ≥ 0.5      no such entry, ③ ≥ 0.8
    (most prompts)            → those entries           (otherwise: nothing)
    → NOTHING ADDED             are added as they are             │
                                │                                 ▼
@@ -102,9 +104,8 @@ set at calibration (SPEC part 4).
                                │                                 │
                                │                                 ▼
                                │         ┌──────────── JEV ④ · 2 s at most ────────────┐
-                               │         │ for each passage:                           │
-                               │         │   changes what the agent does?   ≥ 0.7      │
-                               │         │   already in front of it?        < 0.5      │
+                               │         │ for each passage, ONE per question:         │
+                               │         │   "Does it answer the prompt?"   ≥ 0.7      │
                                │         │   → kept; otherwise dropped                 │
                                │         └────────────────────┬────────────────────────┘
                                │                              │
@@ -297,6 +298,22 @@ to 0.99. Telling a general habit ("ask before committing", which belongs in
 `CLAUDE.md`) from a rule of this project is now a separate yes/no question,
 instead of being read from a scope of "always" that also covered permanent
 project facts ("prices are shown with VAT").
+
+The same test showed the prompt questions had the same flaw. They sent Jev one
+large state (the conversation, the compaction summary, `jev.md`, every entry,
+the datasets) and asked whether the agent "lacks information that already
+exists and is not in the conversation": no entry was pasted when ten were
+needed, and "commit" scored 0.77 on an unrelated entry. They now ask three
+plain things, each with only what it needs: does the conversation already hold
+what the agent needs (prompt and conversation), does this entry answer the
+prompt (prompt and one entry), and, for Cognee, does this passage answer the
+prompt (prompt and one passage). On the same prompts, five of six recalls were
+pasted, almost all noise got nothing, and right Cognee passages scored 0.88 to
+0.92 against at most 0.63 for wrong ones.
+
+The compaction summary no longer counts as something the agent has: it keeps
+the gist, not the detail. And Jev reads only the end of the conversation, up to
+25 000 tokens: what lies further back, the agent uses poorly anyway.
 
 The lesson for the rest of the design: a question to Jev is written, then run on
 real turns, before it is relied on.

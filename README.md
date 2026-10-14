@@ -46,20 +46,22 @@ and only the prompt adds anything to the agent's context.
   you type a prompt
       │
       ▼
-  Jev, two seconds at most: is the agent missing something
-  that already exists?
+  Jev, two seconds at most: does the conversation already
+  hold what the agent needs?
       │
-      ├── no (most prompts) ──────────────────────► nothing is added
+      ├── yes (most prompts) ─────────────────────► nothing is added
       │
-      ├── yes, it is in this project's notes ─────► those entries are added
+      ├── no, and a note answers ─────────────────► that note is added
+      │   (each note checked on its own)
       │
-      └── yes, and it is worth asking Cognee
+      └── no note answers, worth asking Cognee
               │
               ▼
           Cognee returns its closest passages (12 s at most)
               │
               ▼
-          Jev, two seconds at most: keeps the useful, unknown passages
+          Jev, two seconds at most: keeps the passages that answer
+          the prompt, each checked on its own
               │
               ▼
           a few lines are added, often none
@@ -68,10 +70,11 @@ and only the prompt adds anything to the agent's context.
 1. **Session start.** memsift notes how the session started, checks that the
    project has a `jev.md`, and in the background fetches the list of what
    Cognee holds. Nothing is sent to the agent.
-2. **Each prompt.** Jev answers in one request: is anything missing, which
-   entries of the working notes hold it, and is it worth asking Cognee (and in
-   which datasets). Cognee is only queried when Jev is confident it will help,
-   and Jev sorts its passages before anything is added.
+2. **Each prompt.** Jev checks whether the end of the conversation already
+   holds what the agent needs; if not, it checks each note on its own against
+   the prompt, and if none answers, whether Cognee is worth asking (and in
+   which datasets). Cognee's passages are checked one by one before anything
+   is added.
 3. **While the agent works.** memsift notes what changed the repo: edits,
    commits, a command that failed and then worked. Reads are ignored. Nothing
    leaves the machine.
@@ -208,7 +211,7 @@ Settings are read from the environment, then from `~/.cognee/.env`.
 
 | Sent to | What | When |
 |---|---|---|
-| OpenRouter (Jev) | prompt classification: your prompt, session-start source, recent user/assistant exchanges, last compaction summary, working notes, `jev.md`, dataset descriptions and item names; Stop: the turn's prompt, answer and action notes, recent actions, `jev.md`, notes, pending corrections and repo-root `CLAUDE.md` / `AGENTS.md`, plus recent exchanges when corrections are pending; passage selection: prompt, summary, recent exchanges and recalled passages | each prompt and after each answer, while Jev is active |
+| OpenRouter (Jev) | prompt classification: your prompt, the end of the conversation since the last compaction (up to 25 000 tokens), each working-notes entry, dataset descriptions and item names; Stop: the turn's prompt, answer and action notes, recent actions, `jev.md`, notes, pending corrections and repo-root `CLAUDE.md` / `AGENTS.md`, plus recent exchanges when corrections are pending; passage selection: your prompt and each recalled passage | each prompt and after each answer, while Jev is active |
 | the compactor | one project's digest and eligible draft entries, with compaction instructions and a response schema | at 8 000 estimated tokens, at session end, or a minimal doctor/resume probe |
 | Cognee | recall: the current redacted prompt as the query, selected dataset IDs/names and search metadata; upload: cleaned packet text, packet filename, target dataset and node-set fields; index: requests for dataset and item lists | recall only when Jev selects it; uploads after compaction, at session start and on resume; index at session start; minimal doctor/resume probes |
 
