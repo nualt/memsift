@@ -425,6 +425,10 @@ def request(config, state, questions, *, timeout, probe=False):
 def _request(config, state, questions, *, timeout, probe=False, record=True):
     if not probe:
         breaker.require_active("jev")
+    if not questions:
+        # Jev refuses a request without questions (HTTP 400, "At least one question
+        # is required"): a repo with no notes yet must not count that as a failure.
+        return {}
     start = time.monotonic()
     deadline = start + timeout
     status, response_text = 0, ""

@@ -165,6 +165,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             "body": body,
             "timeout": float(timeout_text) if timeout_text is not None else None,
         }
+        if isinstance(body, dict) and "questions" in body and not body["questions"]:
+            # Same answer as the real Jev endpoint: a request needs at least one question.
+            with owner._lock:
+                owner.requests.append(record)
+            message = json.dumps({"error": {"message": "At least one question is required", "code": 400}}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(message)))
+            self.end_headers()
+            self.wfile.write(message)
+            return
         with owner._lock:
             owner.requests.append(record)
             queue = owner._paths.get(self.path)

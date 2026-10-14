@@ -30,6 +30,19 @@ class JevTests(IsolatedTest):
         self.assertEqual(self.config["MEMSIFT_JEV_MODEL"], "invented-jev-model")
         self.assertNotEqual(breaker.ratio(), 3)
 
+    def test_repo_without_notes_sends_no_empty_request(self):
+        # A fresh repo has no notes: request ② has no question and must not be sent,
+        # since the real Jev answers 400 to an empty question list.
+        from memsift import breaker, jev
+        state = {"prompt": "on reprend le header", "conversation": "", "notes": {}, "datasets": {}}
+        for _ in range(2):
+            self.fake.push({"answers": {"has_info": noul(0.1), "cognee": noul(0.1)}, "usage": {"input_tokens": 100}})
+        jev.request_prompt(self.config, state, timeout=2)
+        self.assertTrue(self.fake.requests)
+        for sent in self.fake.requests:
+            self.assertTrue(sent["body"]["questions"])
+        self.assertEqual(breaker.state()["services"]["jev"]["failures"], 0)
+
     def test_question_text_criteria_and_conditional_fields(self):
         from memsift import jev
         questions = jev.prompt_questions({"notes": {"g1": "grid"}, "datasets": {"lessons": {}}})
