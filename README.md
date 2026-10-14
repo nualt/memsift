@@ -315,7 +315,9 @@ codex plugin marketplace add nualt/memsift --ref main
 codex plugin add memsift@memsift
 ```
 
-Then put your keys in `~/.cognee/.env` and start a new session.
+Then put your keys in `~/.cognee/.env`, start a new session and run
+`/memory-doctor`: it checks the configuration and that Cognee, Jev and the
+compactor answer, and says what to fix.
 
 ## Configuration
 

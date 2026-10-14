@@ -43,7 +43,8 @@ memsift/
 │   ├── claude-code.json       ${CLAUDE_PLUGIN_ROOT}/memsift/run.py <event>
 │   └── codex.json             ${PLUGIN_ROOT}/memsift/run.py <event>
 ├── commands/
-│   └── memory-resume.md       /memory-resume, after an outage
+│   ├── memory-resume.md       /memory-resume, after an outage
+│   └── memory-doctor.md       /memory-doctor, checks the setup
 ├── memsift/                   the code, Python standard library only
 │   ├── run.py                 entry point: reads the hook JSON, calls the core,
 │   │                          prints the host's answer, never crashes the host
@@ -54,6 +55,7 @@ memsift/
 │   ├── compactor.py           Gemma compaction (part 5)
 │   ├── cognee.py              Cognee HTTP: recall, add, datasets, items
 │   ├── breaker.py             3 failures in a row → pause (part 6)
+│   ├── doctor.py              config, keys, Cognee and Jev reachable (part 6)
 │   └── vendor/                kept from upstream, see below
 ├── tests/
 ├── docs/
@@ -70,7 +72,8 @@ branches is enough. A third host (Cursor, Gemini CLI) adds branches there and a
 new `hooks/<host>.json`.
 
 To verify while implementing: Codex accepts a marketplace plugin path of `"./"`
-(upstream used `"./plugins/cognee"`).
+(upstream used `"./plugins/cognee"`), and how a Codex plugin exposes
+`/memory-resume` and `/memory-doctor` (Claude Code uses `commands/`).
 
 ### What we keep from upstream
 
@@ -111,7 +114,8 @@ Everything else, about 20 000 lines:
 | observers, idle and exit watchers, `_proc.py` | 2 500 | nothing: the hooks are enough |
 | status line, credits refresh | 960 | nothing |
 | code graph, repo indexing, file context on `Read` | 1 700 | nothing |
-| recap, doctor, switch-dataset, list-datasets, config, event names | 3 300 | `cognee.py`, environment variables (part 7) |
+| recap, switch-dataset, list-datasets, config, event names | 2 850 | `cognee.py`, environment variables (part 7) |
+| `doctor.py` (checks upstream's setup: venv, local server, cloud credits) | 450 | our own `doctor.py`, much smaller, same idea |
 | shell wrappers (`cognee-*.sh`, `cognee-plugin`) | 800 | nothing |
 | 9 skills, 1 agent | | nothing: explicit search and remember stay with Cognee's own MCP server |
 | `integrations/codex/` scripts | 22 000 | the same `memsift/` code as Claude Code |
