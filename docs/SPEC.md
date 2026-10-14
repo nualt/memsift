@@ -71,10 +71,6 @@ share the same events and almost the same JSON, so one module with a few
 branches is enough. A third host (Cursor, Gemini CLI) adds branches there and a
 new `hooks/<host>.json`.
 
-To verify while implementing: Codex accepts a marketplace plugin path of `"./"`
-(upstream used `"./plugins/cognee"`), and how a Codex plugin exposes
-`/memory-resume` and `/memory-doctor` (Claude Code uses `commands/`).
-
 ### What we keep from upstream
 
 Upstream is 22 000 lines. memsift keeps eight small modules that stand alone
@@ -127,9 +123,6 @@ Python 3.9 or later, standard library only. No virtualenv, nothing to
 install: a hook runs `python3 run.py <event>` with the system interpreter.
 
 ## 2. Files on disk
-
-> Reviewed point by point with the user on 2026-10-14. Everything in this part
-> is agreed, except the format of `digest.md`, decided with the compactor in part 5.
 
 ### Overview
 
@@ -184,8 +177,8 @@ characters of the SHA-256 of its absolute path, so two repos with the same
 name never share notes:
 
 ```
-~/code/acme-shop   →  acme-shop-3f2a91
-~/code              →  code-8c04d2
+~/code/acme-shop       →  acme-shop-3f2a91
+~/clients/acme-shop    →  acme-shop-8c04d2
 ```
 
 ### Draft entries
