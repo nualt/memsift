@@ -25,7 +25,7 @@ fork of Cognee's own Claude Code and Codex integrations.
 .claude-plugin/      Claude Code manifest and marketplace
 .codex-plugin/       Codex manifest
 hooks/               one hook file per host, both calling the same code
-commands/            /memory-resume
+commands/            /memsift-resume, /memsift-doctor
 memsift/             the code, Python standard library only
 tests/               offline tests, with Jev, the compactor and Cognee simulated
 docs/SPEC.md         what memsift does, precisely enough to implement and test
@@ -321,7 +321,7 @@ codex plugin add memsift@memsift
 ```
 
 Then put your keys in `~/.cognee/.env`, start a new session and run
-`/memory-doctor`: it checks the configuration and that Cognee, Jev and the
+`/memsift-doctor`: it checks the configuration and that Cognee, Jev and the
 compactor answer, and says what to fix.
 
 ## Configuration
@@ -382,7 +382,7 @@ tail -f ~/.memsift/debug.log
 | Cognee | Jev keeps working from the local notes; packets wait to be sent |
 
 Three failures in a row trigger the pause. The agent is told once, in one line,
-and you resume with `/memory-resume`. On a prompt, Jev gets two seconds; past
+and you resume with `/memsift-resume`. On a prompt, Jev gets two seconds; past
 that, the prompt goes through without memory.
 
 ## Hosts

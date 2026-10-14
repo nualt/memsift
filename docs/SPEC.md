@@ -43,8 +43,8 @@ memsift/
 │   ├── claude-code.json       ${CLAUDE_PLUGIN_ROOT}/memsift/run.py <event>
 │   └── codex.json             ${PLUGIN_ROOT}/memsift/run.py <event>
 ├── commands/
-│   ├── memory-resume.md       /memory-resume, after an outage
-│   └── memory-doctor.md       /memory-doctor, checks the setup
+│   ├── memsift-resume.md       /memsift-resume, after an outage
+│   └── memsift-doctor.md       /memsift-doctor, checks the setup
 ├── memsift/                   the code, Python standard library only
 │   ├── run.py                 entry point: reads the hook JSON, calls the core,
 │   │                          prints the host's answer, never crashes the host
@@ -306,7 +306,7 @@ memsift writes only to its own dataset, `memsift` by default
 ### pending.jsonl
 
 Per repo. One JSON object per turn while Jev is paused (part 6), sorted by Jev
-on `/memory-resume`, then the file is deleted.
+on `/memsift-resume`, then the file is deleted.
 
 ```json
 {"ts": "2026-10-14T07:31:02Z", "session": "a1b2…", "prompt": "…", "answer": "…", "actions": ["Edit src/header.tsx", "git commit"]}
@@ -354,11 +354,11 @@ lines.
 
 ```
 # jev.md
-project: acme-shop, a Medusa e-commerce store
+project: acme-shop, an e-commerce store
 stakes: payments, stock, orders, customer data
         → any decision touching these is essential
 phase: setup, before launch
-documented in: README.md, docs/, knowledge/acme-shop/
+documented in: README.md, docs/
 do not keep: commit status, one-off visual tweaks
 ```
 
