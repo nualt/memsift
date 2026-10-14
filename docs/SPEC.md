@@ -128,11 +128,16 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 
 ## 2. Files on disk
 
+> Under review with the user, point by point. Agreed so far: working notes are
+> `digest.md` + `draft.md` read together, no copy; no `preferences.md` (general
+> working rules belong in the host's `CLAUDE.md` / `AGENTS.md`, outside memsift's
+> scope). Everything else in this part is a proposal. Known issue: Jev cannot write
+> text, so a `draft.md` entry is the raw turn plus labels, not a clean sentence.
+
 ### Overview
 
 ```
 ~/.memsift/
-├── preferences.md          how the user works, every project     ≤ 1 000 tokens
 ├── datasets.md             one line per Cognee dataset
 ├── state.json              breaker state: failures, paused or not (part 6)
 ├── debug.log               Jev decisions in plain text, if MEMSIFT_DEBUG=1
@@ -147,7 +152,7 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 ```
 
 **Working notes** means `digest.md` followed by `draft.md`. Jev always reads
-both, plus `preferences.md`. Compaction starts when digest + draft reach
+both; nothing is copied from one to the other. Compaction starts when digest + draft reach
 8 000 tokens; it rewrites `digest.md` and empties `draft.md` (part 5).
 
 ### Common rules
@@ -158,10 +163,10 @@ both, plus `preferences.md`. Compaction starts when digest + draft reach
   ratio can be checked.
 - **Secrets.** Every text is passed through `vendor/redact.py` before it is
   written, so no file under `~/.memsift/` ever holds a secret.
-- **Appends** (`draft.md`, `pending.jsonl`, `debug.log`, `preferences.md`) are a
+- **Appends** (`draft.md`, `pending.jsonl`, `debug.log`) are a
   single `write` of whole lines on a file opened in append mode. Concurrent
   sessions may append to the same file at any time.
-- **Rewrites** (`digest.md`, `preferences.md` at compaction, `draft.md` when it
+- **Rewrites** (`digest.md`, `draft.md` when it
   is emptied, `state.json`, `cognee-index.json`, session files) happen under
   `vendor/file_lock.py` on `<file>.lock`: write `<file>.tmp`, then rename over
   `<file>`. A reader never sees a half-written file.
@@ -181,7 +186,7 @@ name never share notes:
 
 ### Entries
 
-`preferences.md`, `digest.md` and `draft.md` hold entries, one per line:
+`digest.md` and `draft.md` hold entries, one per line:
 
 ```
 - [<id>] <date> <nature>: <text>
@@ -189,14 +194,13 @@ name never share notes:
 
 | Field | Format |
 |---|---|
-| `id` | `p` (preferences), `g` (digest) or `d` (draft), then a number unique in that file |
+| `id` | `g` (digest) or `d` (draft), then a number unique in that file |
 | `date` | `YYYY-MM-DD`, day the entry was learned |
-| `nature` | `working_rule`, `decision`, `project_fact` or `lesson` (part 4) |
+| `nature` | `working_rule` (for this project only), `decision`, `project_fact` or `lesson` (part 4) |
 | `text` | one sentence or two, self-contained: it names its subject and never says "it" or "this" |
 
 A `decision` states the choice, then the reason, then what was rejected when
-known. Each file starts with a one-line title (`# Preferences`,
-`# Digest: <repo-key>`, `# Draft: <repo-key>`) and has nothing else.
+known. Each file starts with a one-line title (`# Digest: <repo-key>`, `# Draft: <repo-key>`) and has nothing else.
 
 ```
 # Draft: acme-shop-3f2a91
@@ -225,23 +229,6 @@ entry:
 At compaction, a confirmed correction replaces the entry it corrects, and an
 abandoned one is dropped together with its status line. A correction still
 pending is carried over to the new `draft.md` unchanged.
-
-A correction of how the user works goes to `draft.md` like any other, and only
-moves to `preferences.md` once confirmed.
-
-### preferences.md
-
-Global. Entries of nature `working_rule` whose scope is "always" (part 4),
-appended as soon as Jev classifies them. When the file passes 1 000 tokens,
-the compactor rewrites it, keeping the rules that come back most often, then
-the most recent.
-
-```
-# Preferences
-- [p1] 2026-10-13 working_rule: Explain with an ASCII diagram before prose; long prose explanations do not land.
-- [p2] 2026-10-13 working_rule: Ask before committing.
-- [p3] 2026-10-14 working_rule: Name every file and doc in English for anything meant to be open source.
-```
 
 ### digest.md
 

@@ -60,9 +60,8 @@ and only the first one adds anything to the agent's context.
           a few lines are added, often none
 ```
 
-1. **Session start.** memsift loads your preferences and the project's digest
-   into its working notes, and fetches the list of what Cognee holds. Nothing
-   is sent to the agent.
+1. **Session start.** memsift fetches the list of what Cognee holds and checks
+   that the project has a `jev.md`. Nothing is sent to the agent.
 2. **Each prompt.** Jev answers three questions in one request: is anything
    missing, is it in the working notes, and is it worth asking Cognee (and in
    which datasets). Cognee is only queried when Jev is confident it will help.
@@ -74,10 +73,14 @@ and only the first one adds anything to the agent's context.
 
 | Kind | Example | Where it goes |
 |---|---|---|
-| how you like to work | "ask before committing" | `preferences.md`, every project, right away |
 | this project | "the header reuses the footer grid" | the project's working notes, then Cognee |
+| a rule for this project | "no Tailwind in this repo" | the project's working notes, then Cognee |
 | a technical lesson | "pnpm blocks build scripts unless allowed" | Cognee only |
 | nothing | "ok", typos, status updates | dropped |
+
+How you like to work in general ("ask before committing") is not kept: it
+belongs in your `CLAUDE.md` or `AGENTS.md`, which the agent already loads in
+full. memsift keeps project memory only.
 
 When the working notes reach 8 000 tokens, a cheap model (Gemma) cleans and
 deduplicates them, sends them to Cognee, and rewrites a short digest of the
@@ -89,16 +92,16 @@ project. At the end of a session, whatever is left goes the same way.
 ```
   WHAT JEV HAS AT HAND  (almost free, never pasted as is into the agent)
   ┌────────────────┐ ┌────────────────┐ ┌──────────────────────┐ ┌────────────────┐
-  │ jev.md         │ │ CLAUDE.md      │ │ what the agent has   │ │ preferences.md │
-  │ project, what  │ │ "already       │ │ in mind: last        │ │ + the repo's   │
-  │ matters, phase │ │ written" (③)   │ │ /compact + recent    │ │ WORKING NOTES  │
+  │ jev.md         │ │ CLAUDE.md      │ │ what the agent has   │ │ the repo's     │
+  │ project, what  │ │ "already       │ │ in mind: last        │ │ WORKING NOTES  │
+  │ matters, phase │ │ written" (③)   │ │ /compact + recent    │ │ digest + draft │
   └────────────────┘ └────────────────┘ └──────────────────────┘ └────────────────┘
 
 
  ⓪ SESSION START ─────────────────────────────────────────────── hook SessionStart
      │
-     ├─ the WORKING NOTES start with preferences.md (how you work)
-     │  + this repo's digest.md (work in progress): nothing to ask Cognee
+     ├─ nothing to load: the WORKING NOTES are this repo's digest.md
+     │  (compacted) + draft.md (since then), read as they are
      ├─ note how the session starts (new, /clear, /compact, resume)
      │  → Jev will know whether the agent starts from scratch
      ├─ Cognee: list of what it holds ──► cognee-index.json
@@ -146,7 +149,7 @@ project. At the end of a session, whatever is left goes the same way.
    ┌────────────────────────────── AGENT CONTEXT ───────────────────────────────┐
    │ … our conversation …                                                       │
    │ [ what the sorting kept, often nothing. For example:                       │
-   │   "Preference: ask before committing" ]                                    │
+   │   "Decision: the header reuses the footer grid" ]                          │
    │ [ if flagged: "jev.md looks outdated, propose an update" ]                 │
    │ your prompt                                                                │
    └────────────────────────────────────────────────────────────────────────────┘
@@ -175,31 +178,30 @@ project. At the end of a session, whatever is left goes the same way.
      ▼
    ┌──────────────────────────── JEV ─────────────────────────────┐
    │ "What kind of information is this?"                          │
-   │   nothing important · how you work · this project ·          │
-   │   a technical lesson                                         │
-   │ "Already known?"  in preferences.md, the notes, CLAUDE.md    │
+   │   nothing important · this project · a technical lesson      │
+   │ "Already known?"  in the notes, CLAUDE.md                    │
    │ "Is jev.md outdated?"                                        │
    └──────────────────────────────┬───────────────────────────────┘
-     ┌──────────────┬─────────────┴─────┬─────────────────────┐
-     ▼              ▼                   ▼                     ▼
-   NOTHING         HOW YOU WORK       PROJECT, LESSON       JEV.MD TO REVIEW
-   "commit pls"    "ask before        "header: footer       → FLAG, added
-   → dropped         committing"        grid"                 to the next prompt:
-                   → preferences.md   "pnpm blocks            the agent proposes,
-                     right away,        build scripts"        you approve
-                     every repo       → repo WORKING NOTES
-                                        │
-                                        ▼
-                          notes full?  (≥ 8 000 tokens)
-                          no → carry on
-                                        │ yes
-                                        ▼
+     ┌────────────────────────────┴───────────────────────────┐
+     ▼                            ▼                           ▼
+   NOTHING                  PROJECT, LESSON             JEV.MD TO REVIEW
+   "commit pls"             "header: footer grid"       → FLAG, added to
+   "ask before              "no Tailwind here"            the next prompt:
+     committing"            "pnpm blocks build            the agent proposes,
+   → dropped                  scripts"                    you approve
+                            → repo draft.md
+                                  │
+                                  ▼
+                    notes full?  (digest + draft ≥ 8 000 tokens)
+                    no → carry on
+                                  │ yes
+                                  ▼
    ┌───────────────── COMPACTION · in the background ─────────────────┐
    │ GEMMA reads ALL of the repo's notes, in one pass:                │
    │   ├─ cleans, deduplicates ──────────► SENDS TO COGNEE            │
    │   │    technical lessons go there only: Jev will                 │
    │   │    fetch them the day the problem comes back                 │
-   │   └─ rewrites the repo's digest.md  (≤ 3 000 tokens)             │
+   │   └─ rewrites digest.md (≤ 3 000 tokens), empties draft.md       │
    │        this project: decisions, work in progress                 │
    │        priority: work in progress, then most recent              │
    │                                                                  │
@@ -207,13 +209,12 @@ project. At the end of a session, whatever is left goes the same way.
    └──────────────────────────────┬───────────────────────────────────┘
                                   │
                                   ▼
-          NEXT TURN: old notes dropped
-          new notes = digest.md
-                        + the turns added during compaction
+          NEXT TURN: Jev reads the new digest.md
+          + draft.md, holding only the turns added
+            during compaction
 
    LONG SESSIONS: each compaction rewrites digest.md with the new turns
-   → never more than 3 000 tokens. Same for preferences.md: past
-   1 000 tokens, Gemma compacts it.
+   → never more than 3 000 tokens.
    What drops out of digest.md is not lost: it is already in Cognee.
 
    SESSION END: Gemma sends what is left in the notes to Cognee,
@@ -234,11 +235,15 @@ project. At the end of a session, whatever is left goes the same way.
    └──────────────────────────────────────────────────────────────┘
 
 
-  EXAMPLE: "I need a diagram to get it"
-    ③  Jev: how you work → added to preferences.md right away
-    other repo, next prompt: preferences.md is global, the line is there
-    ① "walk me through the checkout": Jev ② finds it
-       → added, without asking Cognee
+  EXAMPLE: two panes on the same repo
+    pane A  "the header must reuse the footer grid"
+            ③ Jev: this project → draft.md
+    pane B  "why is the header misaligned?"
+            ① Jev reads the same draft.md, ② finds the line
+            → added, without asking Cognee
+
+  "ask before committing" applies everywhere: it belongs in CLAUDE.md /
+  AGENTS.md, which the agent already loads. memsift keeps project memory only.
 ```
 
 </details>
@@ -260,9 +265,9 @@ project. At the end of a session, whatever is left goes the same way.
    only replaced once an edit, a commit or the following turns confirm it.
 5. **Local first, Cognee second.** The working notes answer most questions in
    milliseconds. Cognee is the long-term store, queried on purpose.
-6. **One source of truth per thing.** Your preferences live in one file shared
-   by every project. The list of what Cognee holds is a cache rebuilt each
-   session, never edited by hand.
+6. **One source of truth per thing.** General working rules stay in the
+   host's own instruction files; memsift does not keep a second copy. The list
+   of what Cognee holds is a cache rebuilt each session, never edited by hand.
 7. **Stop instead of failing quietly.** After three failures in a row, memsift
    pauses and the agent tells you, rather than running models in the void.
 
@@ -272,21 +277,21 @@ project. At the end of a session, whatever is left goes the same way.
 
 ```
 ~/.memsift/
-├── preferences.md         how you work, shared by every project (≤ 1 000 tokens)
 ├── datasets.md            what each Cognee dataset is for, one line each
 ├── debug.log              every Jev decision in plain text, when MEMSIFT_DEBUG=1
 └── repos/<repo>/
-    ├── draft.md           working notes kept by Jev (≤ 8 000 tokens)
-    ├── digest.md          decisions and work in progress (≤ 3 000 tokens)
+    ├── digest.md          compacted project memory (≤ 3 000 tokens)
+    ├── draft.md           turns kept by Jev since the last compaction
     ├── pending.jsonl      turns noted while Jev was unreachable
     └── cognee-index.json  what Cognee holds, refreshed each session
 
 <repo>/jev.md              a short project card: what it is, what matters, which phase
 ```
 
-Every session on the machine reads the same files on each hook, so a preference
-learned in one project applies at the next prompt of another, even in a session
-that was already open. Writes are append-only; compaction runs under a lock.
+The working notes are `digest.md` and `draft.md` read together, up to 8 000
+tokens. Every session on the machine reads the same files on each hook, so a
+decision noted in one pane is seen at the next prompt of another pane on the
+same repo. Writes are append-only; compaction runs under a lock.
 
 `jev.md` is the one file you own. memsift proposes a first draft when it is
 missing and flags it when it looks outdated, but never edits it without you.
