@@ -135,6 +135,7 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 > Corrections: pending entry, confirmation appended as a line, action notes of
 > the last 5 turns with short diffs.
 > Repo key: directory name + 6 hex characters of the path hash.
+> Session file: one JSON per session; stale ones older than 7 days removed at session start.
 > Everything else in this part is a proposal. The format of `digest.md`, written
 > by the compactor, is decided in part 5.
 
@@ -320,6 +321,9 @@ on `/memory-resume`, then the file is deleted.
 ### sessions/\<session\>.json
 
 Short-lived state of one running session, rewritten by its own hooks only.
+Each hook is a separate process, so this file is how one hook hands information
+to the next. Deleted at session end; a session that crashed leaves its file
+behind, so session start removes session files older than 7 days.
 
 ```json
 {
