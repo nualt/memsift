@@ -128,22 +128,8 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 
 ## 2. Files on disk
 
-> Under review with the user, point by point. Agreed so far: working notes are
-> `digest.md` + `draft.md` read together, no copy; no `preferences.md` (general
-> working rules belong in the host's `CLAUDE.md` / `AGENTS.md`, outside memsift's
-> scope); draft entries are raw turns with labels, cut at 1 500 / 1 000 tokens.
-> Corrections: pending entry, confirmation appended as a line, action notes of
-> the last 5 turns with short diffs.
-> Repo key: directory name + 6 hex characters of the path hash.
-> Session file: one JSON per session; stale ones older than 7 days removed at session start.
-> `state.json`: one per machine, failure counters for Jev, compactor and Cognee.
-> Token estimate: characters ÷ ratio, the ratio learned from Jev's `usage.input_tokens`.
-> Secrets redacted before every write and every send.
-> Cognee: memsift writes to its own dataset `memsift`; index = curated datasets
-> in full + this repo's `memsift` packets, newest first, ≤ 1 000 tokens.
-> `datasets.md`: memsift only raises a flag; the agent proposes, the user approves, the agent writes.
-> Everything else in this part is a proposal. The format of `digest.md`, written
-> by the compactor, is decided in part 5.
+> Reviewed point by point with the user on 2026-10-14. Everything in this part
+> is agreed, except the format of `digest.md`, decided with the compactor in part 5.
 
 ### Overview
 
@@ -333,7 +319,9 @@ on `/memory-resume`, then the file is deleted.
 {"ts": "2026-10-14T07:31:02Z", "session": "a1b2…", "prompt": "…", "answer": "…", "actions": ["Edit src/header.tsx", "git commit"]}
 ```
 
-`answer` is cut to its last 4 000 characters.
+`prompt` and `answer` are cut with the same limits as draft entries
+(1 500 and 1 000 tokens, start and end kept). On resume, Jev sorts the cut
+turns, since the full ones were not kept.
 
 ### sessions/\<session\>.json
 
