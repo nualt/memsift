@@ -154,6 +154,21 @@ def _advisories(work):
     return "memsift:\n" + "\n".join("- " + message for message in messages) if messages else ""
 
 
+def _answers(answers):
+    # Compact view of Jev's answers for debug.log: the probabilities behind each decision.
+    view = {}
+    for name, answer in answers.items():
+        if answer.get("type") == "noul":
+            view[name] = round(answer["noul"], 2)
+        elif answer.get("type") == "choice":
+            view[name] = {"choice": answer["choice"], "confidence": round(answer["confidence"], 2),
+                          "probabilities": {k: round(v, 2) for k, v in answer["probabilities"].items()}}
+        elif answer.get("type") == "score":
+            view[name] = {"probabilities": {answer["legend"].get(k, k): round(v, 2)
+                                            for k, v in answer["probabilities"].items()}}
+    return view
+
+
 def _prompt_memory(work, config):
     root = Path(work["repo_root"])
     ratio = breaker.ratio()
@@ -173,7 +188,7 @@ def _prompt_memory(work, config):
     state = host.fit_prompt(state, jev.prompt_questions(state), ratio)
     answers = jev.request(config, state, jev.prompt_questions(state), timeout=jev.PROMPT_TIMEOUT)
     choice = jev.choose_prompt(answers, list(state["notes"]), list(state["datasets"]))
-    decision("core-prompt", choice)
+    decision("core-prompt", {"prompt": work["event"]["prompt"][:80], "answers": _answers(answers), **choice})
     if choice["entries"]:
         return "memsift, from the working notes:\n" + "".join(state["notes"][identifier] for identifier in choice["entries"])
     if not choice["recall"] or breaker.paused("cognee"):
@@ -269,7 +284,7 @@ def _classify_turn(work: dict, turn: dict, config: dict) -> bool:
     except Exception as exc:
         # A session advisory failure must not replay an already durable entry.
         _log("core-stop-flags", exc)
-    decision("core-stop", choice)
+    decision("core-stop", {"prompt": turn["prompt"][:80], "answers": _answers(answers), **choice})
     return choice["keep"]
 
 
