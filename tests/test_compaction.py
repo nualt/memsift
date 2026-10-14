@@ -86,12 +86,8 @@ class CompactionTests(IsolatedTest):
             value = answer()
             value["digest"]["decisions"] = bad
             cases.append(value)
-        for field, bad in (("text", " "), ("text", 1), ("topics", "one"),
-                           ("topics", "one two three four five"), ("topics", " "),
-                           ("topics", 1), ("topics", "bad/path grid"),
-                           ("topics", "bad\\path grid"), ("topics", "bad\0name grid"),
-                           ("topics", "header\n grid"), ("topics", "header\r grid"),
-                           ("topics", "header\tgrid")):
+        for field, bad in (("text", " "), ("text", 1), ("topics", " "), ("topics", 1),
+                           ("topics", "/\n\t")):
             value = answer()
             value["packet"][field] = bad
             cases.append(value)
@@ -145,9 +141,12 @@ class CompactionTests(IsolatedTest):
         now = datetime(2026, 10, 14, 15, 32, tzinfo=timezone.utc)
         self.assertEqual(self.compactor.packet_name(self.repo, '"header" gr\x01\x80id', now),
                          "acme-shop 2026-10-14 15h32 'header' grid.txt")
-        for topics in ("bad/path grid", "bad\\path grid", "header\n grid", "header\0 grid"):
-            with self.subTest(topics=topics), self.assertRaises(ValueError):
-                self.compactor.packet_name(self.repo, topics, now)
+        for topics, expected in (("bad/path grid", "bad path grid"), ("bad\\path grid", "bad path grid"),
+                                 ("header\n grid", "header grid"), ("header\0 grid", "header grid"),
+                                 ("stripe payment decision and jev update", "stripe payment decision and")):
+            with self.subTest(topics=topics):
+                self.assertEqual(self.compactor.packet_name(self.repo, topics, now),
+                                 "acme-shop 2026-10-14 15h32 " + expected + ".txt")
 
     def test_skip_empty_header_pending_status_and_below_threshold(self):
         directory = self.store.repo_dir(self.repo)

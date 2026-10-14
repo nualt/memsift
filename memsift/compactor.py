@@ -57,13 +57,18 @@ def _text(value, label):
 
 
 def _topics(value):
+    # A packet name is only a label: an untidy topic line is tidied, never a reason
+    # to throw away a whole compaction. Separators and line breaks become spaces,
+    # double quotes become single ones, other controls are dropped, and only the
+    # first four words are kept.
     _text(value, "packet topics")
-    if any(char in value for char in ("/", "\\", "\0", "\r", "\n")):
-        raise ValueError("packet topics contain a filename separator or forbidden control")
-    value = "".join(char for char in value.replace('"', "'") if unicodedata.category(char) != "Cc")
-    if not 2 <= len(value.split()) <= 4:
-        raise ValueError("packet topics must contain two to four words")
-    return value
+    value = value.replace('"', "'")
+    value = "".join(" " if char in "/\\\n\r\t\0" else "" if unicodedata.category(char) == "Cc" else char
+                    for char in value)
+    words = value.split()
+    if not words:
+        raise ValueError("packet topics are empty")
+    return " ".join(words[:4])
 
 
 def validate(answer, notes):
