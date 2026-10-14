@@ -138,6 +138,7 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 > Session file: one JSON per session; stale ones older than 7 days removed at session start.
 > `state.json`: one per machine, failure counters for Jev, compactor and Cognee.
 > Token estimate: characters ÷ ratio, the ratio learned from Jev's `usage.input_tokens`.
+> Secrets redacted before every write and every send.
 > Everything else in this part is a proposal. The format of `digest.md`, written
 > by the compactor, is decided in part 5.
 
@@ -173,7 +174,10 @@ both; nothing is copied from one to the other. Compaction starts when digest + d
   Jev's limits: 32 000 tokens for `state` plus the longest question, 64 000 per
   request (docs.typesafe.ai/models).
 - **Secrets.** Every text is passed through `vendor/redact.py` before it is
-  written, so no file under `~/.memsift/` ever holds a secret.
+  written and before it is sent (Jev, compactor, Cognee), so no file under
+  `~/.memsift/` and no request ever holds a secret. It masks API keys, tokens,
+  private keys and values of credential-like variables (`PASSWORD=`, `API_KEY=`)
+  as `[redacted:<kind>]`.
 - **Appends** (`draft.md`, `pending.jsonl`, `debug.log`) are a
   single `write` of whole lines on a file opened in append mode. Concurrent
   sessions may append to the same file at any time.
