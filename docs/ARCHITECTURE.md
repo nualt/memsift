@@ -146,8 +146,8 @@ set at calibration (SPEC part 4).
      ▼
    ┌────────────────────────────── JEV ───────────────────────────────┐
    │ "What kind of information is this?"                              │
-   │    working rule (this project) · decision · project fact ·       │
-   │    lesson · nothing                                              │
+   │    this project · technical lesson · nothing                     │
+   │ "A working habit for every project?"                             │
    │ "How long does it stay true?"  turn · task · project · always    │
    │ "Is the user correcting the agent?"                              │
    │ "Does this turn confirm a pending correction?"                   │
@@ -158,12 +158,12 @@ set at calibration (SPEC part 4).
      ┌──────────────────────────────┼──────────────────────────────┐
      ▼                              ▼                              ▼
    DROPPED                     KEPT → draft.md                FLAGS, added to
-   "commit pls"                "the header reuses the          the next prompt
-   "ask before committing"       footer grid"                 jev.md outdated
-     (always: belongs in       "no Tailwind in this repo"     → the agent proposes
-     CLAUDE.md / AGENTS.md)    "pnpm blocks build scripts"      an update
+   "commit pls"                "we go with Stripe:             the next prompt
+   "ask before committing"       PayPal fees too high"        jev.md outdated
+     (every project: belongs   "no Tailwind in this repo"     → the agent proposes
+     in CLAUDE.md, AGENTS.md)  "pnpm blocks build scripts"      an update
    already known               raw turn + labels, since       decision without
-   Jev unsure                  Jev cannot write               its reason
+   seen in the code            Jev cannot write               its reason
                                a correction is marked         → the agent asks why
                                "pending" until a later
                                turn confirms it
@@ -282,6 +282,24 @@ the user's words, invent nothing, and settle corrections right. Speed does not
 matter, since it runs in the background, so a model that reasons before
 answering is affordable; on a first test it was the only one that kept every
 statement right.
+
+### Small questions, checked on real turns
+
+Jev does best with one plain judgment per question. The first design asked it to
+sort each turn into five kinds: working rule, decision, project fact, lesson,
+nothing. A test on a hundred prompts typed the way a real user types (short,
+casual, misspelled) showed Jev splitting its answer between the first three:
+"no Tailwind in this project" came out as a working rule at 0.46 and a project
+fact at 0.29, and the turn was dropped for that hesitation, although all three
+kinds lead to the same place. The kinds were cut to three that do not overlap:
+this project, technical lesson, nothing. On the same turns, "no Tailwind" moved
+to 0.99. Telling a general habit ("ask before committing", which belongs in
+`CLAUDE.md`) from a rule of this project is now a separate yes/no question,
+instead of being read from a scope of "always" that also covered permanent
+project facts ("prices are shown with VAT").
+
+The lesson for the rest of the design: a question to Jev is written, then run on
+real turns, before it is relied on.
 
 ### Only what is missing, and already exists
 

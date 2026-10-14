@@ -207,7 +207,7 @@ therefore the raw turn, with labels added by code. Only the compactor writes
 sentences (part 5).
 
 ```
-- [d1] 2026-10-14 decision
+- [d1] 2026-10-14 project
   User: no, the header must reuse the footer grid
   Agent: ok, the header now uses the footer's 12-column grid
   Actions: Edit src/header.tsx · Bash: pnpm build (ok)
@@ -217,7 +217,7 @@ sentences (part 5).
 |---|---|
 | `id` | `d` and a number unique in the file, given by code |
 | date | `YYYY-MM-DD`, the day of the turn |
-| nature | Jev's answer: `working_rule` (for this project only), `decision`, `project_fact` or `lesson` (part 4) |
+| nature | Jev's answer: `project` or `lesson` (part 4) |
 | `User:` | the prompt, as received by the prompt hook |
 | `Agent:` | the agent's answer text, as received by the stop hook; tool calls and their output are never included |
 | `Actions:` | the action note of the turn (part 3), omitted when empty |
@@ -241,7 +241,7 @@ A correction is a turn where the user corrects the agent. Its entry is marked
 pending:
 
 ```
-- [d4] 2026-10-14 decision · correction · pending
+- [d4] 2026-10-14 project · correction · pending
   User: no, the product grid has 12 columns, not 10
   Agent: ok, switching the product grid to 12 columns
   Actions: Edit src/product-grid.tsx
@@ -266,13 +266,13 @@ the most recent wins.
 ### digest.md
 
 Per repo. Written only by the compactor, never appended to. Holds what entries
-of nature `working_rule`, `decision` and `project_fact` say, work in progress
-first, then most recent first. `lesson` entries never go here: they live in
+of nature `project` say, sorted by the compactor into its sections, work in
+progress first, then most recent first. `lesson` entries never go here: they live in
 Cognee only. Format in part 5.
 
 ### draft.md
 
-Per repo. Entries appended by Jev at the end of each turn, all four natures,
+Per repo. Entries appended by Jev at the end of each turn, both natures,
 plus correction status lines. Emptied by compaction, except the lines appended
 while the compaction was running and corrections still pending.
 
@@ -602,8 +602,8 @@ input    session_id, last_assistant_message, transcript_path
 does     1. memsift paused?  → appends the turn to pending.jsonl, stops
             pending.jsonl not empty → sorts it first (part 6)
          2. Jev, one request (part 4):
-              nature: working_rule (this project) / decision / project_fact /
-                      lesson / nothing
+              nature: project / lesson / nothing
+              a general working habit, valid in every project?
               is it a correction of the agent?
               each pending correction: confirmed?
               already known (working notes, CLAUDE.md, AGENTS.md)?
@@ -779,6 +779,7 @@ Sent by the stop hook, in the background, and for each turn of
 |---|---|---|
 | `nature` | choice | What kind of information does `turn` carry? |
 | `scope` | score | How long does it stay true? |
+| `general_rule` | noul | Does `turn` state a preference about how the agent should work in every project, not only this one? |
 | `correction` | noul | Does the user correct the agent in `turn`? |
 | `confirmed_<id>` | noul | Do `turn`, `recent_actions` and `recent_exchanges` confirm `pending_corrections.<id>`: applied, and not taken back? |
 | `known` | noul | Is it already in `notes` or `instruction_files`, or written this turn to a file listed under "documented in" in `project_card` (an edit in `turn.actions`)? |
@@ -794,11 +795,21 @@ text-only turn is not confirmed by an older edit.
 
 | Option | Criteria |
 |---|---|
-| `working_rule` | how the user wants the agent to work: form of answers, way of coding, steps, what to ask before acting |
-| `decision` | a choice that steers what follows and cannot be read in the code or docs: the why, what was ruled out, where things stand |
-| `project_fact` | lasting information about this project: an address, an account, a constraint, a business rule |
-| `lesson` | a technical problem, and what worked or did not (a dead end saves trying it again) |
-| `nothing` | status, reaction, small talk, typo, a one-off instruction, a micro-choice applied in the code |
+| `project` | something that holds for this project and is worth remembering: a decision and its reason, a rule for how to work here, a constraint, a business rule, a fact such as an address or an account, where the work stands |
+| `lesson` | a technical problem and what fixed it or did not, useful in any project, not specific to this one |
+| `nothing` | status, reaction, small talk, typo, a one-off instruction, a micro-choice already applied in the code, or something left undecided |
+
+The three options do not overlap on purpose. A first design had five
+(`working_rule`, `decision`, `project_fact`, `lesson`, `nothing`): the first
+three led to the same place, and Jev split its answer between them ("no
+Tailwind in this project": working rule 0.46, project fact 0.29). Which digest
+section a line goes to is the compactor's job, not Jev's.
+
+`general_rule` criteria: true for a general working habit of the user, such as
+asking before committing, or the form of answers; false for anything specific to
+this project: its stack, its client, its constraints, its decisions, its rules.
+It replaces "working rule with scope always", since `always` also covers a
+permanent fact of this project ("prices are shown with VAT").
 
 `scope` levels: this turn · this task · this project · always.
 
@@ -809,16 +820,15 @@ Code:
 
 ```
 nature nothing, or scope "this turn"           → dropped
-working_rule with scope "always"               → dropped: general rules
+general_rule ≥ 0.5                             → dropped: general rules
                                                  belong in CLAUDE.md / AGENTS.md
 known ≥ 0.5                                    → dropped
-nature confidence < 0.6 (< 0.4 for a correction) → dropped
 otherwise                                      → entry appended to draft.md,
                                                  "· correction · pending" when
                                                  correction ≥ 0.5
 confirmed_<id> ≥ 0.7                           → "- [<id>] confirmed" appended
 card_outdated ≥ 0.7                            → flag jev_md_outdated
-kept decision with reason_missing ≥ 0.7        → flag decision_reason_missing:<id>
+kept entry with reason_missing ≥ 0.7          → flag decision_reason_missing:<id>
 ```
 
 ### Thresholds
@@ -857,8 +867,8 @@ does nothing, since the running one will empty the draft.
    a draft holding only pending corrections → stops, nothing to compact
 2. the compactor, one request → new digest + packet
 3. code checks the answer (schema, ids, length, and a digest that comes back
-   empty while the input had a digest line or a working_rule, decision or
-   project_fact entry); invalid → one retry; invalid again → nothing is
+   empty while the input had a digest line or a project entry that is not a
+   pending correction); invalid → one retry; invalid again → nothing is
    written, the notes stay as they were
    every invalid answer is written to debug.log with its reason (part 7)
 4. writes the packet to the outbox
@@ -1124,7 +1134,7 @@ and token counts:
 ```
 09:41:02 prompt  "back to the header"  missing 0.85 · g1 0.92 → 1 entry pasted
                  jev 0.4 s · 21 300 tokens (estimated 22 100)
-09:41:40 stop    decision · this task · 0.81 → d7 appended
+09:41:40 stop    project · this task · 0.81 → d7 appended
 09:52:13 prompt  "pick up the footer from two weeks ago"  missing 0.95 · cognee 0.90
                  → Cognee lessons, memsift 5.8 s → p2 kept · total 6.6 s
 ```

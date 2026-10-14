@@ -81,13 +81,13 @@ and only the prompt adds anything to the agent's context.
 5. **Session end.** Whatever is left in the notes is compacted and sent to
    Cognee, in the background. A failed upload stays in the outbox.
 
+Jev sorts each turn into one of three kinds:
+
 | Kind | Example | Where it goes |
 |---|---|---|
-| a decision | "the header reuses the footer grid" | the project's working notes, then Cognee |
-| a project fact | "sharp must be allowed in pnpm here" | the project's working notes, then Cognee |
-| a rule for this project | "no Tailwind in this repo" | the project's working notes, then Cognee |
+| this project | "no Tailwind in this repo", "we go with Stripe: PayPal fees are too high", "prices are shown with VAT" | the project's working notes, then Cognee |
 | a technical lesson | "pnpm blocks build scripts unless allowed" | the working notes until compaction, then Cognee only |
-| nothing | "ok", typos, status updates | dropped |
+| nothing | "ok", typos, status updates, a change already visible in the code | dropped |
 
 How you like to work in general ("ask before committing") is not kept: it
 belongs in your `CLAUDE.md` or `AGENTS.md`, which the agent already loads in
