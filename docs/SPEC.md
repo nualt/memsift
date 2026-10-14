@@ -139,6 +139,8 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 > `state.json`: one per machine, failure counters for Jev, compactor and Cognee.
 > Token estimate: characters ÷ ratio, the ratio learned from Jev's `usage.input_tokens`.
 > Secrets redacted before every write and every send.
+> Cognee: memsift writes to its own dataset `memsift`; index = curated datasets
+> in full + this repo's `memsift` packets, newest first, ≤ 1 000 tokens.
 > Everything else in this part is a proposal. The format of `digest.md`, written
 > by the compactor, is decided in part 5.
 
@@ -279,7 +281,7 @@ where to search. One line per dataset:
 
 ```
 # Datasets
-- agent_sessions: memsift's own memory, written at compaction.
+- memsift: memsift's own memory, written at compaction.
 - playbooks: how we run recurring work: deploys, onboarding, client handover.
 - projects: one file per client project: stack, contacts, decisions.
 - lessons: technical problems we hit and what fixed them.
@@ -303,7 +305,7 @@ asking it. Rebuilt in the background at each session start from
   "fetched_at": "2026-10-14T07:02:11Z",
   "datasets": [
     {
-      "name": "agent_sessions",
+      "name": "memsift",
       "id": "6f1c…",
       "items": ["acme-shop 2026-10-13 header grid and footer alignment",
                 "acme-shop 2026-10-12 pnpm build scripts and sharp"]
@@ -312,10 +314,14 @@ asking it. Rebuilt in the background at each session start from
 }
 ```
 
-Item names matching `text_<hex>` (raw uploads, unreadable) are skipped. Names
-are kept newest first and cut so the whole file stays under 1 000 tokens.
-Packets sent by the compactor are named `<repo name> <date> <topics>` for that
-reason (part 5).
+For the `memsift` dataset, only this repo's packets are listed (their names
+start with the repo name), newest first. Every other dataset not marked
+`IGNORED` is listed in full. The file is cut, oldest `memsift` packets first, so
+it stays under 1 000 tokens. Packets sent by the compactor are named
+`<repo name> <date> <topics>` so that Jev can read them (part 5).
+
+memsift writes only to its own dataset, `memsift` by default
+(`MEMSIFT_DATASET`), never to datasets other tools write to.
 
 ### pending.jsonl
 

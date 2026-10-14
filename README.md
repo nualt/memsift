@@ -222,7 +222,7 @@ project. At the end of a session, whatever is left goes the same way.
 
 ══════════════════════════════════════════════════════════════ COGNEE SERVER ═══
 
-   ┌──────────────────── COGNEE · agent_sessions ─────────────────────┐
+   ┌─────────────────── COGNEE · memsift dataset ────────────────────┐
    │ receives only clean, deduplicated packets                        │
    │ stores and links them (graph)                                    │
    │ → queried only at ①, when Jev judges it worth it                 │
@@ -339,6 +339,7 @@ reference.
 | `MEMSIFT_COMPACTOR_URL` | DeepInfra's OpenAI-compatible endpoint | any OpenAI-compatible base URL |
 | `MEMSIFT_COMPACTOR_API_KEY` | none (required) | key for that endpoint |
 | `MEMSIFT_COMPACTOR_MODEL` | Gemma 4 26B-A4B | compactor model id at that endpoint |
+| `MEMSIFT_DATASET` | `memsift` | the Cognee dataset memsift writes to; it never writes elsewhere |
 | `MEMSIFT_DEBUG` | `0` | `1` writes every Jev decision to `~/.memsift/debug.log` |
 
 ## What leaves your machine
