@@ -48,7 +48,8 @@ class CoreTests(IsolatedTest):
         return store.read_json(store.session_path(session_id), {})
 
     def push_prompt(self, has_info=1, cognee=0, **answers):
-        for _ in range(3):
+        from memsift import store
+        for _ in range(2 + bool(store.read_notes(self.repo)["entries"])):
             self.fake.push({"answers": {"has_info": noul(has_info), "cognee": noul(cognee),
                                         **{key: noul(value) for key, value in answers.items()}},
                             "usage": {"input_tokens": 500}})
@@ -58,8 +59,11 @@ class CoreTests(IsolatedTest):
         self.prepare("start")
         self.push_prompt()
         first = core.prompt(self.prepare("prompt", prompt="Fix a typo."), self.config)
+        self.assertEqual(len(self.fake.requests), 2)
         self.push_prompt()
         second = core.prompt(self.prepare("prompt", prompt="Continue."), self.config)
+        self.assertEqual(len(self.fake.requests), 4)
+        self.assertTrue(all(r["body"]["questions"] for r in self.fake.requests))
         self.assertEqual(first, "memsift:\n- This repo has no jev.md. Propose a first version to the user.")
         self.assertEqual(second, "")
         self.assertFalse((self.repo / "jev.md").exists())
@@ -254,6 +258,7 @@ class CoreTests(IsolatedTest):
                 result = core.prompt(self.prepare("prompt", prompt="What fixed sharp?"), self.config)
                 self.assertEqual(result, expected)
                 *firsts, recall, passage = self.fake.requests[before:]
+                self.assertEqual(len(firsts), 2)
                 first = next(r for r in firsts if "cognee" in r["body"]["questions"])
                 self.assertEqual(first["body"]["state"]["datasets"], {
                     "lessons": {"description": "technical fixes", "items": ["sharp build scripts"]},
@@ -273,22 +278,23 @@ class CoreTests(IsolatedTest):
         self.push_prompt(0, 1, dataset_lessons=1)
         self.fake.push([])
         self.assertEqual(core.prompt(self.prepare("prompt", prompt="Past fixes?"), self.config), "")
-        self.assertEqual(len(self.fake.requests), 4)
+        self.assertEqual(len(self.fake.requests), 3)
         breaker.record("cognee", {"kind": "auth", "reason": "key refused", "status": 401})
         self.push_prompt(0, 1, dataset_lessons=1)
         result = core.prompt(self.prepare("prompt", prompt="Past fixes?"), self.config)
         self.assertIn("packets wait to be sent", result)
-        self.assertEqual(len(self.fake.requests), 7)
+        self.assertEqual(len(self.fake.requests), 5)
         entry = store.append_draft(self.repo, turn(), "project", False, breaker.ratio())
         self.push_prompt(0, 1, dataset_lessons=1, entry_d1=1)
         result = core.prompt(self.prepare("prompt", prompt="Grid?"), self.config)
         self.assertEqual(result, "memsift, from the working notes:\n" + entry["text"])
+        self.assertEqual(len(self.fake.requests), 8)
         self.assertTrue(breaker.paused("cognee"))
 
     def test_prompt_timeout_delivers_flags_without_memory_or_pending_turn(self):
         from memsift import core, store
         self.prepare("start")
-        for _ in range(3):
+        for _ in range(2):
             self.fake.push({"answers": {"has_info": noul(0), "cognee": noul(1)},
                             "usage": {"input_tokens": 500}}, delay=3)
         started = time.monotonic()
@@ -297,6 +303,7 @@ class CoreTests(IsolatedTest):
         self.assertIn("This repo has no jev.md", result)
         self.assertNotIn("from the working notes", result)
         self.assertEqual(store.pending_turns(self.repo), [])
+        self.assertEqual(len(self.fake.requests), 2)
         self.assertIn("Traceback", store.read_text(store.home() / "debug.log"))
 
     def test_passage_failure_never_exposes_unsorted_recall(self):
@@ -309,7 +316,7 @@ class CoreTests(IsolatedTest):
         result = core.prompt(self.prepare("prompt", prompt="Earlier fix?"), self.config)
         self.assertIn("This repo has no jev.md", result)
         self.assertNotIn("Unsorted", result)
-        self.assertEqual(len(self.fake.requests), 5)
+        self.assertEqual(len(self.fake.requests), 4)
 
     def test_prompt_protected_oversize_and_file_fault_keep_flags(self):
         from memsift import core, store
@@ -343,9 +350,11 @@ class CoreTests(IsolatedTest):
                     raw.update(cwd="/outside/acme-shop", transcript_path="")
                     self.push_prompt()
                     captured = core.prepare(host.normalize("UserPromptSubmit", raw, host_name))
+                    before = len(self.fake.requests)
                     self.assertEqual(core.dispatch(captured, self.config), "")
+                    self.assertEqual(len(self.fake.requests) - before, 2)
                     self.assertTrue(all("session_start" not in r["body"]["state"]
-                                        for r in self.fake.requests[-3:]))
+                                        for r in self.fake.requests[before:]))
                     self.assertEqual(captured["repo_root"], str(self.repo.resolve()))
 
     def test_retraction_tail_is_sent_for_both_hosts_and_replay(self):
@@ -672,7 +681,7 @@ class CoreTests(IsolatedTest):
         captured = self.prepare("prompt", prompt="Keep twelve columns.")
         self.assertEqual(core.prompt(captured, self.config), "")
         core.stop(self.prepare("stop", answer="Applied."), self.config)
-        self.assertEqual(len(self.fake.requests), 3)
+        self.assertEqual(len(self.fake.requests), 2)
         self.assertTrue(all("project_card" not in r["body"]["state"] for r in self.fake.requests))
         self.assertEqual(len(store.pending_turns(self.repo)), 1)
         self.assertEqual(store.read_notes(self.repo)["entries"], [])
@@ -817,7 +826,7 @@ class CoreTests(IsolatedTest):
         (self.repo / "jev.md").write_text("acme-shop")
         self.prepare("start")
         store.write_text(store.home() / "datasets.md", "- lessons: past fixes\n")
-        for _ in range(3):
+        for _ in range(2):
             self.fake.push({"answers": {"has_info": noul(0), "cognee": noul(1),
                                         "dataset_lessons": noul(1)},
                             "usage": {"input_tokens": 500}}, delay=0.05)
@@ -828,6 +837,6 @@ class CoreTests(IsolatedTest):
             result = core.prompt(self.prepare("prompt", prompt="Past fix?"), self.config)
         self.assertLess(time.monotonic() - started, 0.5)
         self.assertNotIn("Unsorted passage", result)
-        self.assertEqual(len(self.fake.requests), 5)
+        self.assertEqual(len(self.fake.requests), 4)
         self.assertLess(self.fake.requests[-1]["timeout"], 0.22)
         time.sleep(0.3)

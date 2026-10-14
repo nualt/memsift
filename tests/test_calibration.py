@@ -333,7 +333,7 @@ class CalibrationTests(IsolatedTest):
         scripts = Path(__file__).parent
         labels = self.label()
         answers = {"has_info": noul(0), "cognee": noul(0.9), "dataset_memory": noul(0.6)}
-        for _ in range(3):
+        for _ in range(2):
             self.fake.push({"answers": answers, "usage": {"input_tokens": 100}})
         env = child_env(self.fake.url, self.home)
         env["MEMSIFT_JEV_MODEL"] = "typesafe/jev-1.13"
@@ -342,6 +342,9 @@ class CalibrationTests(IsolatedTest):
                                 env=env, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Prompt: 1/1 correct", result.stdout)
+        self.assertEqual(len(self.fake.requests), 2)
+        self.assertEqual({tuple(request["body"]["questions"]) for request in self.fake.requests},
+                         {("has_info",), ("cognee", "dataset_memory")})
 
         draft = self.draft()
         self.fake.push(envelope(compacted()))
@@ -350,9 +353,9 @@ class CalibrationTests(IsolatedTest):
                                 input="yes\n", text=True, capture_output=True, cwd=self.home,
                                 env=env, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(self.fake.requests), 5)
+        self.assertEqual(len(self.fake.requests), 4)
         self.assertEqual(result.stdout.count("Measured provider token use"), 2)
         self.assertEqual(sum(request["url"].endswith("/chat/completions")
                              for request in self.fake.requests), 2)
         self.assertEqual(sum("/api/alpha/decisions" in request["url"]
-                             for request in self.fake.requests), 3)
+                             for request in self.fake.requests), 2)

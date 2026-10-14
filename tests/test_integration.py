@@ -65,7 +65,8 @@ class IntegrationTests(IsolatedTest):
         return text
 
     def push_prompt(self, has_info=1, cognee=0, **choices):
-        for _ in range(3):
+        from memsift import store
+        for _ in range(2 + bool(store.read_notes(self.repo)["entries"])):
             self.fake.push({"answers": {"has_info": noul(has_info), "cognee": noul(cognee),
                                         "dataset_memsift": noul(0),
                                         **{key: noul(value) for key, value in choices.items()}},
@@ -120,8 +121,10 @@ class IntegrationTests(IsolatedTest):
         self.invoke("start", host_name)
         prompt = "Use the footer grid because the header must align."
         self.push_prompt()
+        before = len(self.fake.requests)
         self.assertEqual(self.invoke("prompt", host_name, prompt=prompt + "\n" + secret_input), "")
-        state = next(r["body"]["state"] for r in self.fake.requests[-3:]
+        self.assertEqual(len(self.fake.requests) - before, 2)
+        state = next(r["body"]["state"] for r in self.fake.requests[before:]
                      if "has_info" in r["body"]["questions"])
         self.assertEqual({row["role"] for row in state["conversation"]}, {"user", "assistant"})
         self.assertNotIn("notes", state)
@@ -199,6 +202,7 @@ class IntegrationTests(IsolatedTest):
         result = self.invoke("prompt", host_name, sid="acme-shop-c", prompt="What fixed sharp?\n" + secret_input)
         self.assertIn("memsift, from Cognee (dataset memsift):\nAllow sharp build scripts.", result)
         *first_requests, recall, passage = self.fake.requests[before:]
+        self.assertEqual(len(first_requests), 3)
         first_request = first_requests[0]
         self.assertEqual(recall["body"]["dataset_ids"], ["acme-memory"])
         self.assertLessEqual(first_request["timeout"], 2)

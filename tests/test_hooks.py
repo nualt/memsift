@@ -111,11 +111,15 @@ class HookTests(IsolatedTest):
             self.assertLess(elapsed, 1)
             index = store.repo_dir(self.repo) / "cognee-index.json"
             self.wait_for(index.exists)
-            for _ in range(3):
-                self.fake.push({"answers": {"has_info": noul(1), "cognee": noul(0)},
+            entries = store.read_notes(self.repo)["entries"]
+            for _ in range(2 + bool(entries)):
+                self.fake.push({"answers": {"has_info": noul(1), "cognee": noul(0),
+                                            **{"entry_" + entry["id"]: noul(0) for entry in entries}},
                                 "usage": {"input_tokens": 500}}, path="/api/alpha/decisions")
+            before_prompt = len(self.fake.requests)
             result, _ = self.cli("prompt", payload("prompt"), host)
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(self.fake.requests) - before_prompt, 2 + bool(entries))
             self.assertIn("jev.md", json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"])
             result, _ = self.cli("tool", payload("tool-write"), host)
             self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
@@ -177,13 +181,14 @@ class HookTests(IsolatedTest):
         from memsift import breaker, core
         (self.repo / "jev.md").write_text("Grid", encoding="utf-8")
         core.prepare(event(self.repo, "start"))
-        for _ in range(3):
+        for _ in range(2):
             self.fake.push({}, delay=3, path="/api/alpha/decisions")
         result, elapsed = self.cli("prompt", {"session_id": "a1", "cwd": str(self.repo), "prompt": "Continue"})
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
         self.assertGreater(elapsed, 1.8)
         self.assertLess(elapsed, 2.8)
         self.assertEqual(breaker.state()["services"]["jev"]["failures"], 1)
+        self.assertEqual(len(self.fake.requests), 2)
 
     def test_config_spawn_dispatch_and_log_errors_never_escape(self):
         from memsift import core, store
@@ -318,7 +323,7 @@ class HookTests(IsolatedTest):
         store.write_text(store.home() / "datasets.md", "- A: Lessons\n- B: Decisions\n")
         store.write_text(store.repo_dir(self.repo) / "cognee-index.json", json.dumps({"datasets": [
             {"name": "A", "id": "a", "items": []}, {"name": "B", "id": "b", "items": []}]}))
-        for _ in range(3):
+        for _ in range(2):
             self.fake.push({"answers": {"has_info": noul(0), "cognee": noul(1),
                                         "dataset_A": noul(1), "dataset_B": noul(1)},
                             "usage": {"input_tokens": 500}}, path="/api/alpha/decisions")
@@ -329,7 +334,7 @@ class HookTests(IsolatedTest):
         self.assertGreater(elapsed, 11.8)
         self.assertLess(elapsed, 13)
         self.assertEqual(breaker.state()["services"]["cognee"]["failures"], 1)
-        self.assertEqual(len(self.fake.requests), 5)
+        self.assertEqual(len(self.fake.requests), 4)
 
     def test_manifest_routes_and_command_discovery(self):
         for host, manifest, root_variable in (("claude-code", ".claude-plugin", "CLAUDE_PLUGIN_ROOT"),
