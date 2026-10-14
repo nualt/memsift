@@ -121,9 +121,12 @@ class ReviewTests(IsolatedTest):
             wire = json.loads(request.data)
             self.assertNotIn(names[0], repr(wire))
             self.assertNotIn(names[1], repr(wire))
-            datasets = list(wire["state"]["datasets"])
-            self.assertEqual(len(datasets), 2)
-            self.fake.push({"answers": {key: noul(1) for key in wire["questions"]}, "usage": {"input_tokens": 500}})
+            if "datasets" in wire["state"]:
+                # Only the Cognee request carries the datasets (prompt request ③).
+                self.assertEqual(len(list(wire["state"]["datasets"])), 2)
+            # The agent lacks the information (has_info 0), so the Cognee datasets are chosen.
+            self.fake.push({"answers": {key: noul(0 if key == "has_info" else 1) for key in wire["questions"]},
+                            "usage": {"input_tokens": 500}})
             return self.fake.open(request, timeout)
         with patch("memsift.transport.open_request", side_effect=respond):
             result = jev.request(self.config, state, questions, timeout=2)

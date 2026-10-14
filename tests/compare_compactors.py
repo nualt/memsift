@@ -74,7 +74,7 @@ def _request_with_usage(config, notes):
         responses.append(response)
         return response
 
-    with patch("memsift.vendor.transport.open_request", side_effect=open_recorded):
+    with patch("memsift.transport.open_request", side_effect=open_recorded):
         answer = compactor.request(config, notes, probe=True)
     if not responses:
         return answer, None
