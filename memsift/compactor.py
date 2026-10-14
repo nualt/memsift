@@ -90,8 +90,8 @@ def validate(answer, notes):
     _topics(answer["packet"]["topics"])
     _text(answer["packet"]["text"], "packet text")
     knowledge = (re.search(r"^- \[g\d+\]", notes.get("digest", ""), re.MULTILINE)
-                 or any(entry["id"].startswith("d") and entry["nature"] in
-                        ("working_rule", "decision", "project_fact") for entry in notes.get("entries", [])))
+                 or any(entry["id"].startswith("d") and entry["nature"] == "project"
+                        and not entry["pending"] for entry in notes.get("entries", [])))
     if knowledge and not any(digest.values()):
         raise ValueError("digest is empty despite existing knowledge")
     return answer

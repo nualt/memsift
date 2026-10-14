@@ -50,7 +50,7 @@ class JevTests(IsolatedTest):
         self.assertEqual(conditional["confirmed_d4"]["instructions"], "Do `turn`, `recent_exchanges` and `recent_actions` confirm `pending_corrections.d4`: applied, and not taken back?")
         self.assertIn("taken back", conditional["confirmed_d4"]["criteria"]["false"])
         self.assertEqual(plain["scope"]["criteria"], ["this turn", "this task", "this project", "always"])
-        self.assertEqual(list(plain["nature"]["criteria"]), ["working_rule", "decision", "project_fact", "lesson", "nothing"])
+        self.assertEqual(list(plain["nature"]["criteria"]), ["project", "lesson", "nothing"])
 
     def test_errors_count_once_and_log_tracebacks(self):
         from memsift import breaker, jev
@@ -92,7 +92,7 @@ class JevTests(IsolatedTest):
     def test_choice_and_score_validation(self):
         from memsift import breaker, jev
         for field, value in [("nature.choice", "unknown"), ("nature.confidence", float("inf")),
-                             ("nature.probabilities", {"decision": 1}),
+                             ("nature.probabilities", {"project": 1}),
                              ("scope.legend", {"0": "always"}), ("scope.score", "2"),
                              ("scope.probabilities", {"0": 0, "1": 0, "2": 2, "3": -1}),
                              ("scope.confidence", True)]:
@@ -328,6 +328,7 @@ class JevTests(IsolatedTest):
         questions = jev.stop_questions({"project_card": "acme-shop"})
         expected = {
             "nature": "What kind of information does `turn` carry?",
+            "general_rule": "Does `turn` state a preference about how the agent should work in every project, not only this one?",
             "scope": "How long does it stay true?",
             "correction": "Does the user correct the agent in `turn`?",
             "known": 'Is it already in `notes` or `instruction_files`, or written this turn to a file listed under "documented in" in `project_card` (an edit in `turn.actions`)?',
@@ -336,12 +337,25 @@ class JevTests(IsolatedTest):
         }
         self.assertEqual({k: q["instructions"] for k, q in questions.items()}, expected)
         self.assertEqual(questions["nature"]["criteria"], {
-            "working_rule": "how the user wants the agent to work: form of answers, way of coding, steps, what to ask before acting",
-            "decision": "a choice that steers what follows and cannot be read in the code or docs: the why, what was ruled out, where things stand",
-            "project_fact": "lasting information about this project: an address, an account, a constraint, a business rule",
-            "lesson": "a technical problem, and what worked or did not (a dead end saves trying it again)",
-            "nothing": "status, reaction, small talk, typo, a one-off instruction, a micro-choice applied in the code",
+            "project": "something that holds for this project and is worth remembering: a decision and its reason, a rule for how to work here, a constraint, a business rule, a fact such as an address or an account, where the work stands",
+            "lesson": "a technical problem and what fixed it or did not, useful in any project, not specific to this one",
+            "nothing": "status, reaction, small talk, typo, a one-off instruction, a micro-choice already applied in the code, or something left undecided",
         })
+        self.assertEqual(questions["general_rule"]["type"], "noul")
+        self.assertEqual(questions["general_rule"]["criteria"], {
+            "true": "a general working habit of the user, such as asking before committing, or the form of answers",
+            "false": "anything specific to this project: its stack, its client, its constraints, its decisions, its rules",
+        })
+
+    def test_general_rule_boundary_on_stop_request(self):
+        from memsift import jev
+        state = {"turn": {"prompt": "Ask before committing.", "answer": "Understood.", "actions": []}}
+        for probability, keep in [(0.4999, True), (0.5, False)]:
+            answers = stop_answers(general_rule=probability)
+            questions = jev.stop_questions(state)
+            self.fake.push({"answers": {k: answers[k] for k in questions}, "usage": {"input_tokens": 100}})
+            measured = jev.request(self.config, state, questions, timeout=1)
+            self.assertEqual(jev.choose_stop(measured, [])["keep"], keep)
 
     def test_latest_oversized_exchange_keeps_text_only_retraction_tail(self):
         from memsift import jev

@@ -72,7 +72,7 @@ class HookTests(IsolatedTest):
         self.assertTrue(callable(getattr(run, "main", None)), "runner main is missing")
         from memsift import core, store
         (self.repo / "jev.md").write_text("Product grid", encoding="utf-8")
-        store.append_draft(self.repo, turn(), "decision", False, 3)
+        store.append_draft(self.repo, turn(), "project", False, 3)
         for host in ("claude-code", "codex"):
             core.prepare(event(self.repo, "start", host=host))
             self.fake.push({"answers": {"missing": noul(1), "entry_d1": noul(1),

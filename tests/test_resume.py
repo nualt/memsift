@@ -27,7 +27,7 @@ class ResumeTests(IsolatedTest):
         def classify(work, queued, config):
             entered.set()
             self.assertTrue(release.wait(5))
-            store.append_draft(self.repo, queued, "decision", False, 3)
+            store.append_draft(self.repo, queued, "project", False, 3)
             return True
         with patch("memsift.core._classify_turn", side_effect=classify) as classify_call:
             first = threading.Thread(target=lambda: results.append(core.replay_pending(self.work(), self.config)))
@@ -99,7 +99,7 @@ def classify(work, turn, config):
     while not Path(release).exists():
         assert time.monotonic() < deadline
         time.sleep(.01)
-    store.append_draft(Path(work['repo_root']), turn, 'decision', False, 3)
+    store.append_draft(Path(work['repo_root']), turn, 'project', False, 3)
     return True
 with patch('memsift.core._classify_turn', side_effect=classify):
     print(json.dumps(core.replay_pending(work, config)))
@@ -211,7 +211,7 @@ with patch('memsift.core._classify_turn', side_effect=classify):
         core.prepare(event(other, "start", session_id="a2"))
         store.update_session_if_exists("a2", lambda s: dict(s, actions=[{"turn": 1, "prompt": "Other history",
                                                                         "items": ["Edit other.txt"]}]))
-        store.append_draft(self.repo, turn("Use twelve columns"), "decision", True, 3)
+        store.append_draft(self.repo, turn("Use twelve columns"), "project", True, 3)
         store.queue_turn(self.repo, turn("Continue"), 3)
         self.fake.push(stop_body("nothing", confirmed_d1=noul(0)))
         with patch("memsift.jev.probe"), patch("memsift.compactor.probe"), patch("memsift.cognee.probe"):
@@ -245,7 +245,7 @@ with patch('memsift.core._classify_turn', side_effect=classify):
 
     def test_resume_uses_command_work_for_text_only_retraction(self):
         from memsift import core, store
-        store.append_draft(self.repo, turn("Use twelve columns"), "decision", True, 3)
+        store.append_draft(self.repo, turn("Use twelve columns"), "project", True, 3)
         store.queue_turn(self.repo, turn("Commit the grid"), 3)
         transcript = self.home / "acme-shop-transcript.jsonl"
         transcript.write_text(json.dumps({"type": "user", "message": {"content": [
@@ -287,7 +287,7 @@ with patch('memsift.core._classify_turn', side_effect=classify):
 
     def test_confirmation_write_failure_leaves_replay_without_a_new_entry(self):
         from memsift import core, store
-        store.append_draft(self.repo, turn("Use twelve columns"), "decision", True, 3)
+        store.append_draft(self.repo, turn("Use twelve columns"), "project", True, 3)
         store.queue_turn(self.repo, turn("Keep the footer spacing"), 3)
         self.fake.push(stop_body(confirmed_d1=noul(1)))
         with patch("memsift.store.confirm", side_effect=TimeoutError("injected confirmation lock timeout")):

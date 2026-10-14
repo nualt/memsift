@@ -744,8 +744,9 @@
           "type": "choice",
           "instructions": "What is the nature of notes.d1?",
           "criteria": {
-            "decision": "A choice that structures this project.",
-            "project_fact": "A fact about this project."
+            "project": "Information worth remembering for this project.",
+            "lesson": "A technical problem and its fix, useful in any project.",
+            "nothing": "A one-off instruction or small talk."
           }
         },
         "scope": {

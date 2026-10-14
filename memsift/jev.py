@@ -17,8 +17,7 @@ COGNEE = 0.8
 DATASET = 0.5
 USEFUL = 0.7
 KNOWN = 0.5
-NATURE_CONFIDENCE = 0.6
-CORRECTION_CONFIDENCE = 0.4
+GENERAL_RULE = 0.5
 CORRECTION = 0.5
 CONFIRMED = 0.7
 CARD_OUTDATED = 0.7
@@ -33,11 +32,9 @@ STATE_LIMIT = 32000
 REQUEST_LIMIT = 64000
 
 NATURES = {
-    "working_rule": "how the user wants the agent to work: form of answers, way of coding, steps, what to ask before acting",
-    "decision": "a choice that steers what follows and cannot be read in the code or docs: the why, what was ruled out, where things stand",
-    "project_fact": "lasting information about this project: an address, an account, a constraint, a business rule",
-    "lesson": "a technical problem, and what worked or did not (a dead end saves trying it again)",
-    "nothing": "status, reaction, small talk, typo, a one-off instruction, a micro-choice applied in the code",
+    "project": "something that holds for this project and is worth remembering: a decision and its reason, a rule for how to work here, a constraint, a business rule, a fact such as an address or an account, where the work stands",
+    "lesson": "a technical problem and what fixed it or did not, useful in any project, not specific to this one",
+    "nothing": "status, reaction, small talk, typo, a one-off instruction, a micro-choice already applied in the code, or something left undecided",
 }
 SCOPES = ["this turn", "this task", "this project", "always"]
 
@@ -81,6 +78,10 @@ def passage_questions(state):
 def stop_questions(state):
     questions = {
         "nature": {"type": "choice", "instructions": "What kind of information does `turn` carry?", "criteria": dict(NATURES)},
+        "general_rule": _noul("Does `turn` state a preference about how the agent should work in every project, not only this one?", {
+            "true": "a general working habit of the user, such as asking before committing, or the form of answers",
+            "false": "anything specific to this project: its stack, its client, its constraints, its decisions, its rules",
+        }),
         "scope": {"type": "score", "instructions": "How long does it stay true?", "criteria": list(SCOPES)},
         "correction": _noul("Does the user correct the agent in `turn`?"),
     }
@@ -125,14 +126,13 @@ def choose_stop(answers, pending_ids):
     level = max(levels, key=lambda i: scope_answer["probabilities"][i])
     scope = scope_answer["legend"][level]
     correction = answers["correction"]["noul"] >= CORRECTION
-    bar = CORRECTION_CONFIDENCE if correction else NATURE_CONFIDENCE
     keep = (nature != "nothing" and scope != "this turn"
-            and not (nature == "working_rule" and scope == "always")
-            and answers["known"]["noul"] < KNOWN and answers["nature"]["confidence"] >= bar)
+            and answers["general_rule"]["noul"] < GENERAL_RULE
+            and answers["known"]["noul"] < KNOWN)
     return {"keep": keep, "nature": nature, "correction": correction,
             "confirmed": [i for i in pending_ids if answers["confirmed_" + i]["noul"] >= CONFIRMED],
             "card_outdated": "card_outdated" in answers and answers["card_outdated"]["noul"] >= CARD_OUTDATED,
-            "reason_missing": keep and nature == "decision" and answers["reason_missing"]["noul"] >= REASON_MISSING}
+            "reason_missing": keep and nature == "project" and answers["reason_missing"]["noul"] >= REASON_MISSING}
 
 
 def _json(value):

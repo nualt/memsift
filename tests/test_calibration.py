@@ -35,7 +35,7 @@ def stop_response(questions):
         "scope": {"type": "score", "score": 2, "confidence": 1.0,
                   "legend": {str(index): name for index, name in enumerate(levels)},
                   "probabilities": {str(index): float(index == 2) for index in range(len(levels))}},
-        "correction": noul(0), "known": noul(0), "reason_missing": noul(0),
+        "correction": noul(0), "known": noul(0), "general_rule": noul(0), "reason_missing": noul(0),
     }
     if "card_outdated" in questions:
         answers["card_outdated"] = noul(0)
@@ -63,6 +63,14 @@ def envelope(answer):
 
 
 class CalibrationTests(IsolatedTest):
+    def test_compactor_comparison_reads_project_and_lesson_entries(self):
+        from tests import compare_compactors
+        notes = compare_compactors._notes(
+            "# Draft: acme-shop\n- [d1] 2026-10-14 project\n  User: Prices include VAT.\n"
+            "- [d2] 2026-10-14 lesson\n  User: Build needs sharp.\n- [d1] confirmed\n")
+        self.assertEqual([(e["id"], e["nature"]) for e in notes["entries"]],
+                         [("d1", "project"), ("d2", "lesson")])
+
     def setUp(self):
         super().setUp()
         os.environ["MEMSIFT_JEV_MODEL"] = "typesafe/jev-1.13"
@@ -77,7 +85,7 @@ class CalibrationTests(IsolatedTest):
 
     def draft(self, text="Keep the acme-shop header grid."):
         path = self.home / "draft.md"
-        path.write_text("# Draft: acme-shop\n\n- [d1] 2026-10-14 decision\n  User: " + text + "\n",
+        path.write_text("# Draft: acme-shop\n\n- [d1] 2026-10-14 project\n  User: " + text + "\n",
                         encoding="utf-8")
         return path
 

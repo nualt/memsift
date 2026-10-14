@@ -20,10 +20,8 @@ PROMPT_TOKENS = 1500
 ANSWER_TOKENS = 1000
 SESSION_AGE = 7 * 24 * 60 * 60
 LOCK_WAIT = 1.0
-NATURES = {"working_rule", "decision", "project_fact", "lesson"}
+NATURES = {"project", "lesson"}
 _ENTRY = re.compile(r"^- \[([dg]\d+)\] (.*)", re.MULTILINE)
-_SECTIONS = {"In progress": "", "Decisions": "decision",
-             "Project facts": "project_fact", "Working rules": "working_rule"}
 
 
 def home() -> Path:
@@ -185,8 +183,7 @@ def _entries(text: str) -> list:
             heading = re.search(r"^#", original, re.MULTILINE)
             if heading:
                 original = original[:heading.start()]
-            sections = re.findall(r"^## (.+)$", text[:match.start()], re.MULTILINE)
-            nature = _SECTIONS.get(sections[-1], "") if sections else ""
+            nature = "project"
             date = re.search(r"\((\d{4}-\d{2}-\d{2})\)$", metadata)
             date = date.group(1) if date else ""
         else:

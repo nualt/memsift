@@ -7,9 +7,9 @@ def noul(value):
     return {"type": "noul", "noul": value}
 
 
-def stop_answers(nature="decision", scope="this project", confidence=0.6,
-                 correction=0.0, known=0.0):
-    natures = ["working_rule", "decision", "project_fact", "lesson", "nothing"]
+def stop_answers(nature="project", scope="this project", confidence=0.6,
+                 correction=0.0, known=0.0, general_rule=0.0):
+    natures = ["project", "lesson", "nothing"]
     levels = ["this turn", "this task", "this project", "always"]
     return {
         "nature": {"type": "choice", "choice": nature, "confidence": confidence,
@@ -18,6 +18,7 @@ def stop_answers(nature="decision", scope="this project", confidence=0.6,
                   "legend": {str(i): s for i, s in enumerate(levels)},
                   "probabilities": {str(i): float(s == scope) for i, s in enumerate(levels)}},
         "correction": noul(correction), "known": noul(known),
+        "general_rule": noul(general_rule),
         "card_outdated": noul(0.7), "reason_missing": noul(0.7),
         "confirmed_d4": noul(0.7),
     }
@@ -67,27 +68,41 @@ class DecisionTests(IsolatedTest):
 
     def test_all_natures_and_scopes(self):
         from memsift import jev
-        for nature in ("working_rule", "decision", "project_fact", "lesson", "nothing"):
+        for nature in ("project", "lesson", "nothing"):
             for scope in ("this turn", "this task", "this project", "always"):
                 with self.subTest(nature=nature, scope=scope):
                     result = jev.choose_stop(stop_answers(nature, scope), ["d4"])
-                    keep = nature != "nothing" and scope != "this turn" and (nature, scope) != ("working_rule", "always")
+                    keep = nature != "nothing" and scope != "this turn"
                     self.assertEqual(result["keep"], keep)
-                    self.assertEqual(result["reason_missing"], keep and nature == "decision")
+                    self.assertEqual(result["reason_missing"], keep and nature == "project")
                     self.assertEqual(result["confirmed"], ["d4"])
                     self.assertTrue(result["card_outdated"])
 
-    def test_stop_confidence_correction_and_known_boundaries(self):
+    def test_stop_ignores_confidence_and_keeps_correction_and_known_boundaries(self):
         from memsift import jev
         for confidence, correction, known, keep, corrected in [
-            (0.5999, 0, 0, False, False), (0.6, 0, 0, True, False), (0.6001, 0, 0, True, False),
-            (0.4, 0.4999, 0, False, False), (0.3999, 0.5, 0, False, True),
+            (0, 0, 0, True, False), (0.5999, 0, 0, True, False), (0.6, 0, 0, True, False),
+            (0.4, 0.4999, 0, True, False), (0.3999, 0.5, 0, True, True),
             (0.4, 0.5, 0, True, True), (0.4001, 0.5001, 0, True, True),
             (1, 0, 0.4999, True, False), (1, 0, 0.5, False, False), (1, 0, 0.5001, False, False),
         ]:
             with self.subTest(confidence=confidence, correction=correction, known=known):
                 result = jev.choose_stop(stop_answers(confidence=confidence, correction=correction, known=known), [])
                 self.assertEqual((result["keep"], result["correction"]), (keep, corrected))
+
+    def test_general_rule_boundary_drops_ask_before_committing(self):
+        from memsift import jev
+        for probability, keep in [(0.4999, True), (0.5, False), (0.5001, False)]:
+            with self.subTest(general_rule=probability):
+                result = jev.choose_stop(stop_answers(general_rule=probability), [])
+                self.assertEqual(result["keep"], keep)
+                self.assertEqual(result["reason_missing"], keep)
+
+    def test_uncertain_project_nature_is_kept(self):
+        from memsift import jev
+        answers = stop_answers(confidence=0.55)
+        answers["nature"]["probabilities"] = {"project": 0.55, "lesson": 0, "nothing": 0.45}
+        self.assertTrue(jev.choose_stop(answers, [])["keep"])
 
     def test_flags_boundaries_and_absent_card(self):
         from memsift import jev
@@ -109,6 +124,4 @@ class DecisionTests(IsolatedTest):
         answers["scope"]["probabilities"] = {"3": 0.25, "2": 0.25, "1": 0.25, "0": 0.25}
         self.assertFalse(jev.choose_stop(answers, [])["keep"])
         answers["scope"]["probabilities"] = {"0": 0.1, "1": 0.1, "2": 0.35, "3": 0.45}
-        answers["nature"]["choice"] = "working_rule"
-        answers["nature"]["probabilities"] = {"working_rule": 1, "decision": 0, "project_fact": 0, "lesson": 0, "nothing": 0}
-        self.assertFalse(jev.choose_stop(answers, [])["keep"])
+        self.assertTrue(jev.choose_stop(answers, [])["keep"])

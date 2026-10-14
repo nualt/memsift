@@ -27,7 +27,7 @@ class CompactionTests(IsolatedTest):
         from memsift import breaker, cognee, compactor, store
         self.breaker, self.cognee, self.compactor, self.store = breaker, cognee, compactor, store
 
-    def add(self, prompt="Keep the footer grid.", nature="decision", correction=False):
+    def add(self, prompt="Keep the footer grid.", nature="project", correction=False):
         turn = {"ts": "2026-10-14T07:31:02Z", "session": "a1",
                 "prompt": prompt, "answer": "Applied.", "actions": []}
         return self.store.append_draft(self.repo, turn, nature, correction, 3.0)
@@ -99,17 +99,33 @@ class CompactionTests(IsolatedTest):
         self.assertEqual(self.compactor.validate(original, notes), original)
 
     def test_empty_digest_requires_knowledge_not_headers(self):
-        for nature in ("decision", "working_rule", "project_fact"):
-            with self.subTest(nature=nature):
-                self.add(nature=nature)
-                with self.assertRaisesRegex(ValueError, "digest.*empty|empty.*digest"):
-                    self.compactor.validate(answer(""), self.store.read_notes(self.repo))
+        self.add(nature="project")
+        with self.assertRaisesRegex(ValueError, "digest.*empty|empty.*digest"):
+            self.compactor.validate(answer(""), self.store.read_notes(self.repo))
         notes = {"digest": "# Digest: acme-shop\n## Decisions\n- [g1] Existing fact (2026-10-13)\n",
                  "draft": "", "entries": [], "pending": {}}
         with self.assertRaises(ValueError):
             self.compactor.validate(answer(""), notes)
         notes["digest"] = "# Digest: acme-shop\n## Decisions\n"
         self.assertEqual(self.compactor.validate(answer(""), notes), answer(""))
+
+    def test_empty_digest_ignores_pending_project_corrections(self):
+        entry = self.add(nature="project", correction=True)
+        self.add(nature="lesson")
+        self.assertEqual(self.compactor.validate(answer(""), self.store.read_notes(self.repo)), answer(""))
+        self.store.confirm(self.repo, {entry["id"]: entry["text"]})
+        with self.assertRaisesRegex(ValueError, "digest.*empty|empty.*digest"):
+            self.compactor.validate(answer(""), self.store.read_notes(self.repo))
+
+    def test_lessons_compact_to_empty_digest_with_pending_project_carried_over(self):
+        entry = self.add(nature="project", correction=True)
+        self.add(nature="lesson")
+        self.fake.push(envelope(answer("")))
+        self.fake.push({"ok": True})
+        self.assertTrue(self.compactor.compact(self.repo, self.config, force=True))
+        notes = self.store.read_notes(self.repo)
+        self.assertEqual(notes["pending"], {entry["id"]: entry["text"]})
+        self.assertEqual([e["id"] for e in notes["entries"]], [entry["id"]])
 
     def test_recent_first_stable_ties_and_prunes_last_section_oldest(self):
         value = answer("current work", "in_progress")["digest"]

@@ -131,7 +131,7 @@ class IntegrationTests(IsolatedTest):
         self.assertIn("User: " + prompt, first["text"])
         self.assertIn("Agent: The header uses the footer grid.", first["text"])
         self.assertIn("src/header.tsx", first["text"])
-        self.assertEqual(first["nature"], "decision")
+        self.assertEqual(first["nature"], "project")
 
         self.push_index()
         self.invoke("start", host_name, sid="acme-shop-b")
@@ -223,7 +223,7 @@ class IntegrationTests(IsolatedTest):
         for index, (content, _) in enumerate(SECRETS):
             turn = {"ts": "2026-10-14T07:31:02Z", "session": "acme-shop-a",
                     "prompt": content, "answer": content, "actions": [content]}
-            store.append_draft(self.repo, turn, "decision", False, 3.0)
+            store.append_draft(self.repo, turn, "project", False, 3.0)
             store.queue_turn(self.repo, turn, 3.0)
             store.write_text(store.repo_dir(self.repo) / "digest.md", content)
             store.write_text(store.repo_dir(self.repo) / "cognee-index.json", json.dumps({"items": [content]}))

@@ -29,7 +29,7 @@ def turn(prompt="Keep twelve columns.", answer="Applied.", session="a1"):
             "prompt": prompt, "answer": answer, "actions": []}
 
 
-def stop_body(nature="decision", **changes):
+def stop_body(nature="project", **changes):
     answers = stop_answers(nature=nature)
     answers.pop("confirmed_d4")
     answers["card_outdated"] = noul(0)
@@ -109,7 +109,7 @@ class CoreTests(IsolatedTest):
         (self.repo / "CLAUDE.md").write_text("private instructions", encoding="utf-8")
         (self.repo / "AGENTS.md").write_text("other instructions", encoding="utf-8")
         store.write_text(store.repo_dir(self.repo) / "digest.md", "## Decisions\n- [g1] Twelve columns (2026-10-12)\n")
-        entry = store.append_draft(self.repo, turn(), "decision", False, 3)
+        entry = store.append_draft(self.repo, turn(), "project", False, 3)
         self.prepare("start", source="compact")
         self.push_prompt(1, 1, entry_g1=1, entry_d1=1)
         result = core.prompt(self.prepare("prompt", prompt="Back to the header"), self.config)
@@ -125,7 +125,7 @@ class CoreTests(IsolatedTest):
         (self.repo / "jev.md").write_text("acme-shop card", encoding="utf-8")
         (self.repo / "CLAUDE.md").write_text("First instructions", encoding="utf-8")
         (self.repo / "AGENTS.md").write_text("Second instructions", encoding="utf-8")
-        correction = store.append_draft(self.repo, turn(), "decision", True, 3)
+        correction = store.append_draft(self.repo, turn(), "project", True, 3)
         self.prepare("start")
         self.prepare("prompt", prompt="Use the footer grid because it keeps alignment.")
         self.fake.push(stop_body(confirmed_d1=noul(1), card_outdated=noul(1), reason_missing=noul(1)))
@@ -278,7 +278,7 @@ class CoreTests(IsolatedTest):
         result = core.prompt(self.prepare("prompt", prompt="Past fixes?"), self.config)
         self.assertIn("packets wait to be sent", result)
         self.assertEqual(len(self.fake.requests), 3)
-        entry = store.append_draft(self.repo, turn(), "decision", False, breaker.ratio())
+        entry = store.append_draft(self.repo, turn(), "project", False, breaker.ratio())
         self.push_prompt(1, 1, dataset_lessons=1, entry_d1=1)
         result = core.prompt(self.prepare("prompt", prompt="Grid?"), self.config)
         self.assertEqual(result, "memsift, from the working notes:\n" + entry["text"])
@@ -353,7 +353,7 @@ class CoreTests(IsolatedTest):
                 with self.subTest(host=host_name, replay=replay):
                     directory = store.repo_dir(self.repo)
                     store.write_text(directory / "draft.md", "")
-                    correction = store.append_draft(self.repo, turn("Use twelve columns"), "decision", True, 3)
+                    correction = store.append_draft(self.repo, turn("Use twelve columns"), "project", True, 3)
                     transcript = self.home / (host_name + ".jsonl")
                     transcript.write_text((FIXTURES / "transcripts" / (host_name + "-plain.jsonl")).read_text(), encoding="utf-8")
                     raw = json.loads((FIXTURES / "hooks" / host_name / "start.json").read_text())
@@ -502,7 +502,7 @@ class CoreTests(IsolatedTest):
                     core.stop(self.prepare("stop", answer="Done"), self.config)
                 self.assertEqual(compact.call_count, int(expected))
         store.write_text(store.repo_dir(self.repo) / "digest.md", "")
-        store.append_draft(self.repo, turn(), "decision", False, 3)
+        store.append_draft(self.repo, turn(), "project", False, 3)
         self.fake.push({"choices": [{"message": {"content": json.dumps(compact_answer())}}]})
         self.fake.push({"ok": True})
         core.end(self.prepare("end"), self.config)
@@ -520,7 +520,7 @@ class CoreTests(IsolatedTest):
                     breaker.resume(name)
                 work = self.prepare("start")
                 store.write_text(store.repo_dir(self.repo) / "draft.md", "")
-                store.append_draft(self.repo, turn(), "decision", False, 3)
+                store.append_draft(self.repo, turn(), "project", False, 3)
                 before = store.read_notes(self.repo)
                 breaker.record(service, {"kind": "auth", "reason": "key refused", "status": 401})
                 if service == "compactor":
@@ -540,7 +540,7 @@ class CoreTests(IsolatedTest):
     def test_end_deletes_session_even_when_compaction_raises(self):
         from memsift import core, store
         self.prepare("start")
-        store.append_draft(self.repo, turn(), "decision", False, 3)
+        store.append_draft(self.repo, turn(), "project", False, 3)
         with patch("memsift.compactor.compact", side_effect=OSError("injected compaction fault")):
             with self.assertRaises(OSError):
                 core.end(self.prepare("end"), self.config)
@@ -651,10 +651,10 @@ class CoreTests(IsolatedTest):
         from memsift import breaker, core, store
         self.prepare("start")
         self.prepare("prompt", prompt="Keep twelve columns.")
-        store.append_draft(self.repo, turn("Keep rule " + "r" * 4500), "decision", True, 3)
+        store.append_draft(self.repo, turn("Keep rule " + "r" * 4500), "project", True, 3)
         # Pending corrections are protected, unlike the selectable notes copy.
         for _ in range(24):
-            store.append_draft(self.repo, turn("Keep rule " + "r" * 4500), "decision", True, 3)
+            store.append_draft(self.repo, turn("Keep rule " + "r" * 4500), "project", True, 3)
         core.stop(self.prepare("stop", answer="Applied."), self.config)
         self.assertEqual(self.fake.requests, [])
         self.assertEqual(len(store.pending_turns(self.repo)), 1)
@@ -677,13 +677,13 @@ class CoreTests(IsolatedTest):
     def test_correction_confirmation_checks_the_captured_entry_text(self):
         from memsift import core, jev, store
         self.prepare("start")
-        store.append_draft(self.repo, turn("Use twelve columns"), "decision", True, 3)
+        store.append_draft(self.repo, turn("Use twelve columns"), "project", True, 3)
         self.prepare("prompt", prompt="Commit the grid.")
         request = jev.request
         def classify(*args, **kwargs):
             result = request(*args, **kwargs)
             store.write_text(store.repo_dir(self.repo) / "draft.md", "")
-            store.append_draft(self.repo, turn("Keep ten columns after all"), "decision", True, 3)
+            store.append_draft(self.repo, turn("Keep ten columns after all"), "project", True, 3)
             return result
         self.fake.push(stop_body("nothing", confirmed_d1=noul(1)))
         with patch("memsift.jev.request", side_effect=classify):

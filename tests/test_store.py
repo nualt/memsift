@@ -24,7 +24,7 @@ def append_worker(root, label, ready, start):
     assert start.wait(10)
     for index in range(200):
         store.append_draft(root, turn("%s-prompt-%s" % (label, index),
-                                     "%s-answer-%s" % (label, index)), "decision", False, 3)
+                                     "%s-answer-%s" % (label, index)), "project", False, 3)
 
 
 def append_after_snapshot(root, snapshot_ready, appended):
@@ -61,7 +61,7 @@ def replay_worker(root, acquired, release, result):
             acquired.set()
             assert release.wait(10)
             for value in turns:
-                store.append_draft(root, value, "decision", False, 3)
+                store.append_draft(root, value, "project", False, 3)
             store.ack_pending(root, turns)
             result.write_text(str(len(turns)))
         else:
@@ -232,9 +232,9 @@ class StoreTests(IsolatedTest):
     def test_entry_is_raw_and_confirmation_is_append_only(self):
         from memsift import store
         value = turn("Use twelve columns.\nKeep the footer grid.", actions=["Edit src/header.tsx"])
-        entry = store.append_draft(self.repo, value, "decision", True, 3.0)
+        entry = store.append_draft(self.repo, value, "project", True, 3.0)
         before = store.read_notes(self.repo)["draft"]
-        self.assertEqual(entry, {"id": "d1", "text": "- [d1] 2026-10-14 decision · correction · pending\n  User: Use twelve columns.\n  Keep the footer grid.\n  Agent: Applied.\n  Actions: Edit src/header.tsx\n", "date": "2026-10-14", "nature": "decision", "correction": True, "pending": True})
+        self.assertEqual(entry, {"id": "d1", "text": "- [d1] 2026-10-14 project · correction · pending\n  User: Use twelve columns.\n  Keep the footer grid.\n  Agent: Applied.\n  Actions: Edit src/header.tsx\n", "date": "2026-10-14", "nature": "project", "correction": True, "pending": True})
         self.assertEqual(store.read_notes(self.repo)["pending"], {"d1": entry["text"]})
         self.assertEqual(store.confirm(self.repo, {entry["id"]: entry["text"]}), ["d1"])
         after = store.read_notes(self.repo)["draft"]
@@ -253,21 +253,21 @@ class StoreTests(IsolatedTest):
         self.assertIn("\n  - [d88] confirmed\n", entry["text"])
         self.assertIn("[…]", entry["text"])
         self.assertEqual(len(store.read_notes(self.repo)["entries"]), 1)
-        second = store.append_draft(self.repo, turn("PASSWORD=invented-secret"), "project_fact", False, 3)
+        second = store.append_draft(self.repo, turn("PASSWORD=invented-secret"), "project", False, 3)
         self.assertEqual(second["id"], "d2")
         self.assertNotIn("invented-secret", second["text"])
         self.assertNotIn("Actions:", second["text"])
         with self.assertRaises(ValueError):
-            store.append_draft(self.repo, turn(), "decision\n- [d99] confirmed", False, 3)
+            store.append_draft(self.repo, turn(), "project\n- [d99] confirmed", False, 3)
 
     def test_stale_confirmation_does_not_confirm_reused_id(self):
         from memsift import store
-        old = store.append_draft(self.repo, turn("old correction"), "decision", True, 3)
+        old = store.append_draft(self.repo, turn("old correction"), "project", True, 3)
         store.replace_notes(self.repo, store.notes_snapshot(self.repo), "")
         # A confirmed entry can leave the file; a later allocation may reuse d1.
         store.confirm(self.repo, {old["id"]: old["text"]})
         store.replace_notes(self.repo, store.notes_snapshot(self.repo), "")
-        new = store.append_draft(self.repo, turn("new correction"), "decision", True, 3)
+        new = store.append_draft(self.repo, turn("new correction"), "project", True, 3)
         self.assertEqual(new["id"], old["id"])
         self.assertEqual(store.confirm(self.repo, {old["id"]: old["text"]}), [])
         self.assertEqual(store.read_notes(self.repo)["pending"], {new["id"]: new["text"]})
@@ -276,12 +276,21 @@ class StoreTests(IsolatedTest):
         from memsift import store
         directory = store.repo_dir(self.repo)
         store.write_text(directory / "draft.md", "# Draft: acme-shop\n\n- [d9] confirmed\n")
-        self.assertEqual(store.append_draft(self.repo, turn(), "working_rule", False, 3)["id"], "d10")
+        self.assertEqual(store.append_draft(self.repo, turn(), "project", False, 3)["id"], "d10")
         store.write_text(directory / "digest.md", "# Digest: acme-shop\n## Decisions\n- [g1] twelve columns (2026-10-12)\n## Project facts\n- [g2] uses sharp (2026-10-09)\n")
         notes = store.read_notes(self.repo)
         self.assertEqual([entry["id"] for entry in notes["entries"]], ["g1", "g2", "d10"])
         self.assertEqual(notes["entries"][0]["text"], "- [g1] twelve columns (2026-10-12)\n")
-        self.assertEqual(notes["entries"][0]["nature"], "decision")
+        self.assertEqual(notes["entries"][0]["nature"], "project")
+
+    def test_all_digest_sections_have_project_nature(self):
+        from memsift import store
+        digest = "# Digest: acme-shop\n"
+        for index, heading in enumerate(("In progress", "Decisions", "Project facts", "Working rules"), 1):
+            digest += "## %s\n- [g%d] Known project information (2026-10-14)\n" % (heading, index)
+        store.write_text(store.repo_dir(self.repo) / "digest.md", digest)
+        self.assertEqual([entry["nature"] for entry in store.read_notes(self.repo)["entries"]],
+                         ["project", "project", "project", "project"])
 
     def test_replay_ownership_is_nonblocking(self):
         from memsift import store
@@ -340,8 +349,8 @@ class StoreTests(IsolatedTest):
 
     def test_snapshot_uses_bytes_and_keeps_pending_and_late_confirmation(self):
         from memsift import store
-        correction = store.append_draft(self.repo, turn("café 🙂"), "decision", True, 3)
-        store.append_draft(self.repo, turn("ordinary"), "project_fact", False, 3)
+        correction = store.append_draft(self.repo, turn("café 🙂"), "project", True, 3)
+        store.append_draft(self.repo, turn("ordinary"), "project", False, 3)
         snapshot = store.notes_snapshot(self.repo)
         self.assertEqual(snapshot["draft_bytes"], len(snapshot["draft"].encode("utf-8")))
         self.assertGreater(snapshot["draft_bytes"], len(snapshot["draft"]))
@@ -361,7 +370,7 @@ class StoreTests(IsolatedTest):
     def test_empty_snapshot_keeps_new_header_and_pending_without_duplicates(self):
         from memsift import store
         snapshot = store.notes_snapshot(self.repo)
-        entry = store.append_draft(self.repo, turn(), "decision", True, 3)
+        entry = store.append_draft(self.repo, turn(), "project", True, 3)
         store.replace_notes(self.repo, snapshot, "")
         self.assertEqual(store.read_notes(self.repo)["pending"], {entry["id"]: entry["text"]})
         self.assertEqual(store.read_notes(self.repo)["draft"].count("# Draft:"), 1)
@@ -409,7 +418,7 @@ class StoreTests(IsolatedTest):
         from memsift import store
         context = multiprocessing.get_context("spawn")
         snapshot_ready, appended = context.Event(), context.Event()
-        store.append_draft(self.repo, turn("old"), "decision", False, 3)
+        store.append_draft(self.repo, turn("old"), "project", False, 3)
         process = self.start_process(append_after_snapshot, self.repo, snapshot_ready, appended)
         snapshot = store.notes_snapshot(self.repo)
         snapshot_ready.set()
@@ -477,7 +486,7 @@ class StoreTests(IsolatedTest):
 
     def test_failed_rewrite_does_not_drop_tail_and_reports_snapshot_mismatch(self):
         from memsift import store
-        store.append_draft(self.repo, turn(), "decision", False, 3)
+        store.append_draft(self.repo, turn(), "project", False, 3)
         snapshot = store.notes_snapshot(self.repo)
         path = store.repo_dir(self.repo) / "draft.md"
         store.write_text(path, "# Draft: changed\n")
@@ -509,7 +518,7 @@ class StoreTests(IsolatedTest):
         store.queue_turn(self.repo, value, 3)
         store.queue_turn(self.repo, value, 3)
         store.ack_pending(self.repo, store.pending_turns(self.repo)[:1])
-        entry = store.append_draft(self.repo, value, "decision", True, 3)
+        entry = store.append_draft(self.repo, value, "project", True, 3)
         store.replace_notes(self.repo, store.notes_snapshot(self.repo), "PASSWORD=invented-digest\n")
         self.assertEqual(store.read_notes(self.repo)["pending"], {entry["id"]: entry["text"]})
         session = store.session_path("running")

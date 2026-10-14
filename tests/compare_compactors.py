@@ -50,7 +50,7 @@ class _RecordingResponse:
 def _notes(draft):
     entries = []
     pattern = re.compile(
-        r"^- \[(d\d+)\] (\d{4}-\d{2}-\d{2}) (working_rule|decision|project_fact|lesson)\b",
+        r"^- \[(d\d+)\] (\d{4}-\d{2}-\d{2}) (project|lesson)\b",
         re.MULTILINE,
     )
     for identifier, date, nature in pattern.findall(draft):
