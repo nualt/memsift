@@ -47,6 +47,15 @@ class RedactTests(IsolatedTest):
             ("postgres://acme:invented-value@db.invalid/shop", "invented-value"),
             ("-----BEGIN RSA PRIVATE KEY-----\ninvented-private\n-----END RSA PRIVATE KEY-----", "invented-private"),
             ("-----BEGIN PRIVATE KEY-----\ninvented-unfinished", "invented-unfinished"),
+            ("la cle de test : sk_test_4eC39HqLyjWDarjtT1zdp7dc met la dans .env", "4eC39HqLyjWDarjtT1zdp7dc"),
+            ("sk_live_51InventedLiveKey0000", "51InventedLiveKey0000"),
+            ("rk_test_51InventedRestricted00", "51InventedRestricted00"),
+            ("sk-or-v1-0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef"),
+            ("aws AKIAINVENTEDKEY00001 here", "AKIAINVENTEDKEY00001"),
+            ("AIzaInventedGoogleKey0123456789abcdefghij", "InventedGoogleKey0123456789abcdefghij"),
+            ("glpat-InventedGitlabToken0001", "InventedGitlabToken0001"),
+            ("hf_InventedHuggingFaceToken0123456789", "InventedHuggingFaceToken0123456789"),
+            ("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhY21lIn0.InventedSignature01", "InventedSignature01"),
         ]
         for text, secret in cases:
             with self.subTest(text=text):

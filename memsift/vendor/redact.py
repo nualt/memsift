@@ -23,6 +23,11 @@ _RULES = (
         "vendor-key",
         r"\b(?:sk-(?:proj-|ant-)?|gh[pousr]_|github_pat_|xox[baprs]-|whsec_)[A-Za-z0-9_-]{16,}",
     ),
+    ("vendor-key", r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}"),
+    ("vendor-key", r"\bAKIA[0-9A-Z]{16}\b"),
+    ("vendor-key", r"\bAIza[0-9A-Za-z_-]{35}"),
+    ("vendor-key", r"\b(?:glpat-[A-Za-z0-9_-]{20,}|hf_[A-Za-z0-9]{30,})"),
+    ("jwt", r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
     ("bcrypt", r"\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}"),
 )
 _COMPILED = [(kind, re.compile(pattern)) for kind, pattern in _RULES]
