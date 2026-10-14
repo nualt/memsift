@@ -131,8 +131,9 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 > Under review with the user, point by point. Agreed so far: working notes are
 > `digest.md` + `draft.md` read together, no copy; no `preferences.md` (general
 > working rules belong in the host's `CLAUDE.md` / `AGENTS.md`, outside memsift's
-> scope). Everything else in this part is a proposal. Known issue: Jev cannot write
-> text, so a `draft.md` entry is the raw turn plus labels, not a clean sentence.
+> scope); draft entries are raw turns with labels, cut at 1 500 / 1 000 tokens.
+> Everything else in this part is a proposal. The format of `digest.md`, written
+> by the compactor, is decided in part 5.
 
 ### Overview
 
@@ -184,30 +185,40 @@ name never share notes:
 ~/code              →  code-8c04d2
 ```
 
-### Entries
+### Draft entries
 
-`digest.md` and `draft.md` hold entries, one per line:
+Jev cannot write text: it only returns probabilities. A `draft.md` entry is
+therefore the raw turn, with labels added by code. Only the compactor writes
+sentences (part 5).
 
 ```
-- [<id>] <date> <nature>: <text>
+- [d1] 2026-10-14 decision
+  User: no, the header must reuse the footer grid
+  Agent: ok, the header now uses the footer's 12-column grid
+  Actions: Edit src/header.tsx · Bash: pnpm build (ok)
 ```
 
-| Field | Format |
+| Field | Source |
 |---|---|
-| `id` | `g` (digest) or `d` (draft), then a number unique in that file |
-| `date` | `YYYY-MM-DD`, day the entry was learned |
-| `nature` | `working_rule` (for this project only), `decision`, `project_fact` or `lesson` (part 4) |
-| `text` | one sentence or two, self-contained: it names its subject and never says "it" or "this" |
+| `id` | `d` and a number unique in the file, given by code |
+| date | `YYYY-MM-DD`, the day of the turn |
+| nature | Jev's answer: `working_rule` (for this project only), `decision`, `project_fact` or `lesson` (part 4) |
+| `User:` | the prompt, as received by the prompt hook |
+| `Agent:` | the agent's answer text, as received by the stop hook; tool calls and their output are never included |
+| `Actions:` | the action note of the turn (part 3), omitted when empty |
 
-A `decision` states the choice, then the reason, then what was rejected when
-known. Each file starts with a one-line title (`# Digest: <repo-key>`, `# Draft: <repo-key>`) and has nothing else.
+The prompt and the answer arrive in separate hooks, so they are always labelled
+correctly. Before writing, each is cut if too long, keeping the start and the
+end with `[…]` in between:
 
-```
-# Draft: acme-shop-3f2a91
-- [d1] 2026-10-13 decision: The header reuses the footer's 12-column grid so both stay aligned; a separate header grid was rejected as two sources of truth.
-- [d2] 2026-10-13 lesson: pnpm 10 blocks dependency build scripts until they are listed in onlyBuiltDependencies; sharp failed silently until it was added.
-- [d3] 2026-10-14 project_fact: Stock is decremented when the order is placed, not when it is paid.
-```
+| Part | Limit | Measured on 5 163 real turns |
+|---|---|---|
+| `User:` | 1 500 tokens | 97 % of prompts are shorter; longer ones are mostly pasted logs or files. About 7 minutes of dictation fit. |
+| `Agent:` | 1 000 tokens | 99.9 % of answers are shorter (longest seen: 2 020) |
+
+Jev always reads the full turn to decide; the limits only apply to what is
+written. Continuation lines are indented by two spaces; an entry ends at the
+next line starting with `- [`. `draft.md` starts with `# Draft: <repo-key>`.
 
 ### Corrections
 
