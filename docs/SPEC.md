@@ -141,6 +141,7 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 > Secrets redacted before every write and every send.
 > Cognee: memsift writes to its own dataset `memsift`; index = curated datasets
 > in full + this repo's `memsift` packets, newest first, ≤ 1 000 tokens.
+> `datasets.md`: memsift only raises a flag; the agent proposes, the user approves, the agent writes.
 > Everything else in this part is a proposal. The format of `digest.md`, written
 > by the compactor, is decided in part 5.
 
