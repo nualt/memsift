@@ -138,6 +138,7 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
     ├── pending.jsonl       turns noted while Jev was unreachable
     ├── outbox/             packets waiting for Cognee (part 6)
     ├── compaction.lock     held while a compaction runs (part 5)
+    ├── replay.lock         held while pending turns are sorted (part 6)
     └── cognee-index.json   what Cognee holds, rebuilt each session
 
 <repo root>/jev.md          project card, owned by the user
@@ -244,7 +245,9 @@ file; the entry itself is never edited:
 
 At compaction, the compactor applies confirmed corrections, finding by itself
 the older statement they replace, and carries pending ones over to the new
-`draft.md`. A change of mind is a new correction; the most recent wins.
+`draft.md`. A confirmation appended while a compaction runs is carried over with
+its correction, for the next compaction. A change of mind is a new correction;
+the most recent wins.
 
 ### digest.md
 
@@ -301,8 +304,10 @@ asking it. Rebuilt in the background at each session start from
 
 For the `memsift` dataset, only this repo's packets are listed (their names
 start with the repo name), newest first. Every other dataset not marked
-`IGNORED` is listed in full. The file is cut, oldest `memsift` packets first, so
-it stays under 1 000 tokens. Packets sent by the compactor are named
+`IGNORED` is listed in full when it fits. The file stays under 1 000 tokens: it
+is cut, oldest `memsift` packets first, then the item lists of the other
+datasets, each cut from its end to an equal share. Dataset names never are. A
+cut is written to `debug.log`. Packets sent by the compactor are named
 `<repo name> <date> <time> <topics>` so that Jev can read them (part 5).
 
 memsift writes only to its own dataset, `memsift` by default
@@ -310,8 +315,11 @@ memsift writes only to its own dataset, `memsift` by default
 
 ### pending.jsonl
 
-Per repo. One JSON object per turn while Jev is paused (part 6), sorted by Jev
-on `/memsift-resume`, then the file is deleted.
+Per repo. One JSON object per turn that Jev could not sort: while Jev is paused
+(part 6), or when the stop hook's Jev call failed (timeout, error, rate limit).
+Sorted by Jev on `/memsift-resume`, or by the next successful stop hook in that
+repo, then the file is deleted. One sorter at a time per repo, under
+`replay.lock`; a second one finding it taken does nothing.
 
 ```json
 {"ts": "2026-10-14T07:31:02Z", "session": "a1b2…", "prompt": "…", "answer": "…", "actions": ["Edit src/header.tsx", "git commit"]}
@@ -331,6 +339,7 @@ behind, so session start removes session files older than 7 days.
 ```json
 {
   "repo_key": "acme-shop-3f2a91",
+  "repo_root": "/home/dev/code/acme-shop",
   "host": "claude-code",
   "source": "startup",
   "started_at": "2026-10-14T07:02:10Z",
@@ -338,23 +347,26 @@ behind, so session start removes session files older than 7 days.
   "prompt": "commit it",
   "snapshot": "9b1e…",
   "actions": [
-    {"turn": 2, "items": ["Edit src/product-grid.tsx: grid-cols-10 → grid-cols-12"]},
-    {"turn": 3, "items": ["Bash: git commit -m \"product grid in 12 columns\" (ok)"]}
+    {"turn": 2, "prompt": "the product grid has 12 columns, not 10",
+     "items": ["Edit src/product-grid.tsx: grid-cols-10 → grid-cols-12"]},
+    {"turn": 3, "prompt": "commit it",
+     "items": ["Bash: git commit -m \"product grid in 12 columns\" (ok)"]}
   ],
   "flags": ["jev_md_missing"],
-  "outage_notice_sent": false
+  "outage_notices": []
 }
 ```
 
 | Field | Meaning |
 |---|---|
+| `repo_root` | absolute path of the repo, found at session start; later hooks read it from here |
 | `source` | how the session started: `startup`, `resume`, `clear`, `compact`; `fork` is stored as `resume` |
 | `turn` | number of the current turn, increased by the prompt hook |
 | `prompt` | the current prompt, kept by the prompt hook for the stop hook |
 | `snapshot` | hash of the repo state (`HEAD` and the uncommitted diff), to tell whether a command changed something (part 3) |
-| `actions` | the action notes of the last 5 turns (part 3); an `Edit` keeps a diff of about 200 characters, a `Write` only its file name |
+| `actions` | the action notes of the last 5 turns (part 3); an `Edit` keeps a diff of about 200 characters, a `Write` only its file name. `prompt` holds the first 200 characters of that turn's prompt, to attach the note to the right exchange of the transcript |
 | `flags` | messages for the agent at the next prompt: `jev_md_missing`, `jev_md_outdated`, `dataset_undescribed:<name>`, `decision_reason_missing:<id>` |
-| `outage_notice_sent` | the one-line outage notice was already given (part 6) |
+| `outage_notices` | services whose outage notice was already given in this session (part 6) |
 
 ### jev.md
 
@@ -403,7 +415,10 @@ never fails the host: any error is written to `debug.log` with its traceback
 (part 7) and the hook returns nothing.
 
 **Background work.** The hook starts a detached copy of `run.py` with the same
-input and returns at once. The detached process outlives the hook, and the
+input, plus everything it needs from the session file (prompt, action notes,
+repo root), and returns at once. A detached process never recreates a session
+file that session end has deleted: its flags are then dropped. An entry appended
+after the session-end compaction stays in `draft.md` for the next one. The detached process outlives the hook, and the
 session, so closing the agent never waits for memsift.
 
 memsift registers no `PreCompact` hook: every turn worth keeping is already in
@@ -432,8 +447,8 @@ The only hook the user waits for.
 
 ```
 input    session_id, prompt, transcript_path
-does     1. memsift paused (part 6)?  → outage notice once, then nothing
-         2. turn + 1; keeps the prompt in the session file
+does     1. turn + 1; keeps the prompt in the session file
+         2. memsift paused (part 6)?  → outage notice once, then nothing
          3. Jev, one request, 2 s at most:
               ① is the agent missing information that already exists?
               ② for each notes entry: does it hold what is missing?
@@ -507,6 +522,8 @@ User: same for the header
 the summary, then the oldest draft entries. The prompt, the questions and
 `jev.md` are never cut. If Jev still refuses the request as too large, it is
 retried once with half the recent exchanges; if that fails, nothing is pasted.
+If the prompt, the questions and `jev.md` alone are too large, nothing is pasted
+and the error is logged.
 
 **What the agent receives.** One block per source, entries pasted as they are,
 since Jev cannot write. When nothing was kept and no flag is pending, the hook
@@ -547,15 +564,17 @@ Builds the turn's action note, in code. Nothing is sent anywhere.
 | any edit outside the repo (`/tmp`, scratchpad) | ignored |
 | `Bash` that changed the repo | `Bash: <command> (ok)` |
 | `Bash` that changed nothing | ignored |
-| a command that failed, then succeeded in the same turn | `Bash: <command> failed → ok`, marked as a possible lesson |
+| a command that failed, then succeeded in the same turn | `Bash: <command> failed → ok`, marked as a possible lesson, even if the repo did not change |
+| a command that failed and was not run again in the turn | ignored |
 | any other tool (reads, searches, web) | ignored |
 
 **Did a command change the repo?** memsift compares a snapshot of the repo
 taken after the call with the one kept in the session file. The snapshot is a
 hash of `HEAD` and of the uncommitted diff (`git diff HEAD` plus the list of
 untracked files), so it catches a commit, a new file, and a further change to
-an already modified file alike. It costs one `git` call of a few tens of
-milliseconds. It is refreshed after every edit too, so the next command is
+an already modified file alike. It costs three short `git` calls (`rev-parse
+HEAD`, `diff HEAD`, `ls-files --others --exclude-standard`), a few tens of
+milliseconds in all. It is refreshed after every edit too, so the next command is
 compared with an up-to-date state. Outside a git repo, commands are not noted.
 
 The action notes of the last 5 turns are kept in the session file.
@@ -567,6 +586,7 @@ Runs in the background; the agent never waits for it.
 ```
 input    session_id, last_assistant_message, transcript_path
 does     1. memsift paused?  → appends the turn to pending.jsonl, stops
+            pending.jsonl not empty → sorts it first (part 6)
          2. Jev, one request (part 4):
               nature: working_rule (this project) / decision / project_fact /
                       lesson / nothing
@@ -584,7 +604,9 @@ returns  nothing
 ```
 
 The prompt comes from the session file, the answer from
-`last_assistant_message`, the action note from the session file.
+`last_assistant_message`, the action note from the session file. If the Jev
+call fails (timeout, error, rate limit), the turn is appended to
+`pending.jsonl` instead of being lost.
 
 **What Jev reads.** About 21 000 tokens:
 
@@ -595,6 +617,10 @@ The prompt comes from the session file, the answer from
 | `jev.md` | ≤ 3 000 |
 | `CLAUDE.md` and `AGENTS.md` at the repo root, those that exist | ≤ 3 000 together |
 | working notes | ≤ 10 000 |
+| recent exchanges, only when a correction is pending | ≤ 3 000 |
+
+Over budget: the turn is cut with the start-and-end rule, the instruction files
+keep their start, the notes lose their oldest entries.
 
 `CLAUDE.md` and `AGENTS.md` are the same kind of file under two conventions
 and are treated alike. Only the repo's own are read: general working rules are
@@ -730,7 +756,8 @@ Sent by the stop hook, in the background, and for each turn of
   "project_card": "<jev.md>",
   "instruction_files": "<CLAUDE.md and AGENTS.md at the repo root>",
   "notes": {"g1": "…", "d3": "…"},
-  "pending_corrections": {"d4": "…"}
+  "pending_corrections": {"d4": "…"},
+  "recent_exchanges": "…"
 }
 ```
 
@@ -739,13 +766,15 @@ Sent by the stop hook, in the background, and for each turn of
 | `nature` | choice | What kind of information does `turn` carry? |
 | `scope` | score | How long does it stay true? |
 | `correction` | noul | Does the user correct the agent in `turn`? |
-| `confirmed_<id>` | noul | Do `turn` and `recent_actions` confirm `pending_corrections.<id>`: applied, and not taken back? |
+| `confirmed_<id>` | noul | Do `turn`, `recent_actions` and `recent_exchanges` confirm `pending_corrections.<id>`: applied, and not taken back? |
 | `known` | noul | Is it already in `notes` or `instruction_files`, or written this turn to a file listed under "documented in" in `project_card` (an edit in `turn.actions`)? |
 | `card_outdated` | noul | Does `turn` make `project_card` outdated: a new stake, a change of phase, or a contradiction? |
 | `reason_missing` | noul | Does `turn` take a structuring decision without giving its reason? |
 
-`card_outdated` is asked only when `jev.md` exists, `confirmed_<id>` only for
-pending corrections.
+`card_outdated` is asked only when `jev.md` exists, `confirmed_<id>` and
+`recent_exchanges` only when corrections are pending. `recent_exchanges` is the
+transcript tail read as in the prompt hook, so a correction taken back in a
+text-only turn is not confirmed by an older edit.
 
 `nature` options:
 
@@ -810,19 +839,25 @@ does nothing, since the running one will empty the draft.
 ### What it does
 
 ```
-1. reads digest.md and draft.md, and remembers where draft.md ended
+1. reads digest.md and draft.md, and remembers where draft.md ended;
+   a draft holding only pending corrections → stops, nothing to compact
 2. the compactor, one request → new digest + packet
 3. code checks the answer (schema, ids, length, and a digest that comes back
-   empty while the notes had lines); invalid → one retry; invalid again →
-   nothing is written, the notes stay as they were
+   empty while the input had a digest line or a working_rule, decision or
+   project_fact entry); invalid → one retry; invalid again → nothing is
+   written, the notes stay as they were
    every invalid answer is written to debug.log with its reason (part 7)
-4. rewrites digest.md
-5. rewrites draft.md: keeps the lines appended since step 1 and the
+4. writes the packet to the outbox
+5. rewrites digest.md
+6. rewrites draft.md: keeps the lines appended since step 1 and the
    corrections still pending
-6. sends the packet to Cognee, dataset memsift (part 6 if Cognee is down)
+7. sends the outbox to Cognee, dataset memsift (part 6 if Cognee is down)
 ```
 
-Jev keeps reading the old notes until step 4; nothing is lost if a turn ends
+A crash after step 4 leaves a packet that is sent later and notes not yet
+rewritten; the next compaction may then send overlapping content once.
+
+Jev keeps reading the old notes until step 5; nothing is lost if a turn ends
 during the compaction.
 
 ### Compactor request
@@ -907,7 +942,9 @@ acme-shop 2026-10-14 15h32 header grid, sharp.txt
 ```
 
 The time keeps names unique: Cognee refuses a known name with different
-content.
+content. If the name is already in the outbox, or Cognee answers 409 anyway,
+` (2)`, ` (3)`… is added before `.txt`. Two clones with the same directory name
+share the name prefix: an accepted limit.
 
 ### Calibration
 
@@ -932,6 +969,7 @@ Each of the three services (Jev, the compactor, Cognee) has its own counter in
 | no answer, timeout, HTTP 5xx | counter + 1; at 3, the service is paused |
 | HTTP 401 or 403 (key refused) | paused at once: retrying cannot help |
 | HTTP 429 or 529 (rate limited, overloaded) | not counted: this turn goes without the service |
+| any other HTTP 4xx | counter + 1, except a Cognee recall 404 meaning the dataset is empty, which is an empty result |
 | compactor answer invalid twice (part 5) | counter + 1 |
 
 ```json
@@ -959,7 +997,7 @@ A pause covers every session on the machine at once, and one
 ### Telling the agent
 
 At the next prompt of each session, the prompt hook adds one line for each
-paused service, once per session (`outage_notice_sent`):
+paused service, once per session (`outage_notices`):
 
 ```
 memsift is paused: Jev stopped answering (3 failures: timeout). Memory is off.
@@ -990,12 +1028,15 @@ is deleted once Cognee has accepted it.
 ### /memsift-resume
 
 ```
-1. tests each paused service with one small call
+1. tests each paused service with one small call; a test never changes a
+   counter, only a successful resume does
 2. the ones that answer are resumed, counters back to 0;
    the others stay paused, and the summary says why
-3. Cognee resumed → sends the outbox
+3. Cognee resumed → sends the outbox of every repo
 4. Jev resumed    → sorts this repo's pending.jsonl now (one stop request per
                     turn, part 4), then deletes it
+   every resumed service leaves the outage_notices of running sessions, so a
+   later outage is announced again
 5. prints a summary:
    Jev ✓ · 12 turns sorted, 3 kept · Cognee ✗ still unreachable (timeout)
 ```
@@ -1006,6 +1047,8 @@ once Jev is back, in the background: sorting needs the repo's own `jev.md`.
 ### /memsift-doctor
 
 One line per check, `✓` or `✗` with what to do. Key values are never printed.
+Its service checks are one small call each, paused or not, and never change a
+counter.
 
 ```
 ✓ Python 3.12
@@ -1102,8 +1145,8 @@ What each module checks:
 | `test_transcript` | Claude Code: only the last summary after the last marker is read; tool calls replaced by action notes · Codex: the encrypted summary is skipped, the user messages kept in clear are read · the over-budget cut order of part 3 · a transcript of several MB is read from the end, not loaded whole |
 | `test_actions` | in a temporary git repo: an edit in the repo is noted with a diff of at most 200 characters · a write keeps the file name only · edits outside the repo are ignored · a read-only command is ignored · a command changing an already modified file is noted · a commit is noted · outside git, commands are not noted · failed then succeeded is marked · Codex `apply_patch` is noted like an edit · only the last 5 turns are kept |
 | `test_decisions` | table-driven, probabilities in, outcome out: the prompt cascade (thresholds and their boundaries, dataset fallback to the highest) · the passage rule · the stop rule, including the lower bar for corrections · confirmed corrections · each flag given once, then removed |
-| `test_compaction` | lines appended during a compaction survive it · pending corrections are carried over · an invalid answer twice writes nothing and counts one failure · an empty digest from notes that had lines is refused, retried and logged with its reason · an over-long digest loses its oldest lines of the last section · lines are numbered `g1`… by code · a second compaction finding the lock does nothing · packet names carry the time · Cognee down puts the packet in the outbox |
-| `test_failures` | 3 timeouts pause a service · 401 pauses at once · 429 and 529 are not counted · a success resets the counter · the notice is given once per session · a pause seen by one session applies to all · `/memsift-resume` tests, resumes, sends the outbox, sorts this repo's `pending.jsonl` and prints its summary · another repo's pending turns are sorted by its first stop |
+| `test_compaction` | lines appended during a compaction survive it · pending corrections are carried over · an invalid answer twice writes nothing and counts one failure · an empty digest from notes that had lines is refused, retried and logged with its reason · an over-long digest loses its oldest lines of the last section · lines are numbered `g1`… by code · a second compaction finding the lock does nothing · packet names carry the time, and a taken name gets ` (2)` · the packet is in the outbox before `digest.md` is rewritten · Cognee down leaves the packet in the outbox · a draft of pending corrections only makes no model call · a lessons-only draft may give an empty digest · a confirmation appended during a compaction is carried over with its correction |
+| `test_failures` | 3 timeouts pause a service · 401 pauses at once · 429 and 529 are not counted · a success resets the counter · the notice is given once per session · a pause seen by one session applies to all · `/memsift-resume` tests, resumes, sends the outbox, sorts this repo's `pending.jsonl` and prints its summary · another repo's pending turns are sorted by its first stop · a stop whose Jev call times out queues its turn in `pending.jsonl` · two sorters on one repo sort each turn once · a test call during resume or doctor changes no counter |
 | `test_hooks` | `run.py` end to end for every event and host, against the fake server: output shape per host · background hooks return in under a second · the prompt hook returns nothing within about 2 s when Jev takes 3 s · an exception inside the core still exits 0 and is in `debug.log` with its traceback |
 | `test_doctor` | each check reports ✓ and ✗ correctly · no key value appears in the output |
 
@@ -1117,8 +1160,11 @@ Calibration calls real models, so each script first prints its estimated cost
 and waits for confirmation. Labelled data stays outside the repo.
 
 - `tests/calibrate_jev.py <labels.jsonl>`: each line holds a prompt, the notes
-  and conversation it came with, and the expected outcome (nothing, which
-  entries, or Cognee). Prints the thresholds that match the labels best, how
+  and conversation it came with, and the expected outcome (`"nothing"`,
+  `{"entries": [...]}` or `{"cognee": true}`). Optional `datasets` (name →
+  description and items) and `session_start`; without them, one dataset
+  `memory` described as past work, decisions and lessons of the project, and a
+  new session. Prints the thresholds that match the labels best, how
   often Cognee would be asked, and the checks listed in part 4.
 - `tests/compare_compactors.py <draft.md>`: compacts the same draft with each
   model of part 5 and prints the results side by side, for a person to judge
