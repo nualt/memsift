@@ -1,0 +1,7 @@
+{
+  "session_id": "acme-shop-session",
+  "transcript_path": "{transcript}",
+  "cwd": "{repo}",
+  "hook_event_name": "SessionStart",
+  "source": "resume"
+}

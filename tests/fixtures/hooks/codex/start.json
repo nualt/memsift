@@ -1,0 +1,9 @@
+{
+  "session_id": "acme-shop-session",
+  "transcript_path": "{transcript}",
+  "cwd": "{repo}",
+  "hook_event_name": "SessionStart",
+  "model": "invented-model",
+  "permission_mode": "default",
+  "source": "startup"
+}

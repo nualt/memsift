@@ -1,0 +1,33 @@
+{
+  "session_id": "acme-shop-session",
+  "transcript_path": "{transcript}",
+  "cwd": "{repo}",
+  "hook_event_name": "PostToolUse",
+  "prompt_id": "acme-shop-prompt",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "tool_name": "NotebookEdit",
+  "tool_input": {
+    "notebook_path": "{repo}/analysis/catalog.ipynb",
+    "cell_id": "acme-shop-cell",
+    "new_source": "catalog_columns = 12",
+    "cell_type": "code",
+    "edit_mode": "replace"
+  },
+  "tool_use_id": "acme-shop-notebook",
+  "duration_ms": 12,
+  "tool_response": {
+    "notebook_path": "{repo}/analysis/catalog.ipynb",
+    "cell_id": "acme-shop-cell",
+    "new_source": "catalog_columns = 12",
+    "cell_type": "code",
+    "edit_mode": "replace",
+    "old_source": "catalog_columns = 6",
+    "language": "python",
+    "error": "",
+    "original_file": "{\"cells\": [{\"id\": \"acme-shop-cell\", \"source\": [\"catalog_columns = 6\"]}]}",
+    "updated_file": "{\"cells\": [{\"id\": \"acme-shop-cell\", \"source\": [\"catalog_columns = 12\"]}]}"
+  }
+}

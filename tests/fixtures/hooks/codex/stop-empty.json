@@ -1,0 +1,11 @@
+{
+  "session_id": "acme-shop-session",
+  "transcript_path": "{transcript}",
+  "cwd": "{repo}",
+  "hook_event_name": "Stop",
+  "model": "invented-model",
+  "permission_mode": "default",
+  "turn_id": "acme-shop-turn",
+  "stop_hook_active": false,
+  "last_assistant_message": ""
+}

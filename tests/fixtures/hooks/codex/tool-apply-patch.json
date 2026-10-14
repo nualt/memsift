@@ -1,0 +1,15 @@
+{
+  "session_id": "acme-shop-session",
+  "transcript_path": "{transcript}",
+  "cwd": "{repo}",
+  "hook_event_name": "PostToolUse",
+  "model": "invented-model",
+  "permission_mode": "default",
+  "turn_id": "acme-shop-turn",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Update File: {repo}/src/header.tsx\n@@\n-<header className=\"grid-cols-6\" />\n+<header className=\"grid-cols-12\" />\n*** Add File: {repo}/src/catalog.tsx\n+export const catalogColumns = 12;\n*** Delete File: {repo}/src/legacy.tsx\n*** End Patch"
+  },
+  "tool_response": "DO_NOT_SEND_TOOL_OUTPUT",
+  "tool_use_id": "acme-shop-patch"
+}

@@ -1,0 +1,9 @@
+{
+  "session_id": "acme-shop-session",
+  "transcript_path": "{transcript}",
+  "cwd": "{repo}",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt_id": "acme-shop-prompt",
+  "permission_mode": "default",
+  "prompt": "Keep the product grid at twelve columns."
+}

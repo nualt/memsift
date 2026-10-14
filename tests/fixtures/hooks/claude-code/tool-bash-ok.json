@@ -1,0 +1,25 @@
+{
+  "session_id": "acme-shop-session",
+  "transcript_path": "{transcript}",
+  "cwd": "{repo}",
+  "hook_event_name": "PostToolUse",
+  "prompt_id": "acme-shop-prompt",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "python3 -m unittest tests.test_catalog",
+    "description": "Check the acme-shop catalog"
+  },
+  "tool_use_id": "acme-shop-bash-ok",
+  "duration_ms": 12,
+  "tool_response": {
+    "stdout": "DO_NOT_SEND_TOOL_OUTPUT",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  }
+}

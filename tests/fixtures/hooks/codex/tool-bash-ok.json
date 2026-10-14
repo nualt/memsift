@@ -1,0 +1,15 @@
+{
+  "session_id": "acme-shop-session",
+  "transcript_path": "{transcript}",
+  "cwd": "{repo}",
+  "hook_event_name": "PostToolUse",
+  "model": "invented-model",
+  "permission_mode": "default",
+  "turn_id": "acme-shop-turn",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "python3 -m unittest tests.test_catalog"
+  },
+  "tool_response": "DO_NOT_SEND_TOOL_OUTPUT",
+  "tool_use_id": "acme-shop-bash-ok"
+}

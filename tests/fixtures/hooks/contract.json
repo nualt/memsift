@@ -1,0 +1,770 @@
+{
+  "project": "acme-shop",
+  "captured_on": "2026-10-14",
+  "paths": {
+    "{repo}": "temporary acme-shop repository root",
+    "{transcript}": "temporary synthetic JSONL transcript"
+  },
+  "hosts": {
+    "claude-code": {
+      "version": "2.1.299",
+      "verified_events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd",
+        "PostToolUse",
+        "PostToolUseFailure"
+      ],
+      "source_values": [
+        "startup",
+        "resume",
+        "clear",
+        "compact",
+        "fork"
+      ],
+      "captured_sources": [
+        "startup"
+      ],
+      "sources": {
+        "startup": "captured",
+        "resume": "schema",
+        "clear": "schema",
+        "compact": "schema",
+        "fork": "schema"
+      },
+      "source_normalization": {
+        "fork": "resume"
+      },
+      "event_fields": {
+        "SessionStart": {
+          "session_id": "string",
+          "transcript_path": "string",
+          "cwd": "string",
+          "hook_event_name": "string",
+          "source": "string"
+        },
+        "UserPromptSubmit": {
+          "session_id": "string",
+          "transcript_path": "string",
+          "cwd": "string",
+          "hook_event_name": "string",
+          "prompt_id": "string",
+          "permission_mode": "string",
+          "prompt": "string"
+        },
+        "Stop": {
+          "session_id": "string",
+          "transcript_path": "string",
+          "cwd": "string",
+          "hook_event_name": "string",
+          "prompt_id": "string",
+          "permission_mode": "string",
+          "effort": "object",
+          "stop_hook_active": "boolean",
+          "last_assistant_message": "string",
+          "background_tasks": "array",
+          "session_crons": "array"
+        },
+        "SessionEnd": {
+          "session_id": "string",
+          "transcript_path": "string",
+          "cwd": "string",
+          "hook_event_name": "string",
+          "prompt_id": "string",
+          "reason": "string"
+        },
+        "PostToolUse": {
+          "session_id": "string",
+          "transcript_path": "string",
+          "cwd": "string",
+          "hook_event_name": "string",
+          "prompt_id": "string",
+          "permission_mode": "string",
+          "effort": "object",
+          "tool_name": "string",
+          "tool_input": "object",
+          "tool_use_id": "string",
+          "duration_ms": "integer",
+          "tool_response": "object"
+        },
+        "PostToolUseFailure": {
+          "session_id": "string",
+          "transcript_path": "string",
+          "cwd": "string",
+          "hook_event_name": "string",
+          "prompt_id": "string",
+          "permission_mode": "string",
+          "effort": "object",
+          "tool_name": "string",
+          "tool_input": "object",
+          "tool_use_id": "string",
+          "duration_ms": "integer",
+          "error": "string",
+          "is_interrupt": "boolean"
+        }
+      },
+      "normalized_fields": {
+        "session_id": "session_id",
+        "cwd": "cwd",
+        "source": "source",
+        "transcript_path": "transcript_path",
+        "prompt": "prompt",
+        "answer": "last_assistant_message",
+        "tool": {
+          "name": "tool_name",
+          "Edit.path": "tool_input.file_path",
+          "Edit.diff": [
+            "tool_input.old_string",
+            "tool_input.new_string"
+          ],
+          "Write.path": "tool_input.file_path",
+          "MultiEdit.path": "tool_input.file_path",
+          "MultiEdit.edits": "tool_input.edits",
+          "NotebookEdit.path": "tool_input.notebook_path",
+          "NotebookEdit.diff": [
+            "tool_response.old_source",
+            "tool_input.new_source"
+          ],
+          "Bash.command": "tool_input.command",
+          "Bash.exit_code": "PostToolUseFailure.error: Exit code N",
+          "Bash.success_exit_code": null
+        }
+      },
+      "fixtures": {
+        "start": {
+          "event": "SessionStart",
+          "evidence": "captured"
+        },
+        "start-resume": {
+          "event": "SessionStart",
+          "evidence": "schema"
+        },
+        "start-clear": {
+          "event": "SessionStart",
+          "evidence": "schema"
+        },
+        "start-compact": {
+          "event": "SessionStart",
+          "evidence": "schema"
+        },
+        "start-fork": {
+          "event": "SessionStart",
+          "evidence": "schema"
+        },
+        "prompt": {
+          "event": "UserPromptSubmit",
+          "evidence": "captured"
+        },
+        "stop": {
+          "event": "Stop",
+          "evidence": "captured"
+        },
+        "stop-empty": {
+          "event": "Stop",
+          "evidence": "schema"
+        },
+        "end": {
+          "event": "SessionEnd",
+          "evidence": "captured"
+        },
+        "tool-edit": {
+          "event": "PostToolUse",
+          "evidence": "captured"
+        },
+        "tool-write": {
+          "event": "PostToolUse",
+          "evidence": "captured"
+        },
+        "tool-bash-failed": {
+          "event": "PostToolUseFailure",
+          "evidence": "captured"
+        },
+        "tool-bash-ok": {
+          "event": "PostToolUse",
+          "evidence": "captured"
+        },
+        "tool-multiedit": {
+          "event": "PostToolUseFailure",
+          "evidence": "legacy_schema",
+          "description": "Legacy MultiEdit input in the documented failure envelope; no captured native success response."
+        },
+        "tool-notebookedit": {
+          "event": "PostToolUse",
+          "evidence": "schema"
+        },
+        "tool-failure": {
+          "event": "PostToolUseFailure",
+          "evidence": "schema"
+        }
+      },
+      "prompt_output": {
+        "evidence": "schema",
+        "live_delivery": "live_unverified",
+        "empty": "",
+        "envelope": {
+          "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": "{context}"
+          }
+        }
+      },
+      "non_prompt_output": "",
+      "commands": {
+        "names": [
+          "memsift-resume",
+          "memsift-doctor"
+        ],
+        "registration": "commands/*.md",
+        "status": "live_unverified"
+      },
+      "support": {
+        "cwd_all_events": "captured",
+        "failed_commands": "captured",
+        "apply_patch": "not_applicable",
+        "root_source": "live_unverified",
+        "root_source_candidate": "./",
+        "MultiEdit": "legacy_input_schema_only",
+        "successful_bash_exit_code": "absent; keep unknown, never infer zero"
+      },
+      "evidence": [
+        "synthetic coordinator hook capture",
+        "https://code.claude.com/docs/en/hooks",
+        "installed NotebookEdit input/output schemas and compaction serializer",
+        "https://github.com/anthropics/claude-plugins-official/blob/main/plugins/hookify/core/rule_engine.py"
+      ]
+    },
+    "codex": {
+      "version": "0.162.1",
+      "verified_events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd"
+      ],
+      "source_values": [
+        "startup",
+        "resume",
+        "clear",
+        "compact",
+        "fork"
+      ],
+      "captured_sources": [
+        "startup"
+      ],
+      "sources": {
+        "startup": "captured",
+        "resume": "schema",
+        "clear": "schema",
+        "compact": "schema",
+        "fork": "schema"
+      },
+      "source_normalization": {
+        "fork": "resume"
+      },
+      "event_fields": {
+        "SessionStart": {
+          "session_id": "string",
+          "transcript_path": "string",
+          "cwd": "string",
+          "hook_event_name": "string",
+          "model": "string",
+          "permission_mode": "string",
+          "source": "string"
+        },
+        "UserPromptSubmit": {
+          "session_id": "string",
+          "transcript_path": "string",
+          "cwd": "string",
+          "hook_event_name": "string",
+          "model": "string",
+          "permission_mode": "string",
+          "turn_id": "string",
+          "prompt": "string"
+        },
+        "Stop": {
+          "session_id": "string",
+          "transcript_path": "string",
+          "cwd": "string",
+          "hook_event_name": "string",
+          "model": "string",
+          "permission_mode": "string",
+          "turn_id": "string",
+          "stop_hook_active": "boolean",
+          "last_assistant_message": "string"
+        },
+        "SessionEnd": {
+          "session_id": "string",
+          "transcript_path": "string",
+          "cwd": "string",
+          "hook_event_name": "string",
+          "reason": "string"
+        },
+        "PostToolUse": {
+          "session_id": "string",
+          "transcript_path": "string",
+          "cwd": "string",
+          "hook_event_name": "string",
+          "model": "string",
+          "permission_mode": "string",
+          "turn_id": "string",
+          "tool_name": "string",
+          "tool_input": "object",
+          "tool_response": "string",
+          "tool_use_id": "string"
+        }
+      },
+      "normalized_fields": {
+        "session_id": "session_id",
+        "cwd": "cwd",
+        "source": "source",
+        "transcript_path": "transcript_path",
+        "prompt": "prompt",
+        "answer": "last_assistant_message",
+        "tool": {
+          "name": "tool_name",
+          "apply_patch.patch": "tool_input.command",
+          "Bash.command": "tool_input.command",
+          "Bash.exit_code": "transcript: event_msg.payload.item.exit_code",
+          "Bash.result_match": "payload.type=item_completed, item.type=CommandExecution, item.id=tool_use_id",
+          "Bash.success_exit_code": null
+        }
+      },
+      "fixtures": {
+        "start": {
+          "event": "SessionStart",
+          "evidence": "captured"
+        },
+        "start-resume": {
+          "event": "SessionStart",
+          "evidence": "schema"
+        },
+        "start-clear": {
+          "event": "SessionStart",
+          "evidence": "schema"
+        },
+        "start-compact": {
+          "event": "SessionStart",
+          "evidence": "schema"
+        },
+        "start-fork": {
+          "event": "SessionStart",
+          "evidence": "schema"
+        },
+        "prompt": {
+          "event": "UserPromptSubmit",
+          "evidence": "captured"
+        },
+        "stop": {
+          "event": "Stop",
+          "evidence": "captured"
+        },
+        "stop-empty": {
+          "event": "Stop",
+          "evidence": "schema"
+        },
+        "end": {
+          "event": "SessionEnd",
+          "evidence": "captured"
+        },
+        "tool-bash-failed": {
+          "event": "PostToolUse",
+          "evidence": "captured"
+        },
+        "tool-bash-ok": {
+          "event": "PostToolUse",
+          "evidence": "captured"
+        },
+        "tool-edit": {
+          "event": "PostToolUse",
+          "evidence": "captured"
+        },
+        "tool-write": {
+          "event": "PostToolUse",
+          "evidence": "schema"
+        },
+        "tool-apply-patch": {
+          "event": "PostToolUse",
+          "evidence": "schema"
+        }
+      },
+      "prompt_output": {
+        "evidence": "schema",
+        "live_delivery": "live_unverified",
+        "empty": "",
+        "envelope": {
+          "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": "{context}"
+          }
+        }
+      },
+      "non_prompt_output": "",
+      "commands": {
+        "names": [
+          "memsift-resume",
+          "memsift-doctor"
+        ],
+        "registration": null,
+        "status": "live_unverified"
+      },
+      "support": {
+        "cwd_all_events": "captured",
+        "failed_commands": "captured",
+        "apply_patch": "captured",
+        "root_source": "live_unverified",
+        "root_source_candidate": "./",
+        "PostToolUseFailure": "not_supported; failed Bash uses PostToolUse",
+        "successful_bash_exit_code": "read matching CommandExecution item from transcript"
+      },
+      "evidence": [
+        "synthetic coordinator hook capture",
+        "installed static hook schemas",
+        "https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/history/src/rollout_payload.rs",
+        "https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/protocol/src/models.rs"
+      ],
+      "nullable_fields": [
+        "transcript_path"
+      ]
+    }
+  },
+  "transcripts": {
+    "claude-code-plain.jsonl": {
+      "evidence": "captured_message_shapes",
+      "compactions": 0,
+      "expected": {
+        "latest_summary": "",
+        "recent_user": "Keep the product grid at twelve columns.",
+        "assistant_text": "The acme-shop product grid is updated and its checks pass.",
+        "latest_actions": [],
+        "retraction_before_commit": "I retract the header correction; do not treat the next commit as confirmation."
+      },
+      "actions": [
+        {
+          "turn": 1,
+          "prompt": "Restore the acme-shop catalog spacing.",
+          "items": [
+            "Edit src/catalog.tsx: gap-1 → gap-2"
+          ]
+        },
+        {
+          "turn": 1,
+          "prompt": "Update the acme-shop product grid.",
+          "items": [
+            "Edit src/header.tsx: grid-cols-6 → grid-cols-12",
+            "Bash: python3 -m unittest tests.test_catalog failed → ok"
+          ]
+        },
+        {
+          "turn": 2,
+          "prompt": "Align the header with the footer grid.",
+          "items": [
+            "Edit src/header.tsx: align-start → align-center"
+          ]
+        },
+        {
+          "turn": 4,
+          "prompt": "Commit the acme-shop catalog spacing.",
+          "items": [
+            "Bash: git commit -m \"acme-shop catalog spacing\" (ok)"
+          ]
+        },
+        {
+          "turn": 5,
+          "prompt": "Remove an absent acme-shop badge.",
+          "items": [
+            "UNMATCHED_ACTION"
+          ]
+        }
+      ],
+      "unmatched_prompt": "Remove an absent acme-shop badge.",
+      "repeated_prompt": "Align the header with the footer grid.",
+      "exclusions": [
+        "OLD_SUMMARY",
+        "DO_NOT_SEND_TOOL_OUTPUT",
+        "ENCRYPTED_SUMMARY",
+        "DO_NOT_SEND_REASONING",
+        "UNMATCHED_ACTION"
+      ]
+    },
+    "claude-code-compacted.jsonl": {
+      "evidence": "captured_message_shapes_with_schema_compactions",
+      "compactions": 2,
+      "expected": {
+        "latest_summary": "The acme-shop header uses the footer grid.",
+        "recent_user": "Keep the product grid at twelve columns.",
+        "assistant_text": "The acme-shop product grid is updated and its checks pass.",
+        "latest_actions": [],
+        "retraction_before_commit": "I retract the header correction; do not treat the next commit as confirmation."
+      },
+      "actions": [
+        {
+          "turn": 1,
+          "prompt": "Restore the acme-shop catalog spacing.",
+          "items": [
+            "Edit src/catalog.tsx: gap-1 → gap-2"
+          ]
+        },
+        {
+          "turn": 1,
+          "prompt": "Update the acme-shop product grid.",
+          "items": [
+            "Edit src/header.tsx: grid-cols-6 → grid-cols-12",
+            "Bash: python3 -m unittest tests.test_catalog failed → ok"
+          ]
+        },
+        {
+          "turn": 2,
+          "prompt": "Align the header with the footer grid.",
+          "items": [
+            "Edit src/header.tsx: align-start → align-center"
+          ]
+        },
+        {
+          "turn": 4,
+          "prompt": "Commit the acme-shop catalog spacing.",
+          "items": [
+            "Bash: git commit -m \"acme-shop catalog spacing\" (ok)"
+          ]
+        },
+        {
+          "turn": 5,
+          "prompt": "Remove an absent acme-shop badge.",
+          "items": [
+            "UNMATCHED_ACTION"
+          ]
+        }
+      ],
+      "unmatched_prompt": "Remove an absent acme-shop badge.",
+      "repeated_prompt": "Align the header with the footer grid.",
+      "exclusions": [
+        "OLD_SUMMARY",
+        "DO_NOT_SEND_TOOL_OUTPUT",
+        "ENCRYPTED_SUMMARY",
+        "DO_NOT_SEND_REASONING",
+        "UNMATCHED_ACTION"
+      ]
+    },
+    "codex-plain.jsonl": {
+      "evidence": "captured_message_shapes",
+      "compactions": 0,
+      "expected": {
+        "latest_summary": "",
+        "recent_user": "Keep the product grid at twelve columns.",
+        "assistant_text": "The acme-shop product grid is updated and its checks pass.",
+        "latest_actions": [],
+        "retraction_before_commit": "I retract the header correction; do not treat the next commit as confirmation."
+      },
+      "actions": [
+        {
+          "turn": 1,
+          "prompt": "Restore the acme-shop catalog spacing.",
+          "items": [
+            "Edit src/catalog.tsx: gap-1 → gap-2"
+          ]
+        },
+        {
+          "turn": 1,
+          "prompt": "Update the acme-shop product grid.",
+          "items": [
+            "Edit src/header.tsx: grid-cols-6 → grid-cols-12",
+            "Bash: python3 -m unittest tests.test_catalog failed → ok"
+          ]
+        },
+        {
+          "turn": 2,
+          "prompt": "Align the header with the footer grid.",
+          "items": [
+            "Edit src/header.tsx: align-start → align-center"
+          ]
+        },
+        {
+          "turn": 4,
+          "prompt": "Commit the acme-shop catalog spacing.",
+          "items": [
+            "Bash: git commit -m \"acme-shop catalog spacing\" (ok)"
+          ]
+        },
+        {
+          "turn": 5,
+          "prompt": "Remove an absent acme-shop badge.",
+          "items": [
+            "UNMATCHED_ACTION"
+          ]
+        }
+      ],
+      "unmatched_prompt": "Remove an absent acme-shop badge.",
+      "repeated_prompt": "Align the header with the footer grid.",
+      "exclusions": [
+        "OLD_SUMMARY",
+        "DO_NOT_SEND_TOOL_OUTPUT",
+        "ENCRYPTED_SUMMARY",
+        "DO_NOT_SEND_REASONING",
+        "UNMATCHED_ACTION"
+      ]
+    },
+    "codex-compacted.jsonl": {
+      "evidence": "captured_message_shapes_with_schema_compactions",
+      "compactions": 2,
+      "expected": {
+        "latest_summary": "The acme-shop header uses the footer grid.",
+        "recent_user": "Keep the product grid at twelve columns.",
+        "assistant_text": "The acme-shop product grid is updated and its checks pass.",
+        "latest_actions": [],
+        "retraction_before_commit": "I retract the header correction; do not treat the next commit as confirmation."
+      },
+      "actions": [
+        {
+          "turn": 1,
+          "prompt": "Restore the acme-shop catalog spacing.",
+          "items": [
+            "Edit src/catalog.tsx: gap-1 → gap-2"
+          ]
+        },
+        {
+          "turn": 1,
+          "prompt": "Update the acme-shop product grid.",
+          "items": [
+            "Edit src/header.tsx: grid-cols-6 → grid-cols-12",
+            "Bash: python3 -m unittest tests.test_catalog failed → ok"
+          ]
+        },
+        {
+          "turn": 2,
+          "prompt": "Align the header with the footer grid.",
+          "items": [
+            "Edit src/header.tsx: align-start → align-center"
+          ]
+        },
+        {
+          "turn": 4,
+          "prompt": "Commit the acme-shop catalog spacing.",
+          "items": [
+            "Bash: git commit -m \"acme-shop catalog spacing\" (ok)"
+          ]
+        },
+        {
+          "turn": 5,
+          "prompt": "Remove an absent acme-shop badge.",
+          "items": [
+            "UNMATCHED_ACTION"
+          ]
+        }
+      ],
+      "unmatched_prompt": "Remove an absent acme-shop badge.",
+      "repeated_prompt": "Align the header with the footer grid.",
+      "exclusions": [
+        "OLD_SUMMARY",
+        "DO_NOT_SEND_TOOL_OUTPUT",
+        "ENCRYPTED_SUMMARY",
+        "DO_NOT_SEND_REASONING",
+        "UNMATCHED_ACTION"
+      ]
+    }
+  },
+  "jev": {
+    "evidence": "official_documentation",
+    "documentation": "https://docs.typesafe.ai/api",
+    "endpoint": "https://openrouter.ai/api/alpha/decisions",
+    "transport_evidence": "SPEC endpoint; TypeSafe question schema; no live request",
+    "question_fields": {
+      "required": [
+        "type",
+        "instructions"
+      ],
+      "instructions": [
+        "string",
+        "object",
+        "array"
+      ],
+      "noul": {
+        "criteria": "optional object with true/false descriptions",
+        "criteria_values": [
+          "string",
+          "object",
+          "array"
+        ]
+      },
+      "choice": {
+        "criteria": "required option-to-description object, up to 255 options",
+        "criteria_values": [
+          "string",
+          "object",
+          "array",
+          "null"
+        ]
+      },
+      "score": {
+        "criteria": "required ordered array with 2 to 10 level descriptions",
+        "criteria_values": [
+          "string",
+          "object",
+          "array"
+        ]
+      }
+    },
+    "answer_fields": {
+      "noul": [
+        "type",
+        "noul"
+      ],
+      "choice": [
+        "type",
+        "choice",
+        "probabilities",
+        "confidence"
+      ],
+      "score": [
+        "type",
+        "score",
+        "legend",
+        "probabilities",
+        "confidence"
+      ]
+    },
+    "request": {
+      "model": "typesafe/jev-1.13",
+      "state": {
+        "prompt": "Return to the acme-shop header.",
+        "notes": {
+          "d1": "The acme-shop header uses the footer grid."
+        }
+      },
+      "questions": {
+        "entry_d1": {
+          "type": "noul",
+          "instructions": "Would notes.d1 help answer prompt?",
+          "criteria": {
+            "true": "The note directly helps the current task.",
+            "false": "The note does not help the current task."
+          }
+        },
+        "nature": {
+          "type": "choice",
+          "instructions": "What is the nature of notes.d1?",
+          "criteria": {
+            "decision": "A choice that structures this project.",
+            "project_fact": "A fact about this project."
+          }
+        },
+        "scope": {
+          "type": "score",
+          "instructions": "How broad is the scope of notes.d1?",
+          "criteria": [
+            "This edit only",
+            "This project",
+            "Several projects"
+          ]
+        }
+      }
+    }
+  },
+  "gates": [
+    "Codex root plugin source ./ requires live installation verification.",
+    "Codex command registration and discovery of both commands require live verification.",
+    "Only startup was captured; other sources and prompt delivery require live verification.",
+    "Compaction fixtures use documented serializers, not captured compaction sessions.",
+    "Claude Code MultiEdit inputs are a documented legacy compatibility case, not a captured native tool."
+  ]
+}

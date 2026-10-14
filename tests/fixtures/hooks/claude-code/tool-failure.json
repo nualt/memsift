@@ -1,0 +1,22 @@
+{
+  "session_id": "acme-shop-session",
+  "transcript_path": "{transcript}",
+  "cwd": "{repo}",
+  "hook_event_name": "PostToolUseFailure",
+  "prompt_id": "acme-shop-prompt",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "{repo}/src/header.tsx",
+    "old_string": "grid-cols-6",
+    "new_string": "grid-cols-12",
+    "replace_all": false
+  },
+  "tool_use_id": "acme-shop-edit-failed",
+  "duration_ms": 12,
+  "error": "The acme-shop source changed before the edit.",
+  "is_interrupt": false
+}
