@@ -1,16 +1,19 @@
+# Originally from cognee-integrations (https://github.com/topoteretes/cognee-integrations),
+# Copyright 2026 Topoteretes UG, Apache-2.0. Modified by memsift.
 """Dataset UUIDs are authoritative; names are only for owned datasets."""
 
 from __future__ import annotations
 
-import json
-import os
 from uuid import UUID
 
 
 def dataset_id(value):
     try:
         return str(UUID(str(value)))
-    except (TypeError, ValueError, AttributeError):
+    except (TypeError, ValueError, AttributeError) as exc:
+        from .logfiles import error
+
+        error("dataset-id", exc)
         return ""
 
 
@@ -22,20 +25,4 @@ def write_fields(value):
 def recall_fields(value, scope):
     ident = dataset_id(value)
     fields = {"dataset_ids": [ident]} if ident else ({"datasets": [value]} if value else {})
-    # Session history remains bound to ONE dataset. Federated graph recall is
-    # a separate read: never send the active session's binding with it.
-    if scope == ["graph"]:
-        raw = os.environ.get("COGNEE_PLUGIN_READ_DATASET_IDS", "").strip()
-        if raw:
-            try:
-                values = json.loads(raw)
-            except ValueError as exc:
-                raise ValueError(
-                    f"COGNEE_PLUGIN_READ_DATASET_IDS is not valid JSON: {exc}"
-                ) from exc
-            if not isinstance(values, list) or not values or not all(dataset_id(v) for v in values):
-                raise ValueError(
-                    "COGNEE_PLUGIN_READ_DATASET_IDS must be a nonempty JSON list of UUIDs"
-                )
-            return {"dataset_ids": list(dict.fromkeys(dataset_id(v) for v in values))}, True
     return fields, False

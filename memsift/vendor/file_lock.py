@@ -1,7 +1,10 @@
+# Originally from cognee-integrations (https://github.com/topoteretes/cognee-integrations),
+# Copyright 2026 Topoteretes UG, Apache-2.0. Modified by memsift.
 """Small cross-process lock with bounded acquisition on POSIX and Windows."""
 
 from __future__ import annotations
 
+import errno
 import os
 import time
 from contextlib import contextmanager
@@ -42,7 +45,12 @@ def file_lock(path: Path, timeout: float = 0.0):
                 lock()
                 acquired = True
                 break
-            except (BlockingIOError, OSError):
+            except OSError as exc:
+                from .logfiles import error
+
+                error("file-lock", exc)
+                if exc.errno not in (errno.EAGAIN, errno.EACCES, errno.EDEADLK):
+                    raise
                 if time.monotonic() >= deadline:
                     break
                 time.sleep(0.005)
