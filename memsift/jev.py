@@ -2,12 +2,14 @@
 
 import json
 import math
+import re
 import threading
 import time
 import urllib.error
 import urllib.request
 
 from . import breaker, host, store
+from . import transport
 from .vendor.logfiles import decision, error
 from .vendor.redact import redact
 
@@ -242,8 +244,14 @@ def fit_stop(state, questions, ratio):
         if "instruction_files" in fitted:
             fitted["instruction_files"] = fitted["instruction_files"][:math.floor(3000 * ratio)]
         notes = fitted.get("notes", {})
+        def age(identifier):
+            entries = store._entries(notes[identifier])
+            if not entries:
+                return ""
+            stamp = re.search(r" · timestamp (\S+)", notes[identifier].split("\n", 1)[0])
+            return stamp.group(1) if stamp else entries[0]["date"]
         while notes and store.estimate(_json(notes), ratio) > 10000:
-            del notes[next(iter(notes))]
+            del notes[min(notes, key=age)]
         if fitted.get("pending_corrections"):
             if "recent_exchanges" in fitted:
                 fitted["recent_exchanges"] = _tail(fitted["recent_exchanges"], math.floor(3000 * ratio))
@@ -252,27 +260,36 @@ def fit_stop(state, questions, ratio):
         if _fits(fitted, questions, ratio):
             return fitted
         turn = fitted["turn"]
-        texts = [turn.get("prompt", ""), turn.get("answer", "")] + turn.get("actions", [])
-        original = list(texts)
+        actions = turn.get("actions", [])
+        recent = fitted.get("recent_actions", [])
+        original = [turn.get("prompt", ""), turn.get("answer", "")] + actions + recent
         empty = dict(turn, prompt="", answer="", actions=[""] * len(turn.get("actions", [])))
         fitted["turn"] = empty
+        if "recent_actions" in fitted:
+            fitted["recent_actions"] = [""] * len(recent)
         if not _fits(fitted, questions, ratio):
             raise breaker.ServiceError("jev", "protected Stop fields exceed Jev size limits")
         total = sum(map(len, original))
         low, high = 0, total
         best = empty
+        best_recent = fitted.get("recent_actions", [])
         # Search a proportional allowance including JSON escapes and clip markers.
         while low <= high:
             allowance = (low + high) // 2
             clipped = [store.clip(text, math.floor(allowance * len(text) / total), 1) for text in original]
-            candidate = dict(turn, prompt=clipped[0], answer=clipped[1], actions=clipped[2:])
+            candidate = dict(turn, prompt=clipped[0], answer=clipped[1], actions=clipped[2:2 + len(actions)])
             fitted["turn"] = candidate
+            if "recent_actions" in fitted:
+                fitted["recent_actions"] = clipped[2 + len(actions):]
             if _fits(fitted, questions, ratio):
                 best = candidate
+                best_recent = fitted.get("recent_actions", [])
                 low = allowance + 1
             else:
                 high = allowance - 1
         fitted["turn"] = best
+        if "recent_actions" in fitted:
+            fitted["recent_actions"] = best_recent
         return fitted
     except Exception as exc:
         error("jev-fit-stop", exc, "jev")
@@ -361,7 +378,7 @@ def _attempt(request, deadline):
                 raise TimeoutError("Jev deadline expired")
             http_error = None
             try:
-                response = urllib.request.urlopen(request, timeout=remaining)
+                response = transport.open_request(request, timeout=remaining)
             except urllib.error.HTTPError as exc:
                 error("jev-http", exc, "jev", exc.code, time.monotonic() - start)
                 http_error = exc
@@ -413,8 +430,29 @@ def _request(config, state, questions, *, timeout, probe=False, record=True):
     status, response_text = 0, ""
     try:
         ratio = breaker.ratio()
-        fitted = _minimize(state, questions)
-        questions = redact(questions)
+        wire_state = dict(state)
+        wire_questions = dict(questions)
+        answer_ids = {}
+        datasets = state.get("datasets", {})
+        names = {name: name for name in datasets}
+        for index, name in enumerate(datasets):
+            if redact(name) == name:
+                continue
+            alias = "dataset%d" % (index + 1)
+            while alias in names.values():
+                alias += "_"
+            names[name] = alias
+            identifier = "dataset_" + name
+            if identifier in wire_questions:
+                question = dict(wire_questions.pop(identifier))
+                question["instructions"] = question["instructions"].replace("datasets." + name, "datasets." + alias)
+                wire_identifier = "dataset_" + alias
+                wire_questions[wire_identifier] = question
+                answer_ids[wire_identifier] = identifier
+        if datasets:
+            wire_state["datasets"] = {names[name]: value for name, value in datasets.items()}
+        fitted = _minimize(wire_state, wire_questions)
+        questions = redact(wire_questions)
         for attempt in range(2):
             try:
                 status, response_text = 0, ""
@@ -435,7 +473,7 @@ def _request(config, state, questions, *, timeout, probe=False, record=True):
                     breaker.update_ratio(len(payload), tokens)
                     if record:
                         breaker.record("jev", {"kind": "success", "reason": "", "status": status})
-                return answers
+                return {answer_ids.get(identifier, identifier): value for identifier, value in answers.items()}
             except Exception as exc:
                 status = getattr(exc, "status", 0) or status
                 error("jev-attempt", exc, "jev", status, time.monotonic() - start, response_text)

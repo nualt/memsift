@@ -62,6 +62,7 @@ memsift/
 │   ├── compactor.py           compaction (part 5)
 │   ├── cognee.py              Cognee HTTP: recall, add, datasets, items
 │   ├── breaker.py             3 failures in a row → pause (part 6)
+│   ├── transport.py           authenticated HTTP: no redirects, bounded reads
 │   ├── doctor.py              config, keys, Cognee and Jev reachable (part 6)
 │   └── vendor/                kept from upstream, see below
 ├── tests/

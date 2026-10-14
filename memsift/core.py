@@ -60,7 +60,15 @@ def prepare(event: dict) -> dict:
         store.prune_sessions(time.time())
         session = store.update_json(path, {}, lambda _: session)
     else:
-        session = store.read_json(path, {})
+        if kind == "end":
+            with file_lock(path.with_name(path.name + ".lock"), timeout=store.LOCK_WAIT) as acquired:
+                if not acquired:
+                    raise TimeoutError("Session end lock unavailable")
+                session = store.read_json(path, {})
+                if path.exists():
+                    path.unlink()
+        else:
+            session = store.read_json(path, {})
         if session.get("repo_root"):
             root = Path(session["repo_root"])
         elif event.get("cwd"):
@@ -71,10 +79,13 @@ def prepare(event: dict) -> dict:
             def save(value):
                 value["turn"] += 1
                 value["prompt"] = event["prompt"]
+                value["actions"] = [group for group in value.get("actions", [])
+                                    if value["turn"] - 5 < group["turn"] <= value["turn"]]
                 return value
             session = store.update_session_if_exists(sid, save) or session
     session = copy.deepcopy(session)
-    session["actions"] = session.get("actions", [])[-5:]
+    session["actions"] = [group for group in session.get("actions", [])
+                          if session.get("turn", 0) - 5 < group["turn"] <= session.get("turn", 0)][-5:]
     captured_turn = None
     if kind == "stop":
         items = [item for group in session["actions"]
@@ -284,7 +295,10 @@ def _classify_turn(work: dict, turn: dict, config: dict) -> bool:
              "notes": {entry["id"]: entry["text"] for entry in notes["entries"]},
              "pending_corrections": notes["pending"]}
     if notes["pending"]:
-        state["recent_exchanges"] = _conversation(work, ratio)["exchanges"]
+        if work["event"].get("transcript_path"):
+            state["recent_exchanges"] = _conversation(work, ratio)["exchanges"]
+        elif work["event"].get("event") != "stop":
+            state["pending_corrections"] = {}
     attempted = False
     try:
         state = jev.fit_stop(state, jev.stop_questions(state), ratio)
@@ -311,7 +325,10 @@ def _classify_turn(work: dict, turn: dict, config: dict) -> bool:
     except Exception as exc:
         # A session advisory failure must not replay an already durable entry.
         _log("core-stop-flags", exc)
-    decision("core-stop", {"prompt": turn["prompt"][:80], "answers": _answers(answers), **choice})
+    try:
+        decision("core-stop", {"prompt": turn["prompt"][:80], "answers": _answers(answers), **choice})
+    except Exception as exc:
+        _log("core-stop-decision", exc)
     return choice["keep"]
 
 
@@ -323,7 +340,8 @@ def replay_pending(work: dict, config: dict) -> dict:
             return result
         processed = []
         try:
-            for turn in store.pending_turns(root):
+            pending = store.order_pending(root)
+            for turn in pending:
                 try:
                     kept = _classify_turn(work, turn, config)
                 except (breaker.ServiceError, breaker.PausedError) as exc:
@@ -344,13 +362,18 @@ def stop(work: dict, config: dict) -> str:
     if breaker.paused("jev"):
         store.queue_turn(root, turn, breaker.ratio())
         return ""
+    deferred = False
     try:
-        _classify_turn(work, turn, config)
-    except (breaker.ServiceError, breaker.PausedError) as exc:
+        replay_pending(work, config)
+        deferred = bool(store.pending_turns(root))
+        if not deferred:
+            _classify_turn(work, turn, config)
+    except Exception as exc:
         _log("core-stop", exc)
+        deferred = True
+    if deferred:
         store.queue_turn(root, turn, breaker.ratio())
         return ""
-    replay_pending(work, config)
     if not breaker.paused("jev") and not breaker.paused("compactor"):
         notes = store.read_notes(root)
         if store.estimate(notes["digest"] + notes["draft"], breaker.ratio()) >= 8000:
@@ -359,16 +382,8 @@ def stop(work: dict, config: dict) -> str:
 
 
 def end(work: dict, config: dict) -> str:
-    try:
-        if not breaker.paused("jev") and not breaker.paused("compactor"):
-            compactor.compact(Path(work["repo_root"]), config, force=True)
-    finally:
-        path = store.session_path(work["event"]["session_id"])
-        with file_lock(path.with_name(path.name + ".lock"), timeout=store.LOCK_WAIT) as acquired:
-            if not acquired:
-                raise TimeoutError("Session end lock unavailable")
-            if path.exists():
-                path.unlink()
+    if not breaker.paused("jev") and not breaker.paused("compactor"):
+        compactor.compact(Path(work["repo_root"]), config, force=True)
     return ""
 
 

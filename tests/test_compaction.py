@@ -330,7 +330,7 @@ class CompactionTests(IsolatedTest):
     def test_opener_fault_is_logged_without_validation_retry(self):
         self.add()
         self.fake.push_error(OSError("invented opener failure"))
-        with patch("urllib.request.urlopen", side_effect=self.fake.open):
+        with patch("memsift.transport.open_request", side_effect=self.fake.open):
             self.assertFalse(self.compactor.compact(self.repo, self.config, force=True))
         self.assertEqual(self.service()["failures"], 1)
         self.assertEqual(self.fake.requests, [])
@@ -436,7 +436,7 @@ class CompactionTests(IsolatedTest):
         self.assertEqual(self.store.read_notes(self.repo), before)
         self.assertEqual(self.fake.requests, [])
         self.assertEqual(self.service()["failures"], 0)
-        self.assertIn("snapshot lock unavailable", self.log())
+        self.assertIn("Storage file lock unavailable", self.log())
         self.assertIn("Traceback", self.log())
 
     def test_generated_secrets_redacted_in_notes_packet_name_and_upload(self):
@@ -504,7 +504,7 @@ class CompactionTests(IsolatedTest):
         self.pause("cognee")
         self.fake.push(envelope(answer()))
         results = []
-        with patch("urllib.request.urlopen", side_effect=blocked):
+        with patch("memsift.transport.open_request", side_effect=blocked):
             worker = threading.Thread(target=lambda: results.append(self.compactor.compact(self.repo, self.config, force=True)))
             worker.start()
             try:

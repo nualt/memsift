@@ -126,10 +126,13 @@ class HookTests(IsolatedTest):
             self.wait_for(lambda: bool(store.read_notes(self.repo)["entries"]))
             self.fake.push(envelope(answer()), path="/chat/completions")
             self.fake.push({"ok": True}, path="/api/v1/remember")
+            before_end = len(self.fake.requests)
             result, elapsed = self.cli("end", payload("end"), host)
             self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
             self.assertLess(elapsed, 1)
-            self.wait_for(lambda: not store.session_path(sid).exists())
+            self.assertFalse(store.session_path(sid).exists())
+            self.wait_for(lambda: len(self.fake.requests) >= before_end + 2 and
+                          not list((store.repo_dir(self.repo) / "outbox").glob("*.txt")))
             index.unlink()
 
     def test_slow_stop_survives_parent_exit_and_end_without_recreating_session(self):

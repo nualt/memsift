@@ -169,22 +169,22 @@ class CoreTests(IsolatedTest):
         self.prepare("start")
         self.prepare("prompt", prompt="Fix typo.")
         store.queue_turn(self.repo, turn(), 3)
-        self.fake.push(stop_body("nothing"))
         self.fake.push(stop_body())
+        self.fake.push(stop_body("nothing"))
         core.stop(self.prepare("stop", answer="Fixed."), self.config)
         self.assertEqual(store.pending_turns(self.repo), [])
         self.assertEqual(len(store.read_notes(self.repo)["entries"]), 1)
         self.assertIn("User: Keep twelve columns.", store.read_notes(self.repo)["draft"])
 
-    def test_stop_persistence_failure_is_not_requeued(self):
+    def test_stop_persistence_failure_is_requeued(self):
         from memsift import core, store
         self.prepare("start")
         self.prepare("prompt", prompt="Keep twelve columns.")
         self.fake.push(stop_body())
         with patch("memsift.store.append_draft", side_effect=OSError("injected write fault")):
-            with self.assertRaises(OSError):
-                core.stop(self.prepare("stop", answer="Applied."), self.config)
-        self.assertEqual(store.pending_turns(self.repo), [])
+            captured = self.prepare("stop", answer="Applied.")
+            core.stop(captured, self.config)
+        self.assertEqual(store.pending_turns(self.repo), [captured["turn"]])
 
     def test_tool_is_local_and_keeps_other_session_fields(self):
         from memsift import core, store
@@ -695,17 +695,18 @@ class CoreTests(IsolatedTest):
         self.assertIn("Keep ten columns after all", notes["pending"]["d1"])
         self.assertNotIn("- [d1] confirmed", notes["draft"])
 
-    def test_replay_failure_does_not_requeue_the_applied_current_turn(self):
+    def test_current_failure_after_replay_queues_only_current_turn(self):
         from memsift import core, store
         self.prepare("start")
         self.prepare("prompt", prompt="Current decision")
         store.queue_turn(self.repo, turn("Old decision"), 3)
         self.fake.push(stop_body())
         self.fake.push({"error": "unavailable"}, status=500)
-        core.stop(self.prepare("stop", answer="Applied"), self.config)
-        self.assertEqual(store.pending_turns(self.repo), [turn("Old decision")])
+        captured = self.prepare("stop", answer="Applied")
+        core.stop(captured, self.config)
+        self.assertEqual(store.pending_turns(self.repo), [captured["turn"]])
         self.assertEqual(len(store.read_notes(self.repo)["entries"]), 1)
-        self.assertIn("User: Current decision", store.read_notes(self.repo)["draft"])
+        self.assertIn("User: Old decision", store.read_notes(self.repo)["draft"])
 
     def test_failed_fit_and_pause_during_stop_are_logged_and_queue_once(self):
         from memsift import breaker, core, store

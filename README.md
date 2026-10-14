@@ -212,7 +212,7 @@ Settings are read from the environment, then from `~/.cognee/.env`.
 | Sent to | What | When |
 |---|---|---|
 | OpenRouter (Jev) | prompt classification: your prompt, the end of the conversation since the last compaction (up to 25 000 tokens), each working-notes entry, dataset descriptions and item names; Stop: the turn's prompt, answer and action notes, recent actions, `jev.md`, notes, pending corrections and repo-root `CLAUDE.md` / `AGENTS.md`, plus recent exchanges when corrections are pending; passage selection: your prompt and each recalled passage | each prompt and after each answer, while Jev is active |
-| the compactor | one project's digest and eligible draft entries, with compaction instructions and a response schema | at 8 000 estimated tokens, at session end, or a minimal doctor/resume probe |
+| the compactor | one project's digest and whole draft, including pending corrections, with compaction instructions and a response schema | at 8 000 estimated tokens, at session end, or a minimal doctor/resume probe |
 | Cognee | recall: the current redacted prompt as the query, selected dataset IDs/names and search metadata; upload: cleaned packet text, packet filename, target dataset and node-set fields; index: requests for dataset and item lists | recall only when Jev selects it; uploads after compaction, at session start and on resume; index at session start; minimal doctor/resume probes |
 
 Model requests also carry the configured model ID and the questions or

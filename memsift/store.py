@@ -208,7 +208,10 @@ def _notes(digest: str, draft: str) -> dict:
 
 def read_notes(root: Path) -> dict:
     directory = repo_dir(root)
-    return _notes(read_text(directory / "digest.md"), read_text(directory / "draft.md"))
+    if not directory.exists():
+        return _notes("", "")
+    with _locked(directory / "draft.md"):
+        return _notes(read_text(directory / "digest.md"), read_text(directory / "draft.md"))
 
 
 def _header(root: Path) -> str:
@@ -229,8 +232,8 @@ def append_draft(root: Path, turn: dict, nature: str, correction: bool,
         numbers = [int(value) for value in re.findall(r"^- \[d(\d+)\]", draft, re.MULTILINE)]
         identifier = "d" + str(max(numbers, default=0) + 1)
         date = turn["ts"][:10]
-        text = "- [%s] %s %s%s\n" % (identifier, date, nature,
-                                      " · correction · pending" if correction else "")
+        text = "- [%s] %s %s%s · timestamp %s\n" % (
+            identifier, date, nature, " · correction · pending" if correction else "", turn["ts"])
         text += _field("User", _clean(clip(turn["prompt"], PROMPT_TOKENS, ratio)))
         text += _field("Agent", _clean(clip(turn["answer"], ANSWER_TOKENS, ratio)))
         if turn["actions"]:
@@ -276,6 +279,16 @@ def pending_turns(root: Path) -> list:
     return _turns(read_text(repo_dir(root) / "pending.jsonl"))
 
 
+def order_pending(root: Path) -> list:
+    path = repo_dir(root) / "pending.jsonl"
+    with _locked(path):
+        turns = _turns(read_text(path))
+        ordered = sorted(turns, key=lambda turn: turn["ts"])
+        if ordered != turns:
+            _write(path, "".join(json.dumps(redact(turn), ensure_ascii=False) + "\n" for turn in ordered))
+        return ordered
+
+
 @contextmanager
 def replay_lock(root: Path):
     with file_lock(repo_dir(root) / "replay.lock", timeout=0.0) as acquired:
@@ -319,10 +332,10 @@ def notes_snapshot(root: Path) -> dict:
 
 def replace_notes(root: Path, snapshot: dict, digest: str) -> None:
     directory = repo_dir(root)
-    # Crash order is intentional: the compactor has already queued the packet.
-    write_text(directory / "digest.md", digest)
     path = directory / "draft.md"
     with _locked(path):
+        # Crash order is intentional: the compactor has already queued the packet.
+        write_text(directory / "digest.md", digest)
         current = read_text(path).encode("utf-8")
         original = snapshot["draft"].encode("utf-8")
         if not current.startswith(original) or snapshot["draft_bytes"] != len(original):

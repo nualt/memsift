@@ -11,6 +11,7 @@ import urllib.request
 
 
 _REAL_URLOPEN = urllib.request.urlopen
+_REAL_BUILD_OPENER = urllib.request.build_opener
 _ORIGINAL_CREATE_CONNECTION = socket.create_connection
 _ORIGINAL_CONNECT = socket.socket.connect
 _ORIGINAL_CONNECT_EX = socket.socket.connect_ex
@@ -60,7 +61,7 @@ def _route_open(server_url, request, data=None, timeout=socket._GLOBAL_DEFAULT_T
     routed = _routed_request(request, server_url, data)
     if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
         routed.add_header("X-Memsift-Test-Timeout", repr(timeout))
-    return _REAL_URLOPEN(routed, timeout=timeout, **kwargs)
+    return _REAL_BUILD_OPENER().open(routed, timeout=timeout)
 
 
 def _require_loopback(host):
@@ -97,6 +98,17 @@ def install_http_guard(server_url):
     urllib.request.urlopen = lambda request, data=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, **kwargs: _route_open(
         server_url, request, data, timeout, **kwargs
     )
+    def build_opener(*handlers):
+        opener = _REAL_BUILD_OPENER(*handlers)
+        original_open = opener.open
+        def routed_open(request, data=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+            routed = _routed_request(request, server_url, data)
+            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                routed.add_header("X-Memsift-Test-Timeout", repr(timeout))
+            return original_open(routed, timeout=timeout)
+        opener.open = routed_open
+        return opener
+    urllib.request.build_opener = build_opener
     _GUARD_INSTALLED = True
 
 
@@ -110,6 +122,7 @@ def remove_http_guard():
     socket.socket.connect = _ORIGINAL_CONNECT
     socket.socket.connect_ex = _ORIGINAL_CONNECT_EX
     urllib.request.urlopen = _REAL_URLOPEN
+    urllib.request.build_opener = _REAL_BUILD_OPENER
     _GUARD_INSTALLED = False
 
 

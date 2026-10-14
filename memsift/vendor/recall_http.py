@@ -9,13 +9,13 @@ import errno
 import json
 import queue
 import socket
-import ssl
 import threading
 import time
 import urllib.error
 import urllib.request
 
 from .dataset_access import recall_fields
+from ..transport import read_response
 from .logfiles import error
 from .redact import redact
 
@@ -132,20 +132,15 @@ def _recall_once(
     req = urllib.request.Request(
         url, data=json.dumps(redact(body)).encode("utf-8"), headers=headers, method="POST"
     )
-    if opener is None:
-        response = urllib.request.urlopen(req, timeout=timeout, context=ssl.create_default_context())
-    else:
-        response = opener(req, timeout=timeout)
     raw = b""
-    status = response.status
+    status = 0
     try:
-        with response as resp:
-            raw = resp.read()
+        status, raw = read_response(req, timeout, opener=opener)
         data = json.loads(raw.decode("utf-8"))
         if not isinstance(data, list):
             raise ValueError("invalid Cognee recall response: expected a list")
     except Exception as exc:
-        exc.response = redact(raw.decode("utf-8", "replace"))
+        exc.response = getattr(exc, "response", "") or redact(raw.decode("utf-8", "replace"))
         if not isinstance(exc, urllib.error.HTTPError):
             exc.status = status
         raise
@@ -180,13 +175,6 @@ def do_recall(
         except Exception as exc:
             response = getattr(exc, "response", "")
             status = getattr(exc, "code", getattr(exc, "status", 0))
-            if isinstance(exc, urllib.error.HTTPError):
-                try:
-                    with exc:
-                        response = exc.read().decode("utf-8", "replace")
-                except Exception as read_exc:
-                    error("recall-response", read_exc, "cognee", status,
-                          time.monotonic() - started)
             exc.response = redact(response)
             exc.duration = time.monotonic() - started
             error("recall", exc, "cognee", status, exc.duration, response)

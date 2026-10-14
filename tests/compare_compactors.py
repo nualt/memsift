@@ -7,7 +7,6 @@ import math
 from pathlib import Path
 import re
 import sys
-import urllib.request
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -15,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from memsift import breaker, compactor, store
 from memsift.vendor.env_file import load_config
 from memsift.vendor.logfiles import error
+from memsift import transport
 from memsift.vendor.redact import redact
 
 
@@ -66,7 +66,7 @@ def _parser():
 
 
 def _request_with_usage(config, notes):
-    opener = urllib.request.urlopen
+    opener = transport.open_request
     responses = []
 
     def open_recorded(*args, **kwargs):
@@ -74,7 +74,7 @@ def _request_with_usage(config, notes):
         responses.append(response)
         return response
 
-    with patch("urllib.request.urlopen", side_effect=open_recorded):
+    with patch("memsift.vendor.transport.open_request", side_effect=open_recorded):
         answer = compactor.request(config, notes, probe=True)
     if not responses:
         return answer, None

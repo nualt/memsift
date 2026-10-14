@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 
 from . import breaker, cognee, store
+from . import transport
 from .vendor.file_lock import file_lock
 from .vendor.logfiles import decision, error
 from .vendor.redact import redact
@@ -136,7 +137,7 @@ def _http(wire, started):
         try:
             cause = None
             try:
-                response = urllib.request.urlopen(wire, timeout=max(0.001, deadline - time.monotonic()))
+                response = transport.open_request(wire, timeout=max(0.001, deadline - time.monotonic()))
             except urllib.error.HTTPError as exc:
                 error("compactor-http", exc, "compactor", exc.code, time.monotonic() - started)
                 response, cause = exc, exc
@@ -216,10 +217,7 @@ def compact(root, config, *, force=False):
             breaker.require_active("jev")
             breaker.require_active("compactor")
             ratio = breaker.ratio()
-            with file_lock(store.repo_dir(root) / "draft.md.lock", timeout=store.LOCK_WAIT) as acquired:
-                if not acquired:
-                    raise TimeoutError("compaction snapshot lock unavailable")
-                notes = store.notes_snapshot(root)
+            notes = store.notes_snapshot(root)
             entries = [entry for entry in notes["entries"] if entry["id"].startswith("d") and not entry["pending"]]
             if not entries or (not force and store.estimate(notes["digest"] + notes["draft"], ratio) < 8000):
                 return False

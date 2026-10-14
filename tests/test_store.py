@@ -234,7 +234,7 @@ class StoreTests(IsolatedTest):
         value = turn("Use twelve columns.\nKeep the footer grid.", actions=["Edit src/header.tsx"])
         entry = store.append_draft(self.repo, value, "project", True, 3.0)
         before = store.read_notes(self.repo)["draft"]
-        self.assertEqual(entry, {"id": "d1", "text": "- [d1] 2026-10-14 project · correction · pending\n  User: Use twelve columns.\n  Keep the footer grid.\n  Agent: Applied.\n  Actions: Edit src/header.tsx\n", "date": "2026-10-14", "nature": "project", "correction": True, "pending": True})
+        self.assertEqual(entry, {"id": "d1", "text": "- [d1] 2026-10-14 project · correction · pending · timestamp 2026-10-14T07:31:02Z\n  User: Use twelve columns.\n  Keep the footer grid.\n  Agent: Applied.\n  Actions: Edit src/header.tsx\n", "date": "2026-10-14", "nature": "project", "correction": True, "pending": True})
         self.assertEqual(store.read_notes(self.repo)["pending"], {"d1": entry["text"]})
         self.assertEqual(store.confirm(self.repo, {entry["id"]: entry["text"]}), ["d1"])
         after = store.read_notes(self.repo)["draft"]

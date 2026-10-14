@@ -8,13 +8,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import ssl
 import time
 import urllib.error
 import urllib.request
 import uuid
 
 from .dataset_access import dataset_id as parse_dataset_id
+from ..transport import read_response
 from .logfiles import error
 from .redact import redact
 
@@ -100,13 +100,7 @@ def do_remember(
             headers["X-Api-Key"] = api_key
 
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-        if opener is None:
-            response = urllib.request.urlopen(req, timeout=timeout, context=ssl.create_default_context())
-        else:
-            response = opener(req, timeout=timeout)
-        with response as resp:
-            status = resp.status
-            raw = resp.read()
+        status, raw = read_response(req, timeout, opener=opener)
         data = json.loads(raw.decode("utf-8"))
         if not isinstance(data, dict) or "error" in data or data.get("ok", True) is not True:
             raise ValueError("invalid Cognee remember response")
@@ -116,15 +110,8 @@ def do_remember(
                 result[key] = str(data[key])
         return result
     except Exception as exc:
-        if isinstance(exc, urllib.error.HTTPError):
-            status = exc.code
-            try:
-                with exc:
-                    raw = exc.read()
-            except Exception as read_exc:
-                error("remember-response", read_exc, "cognee", status,
-                      time.monotonic() - started)
-        response = raw.decode("utf-8", "replace")
+        status = getattr(exc, "code", 0) or getattr(exc, "status", 0) or status
+        response = getattr(exc, "response", "") or raw.decode("utf-8", "replace")
         exc.response = redact(response)
         if not isinstance(exc, urllib.error.HTTPError):
             exc.status = status

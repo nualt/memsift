@@ -244,7 +244,8 @@ class VendorTests(IsolatedTest):
         request = self.fake.requests[0]
         self.assertEqual(request["body"], {"query": "[redacted:credential]", "top_k": 5, "only_context": True, "scope": ["graph"], "session_id": "acme-session", "datasets": ["memsift"]})
         self.assertEqual(request["headers"]["X-Api-Key"], "invented-cognee-key")
-        self.assertEqual(request["timeout"], 120.0)
+        self.assertGreater(request["timeout"], 119)
+        self.assertLessEqual(request["timeout"], 120.0)
 
     def test_recall_explicit_dataset_ids_and_legacy_settings(self):
         self.fake.push([])
@@ -381,7 +382,7 @@ class VendorTests(IsolatedTest):
 
     def test_http_error_body_read_failure_keeps_original_and_logs_both_errors(self):
         class BrokenBody(io.BytesIO):
-            def read(self, *args):
+            def read1(self, *args):
                 raise OSError("PASSWORD=invented-body-secret")
         for operation in (self.recall, self.remember):
             with self.subTest(operation=operation.__name__):

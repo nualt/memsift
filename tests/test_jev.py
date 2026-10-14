@@ -172,7 +172,7 @@ class JevTests(IsolatedTest):
 
     def test_transport_exception_traceback(self):
         from memsift import breaker, jev
-        with patch("urllib.request.urlopen", side_effect=OSError("injected opener fault")):
+        with patch("memsift.transport.open_request", side_effect=OSError("injected opener fault")):
             with self.assertRaises(breaker.ServiceError):
                 jev.request(self.config, {}, {"ok": {"type": "noul", "instructions": "Ready?"}}, timeout=1)
         log = (self.home / ".memsift/debug.log").read_text()

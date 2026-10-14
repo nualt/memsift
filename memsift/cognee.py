@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 
 from . import breaker, store
+from . import transport
 from .vendor import recall_http, recall_text, remember_http
 from .vendor.file_lock import file_lock
 from .vendor.logfiles import decision, error
@@ -80,18 +81,9 @@ def _get(config, path, validate, *, probe=False):
     try:
         request = urllib.request.Request(config["COGNEE_BASE_URL"].rstrip("/") + path,
                                          headers={"X-Api-Key": config["COGNEE_API_KEY"]})
-        with urllib.request.urlopen(request, timeout=UPLOAD_TIMEOUT) as response:
-            status = response.status
-            raw = response.read()
+        status, raw = transport.read_response(request, UPLOAD_TIMEOUT)
         result = validate(json.loads(raw.decode("utf-8")))
     except Exception as exc:
-        if isinstance(exc, urllib.error.HTTPError):
-            status = exc.code
-            try:
-                with exc:
-                    raw = exc.read()
-            except Exception as read_exc:
-                error("cognee-response", read_exc, "cognee", status, time.monotonic() - started)
         failure = _failure("cognee-get", exc, started, status, raw.decode("utf-8", "replace"))
         if not probe:
             breaker.record("cognee", breaker.classify(failure))
@@ -214,7 +206,7 @@ def recall(config, prompt, datasets, *, timeout=12.0):
             data = recall_http.do_recall(config["COGNEE_BASE_URL"], config["COGNEE_API_KEY"],
                                          redact(prompt), "", ["graph"], 5, dataset=name,
                                          dataset_ids=[ident] if ident else "",
-                                         opener=urllib.request.urlopen, timeout=remaining)
+                                         timeout=remaining)
             response = json.dumps(data, ensure_ascii=False)
             results.put((position, _passages(data, redact(prompt)), None))
         except Exception as exc:
@@ -223,8 +215,9 @@ def recall(config, prompt, datasets, *, timeout=12.0):
                 exc.response, exc.status = response, 200
             error("cognee-recall-worker", exc, "cognee", status or getattr(exc, "status", 0),
                   time.monotonic() - began, getattr(exc, "response", ""))
-            # Upstream documents recall 404 as DatasetNotFoundError or no graph.
-            results.put((position, [] if status == 404 else None, None if status == 404 else exc))
+            empty = status == 404 and any(marker in getattr(exc, "response", "").lower()
+                                          for marker in ("datasetnotfounderror", "dataset not found", "no graph"))
+            results.put((position, [] if empty else None, None if empty else exc))
 
     try:
         # Upstream graph results carry source/text, without per-passage dataset provenance.
@@ -345,7 +338,7 @@ def send_outbox(repo_dir, config):
                         result = remember_http.do_remember(
                             config["COGNEE_BASE_URL"], config["COGNEE_API_KEY"], "",
                             config["MEMSIFT_DATASET"], config["MEMSIFT_DATASET"],
-                            file_path=packet, opener=urllib.request.urlopen, timeout=UPLOAD_TIMEOUT)
+                            file_path=packet, timeout=UPLOAD_TIMEOUT)
                         if not isinstance(result, dict) or result.get("ok") is not True:
                             raise ValueError("Cognee did not accept packet")
                     except Exception as exc:

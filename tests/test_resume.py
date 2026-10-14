@@ -196,8 +196,8 @@ with patch('memsift.core._classify_turn', side_effect=classify):
         self.assertEqual(store.pending_turns(other), [turn("Second repo decision", session="a2")])
         core.prepare(event(other, "start", session_id="a2"))
         core.prepare(event(other, "prompt", session_id="a2", prompt="Fix typo"))
-        self.fake.push(stop_body("nothing"))
         self.fake.push(stop_body())
+        self.fake.push(stop_body("nothing"))
         core.stop(core.prepare(event(other, "stop", session_id="a2", answer="Done")), self.config)
         self.assertEqual(store.pending_turns(other), [])
         self.assertEqual(store.read_notes(self.repo)["entries"], [])
@@ -218,7 +218,8 @@ with patch('memsift.core._classify_turn', side_effect=classify):
             core.resume(self.repo, self.config)
         sent = self.fake.requests[0]["body"]["state"]
         self.assertEqual(sent["recent_actions"], [])
-        self.assertEqual(sent["recent_exchanges"], [])
+        self.assertNotIn("recent_exchanges", sent)
+        self.assertEqual(sent["pending_corrections"], {})
         self.assertNotIn("Other history", repr(sent))
 
     def test_resume_outbox_error_logs_and_continues_to_other_repos(self):
@@ -289,14 +290,18 @@ with patch('memsift.core._classify_turn', side_effect=classify):
         from memsift import core, store
         store.append_draft(self.repo, turn("Use twelve columns"), "project", True, 3)
         store.queue_turn(self.repo, turn("Keep the footer spacing"), 3)
+        captured = self.work()
+        transcript = self.home / "acme-shop-transcript.jsonl"
+        transcript.write_text(json.dumps({"type": "user", "message": {"content": "Keep twelve columns"}}) + "\n")
+        captured["event"]["transcript_path"] = str(transcript)
         self.fake.push(stop_body(confirmed_d1=noul(1)))
         with patch("memsift.store.confirm", side_effect=TimeoutError("injected confirmation lock timeout")):
             with self.assertRaises(TimeoutError):
-                core.replay_pending(self.work(), self.config)
+                core.replay_pending(captured, self.config)
         self.assertEqual(len(store.read_notes(self.repo)["entries"]), 1)
         self.assertEqual(store.pending_turns(self.repo), [turn("Keep the footer spacing")])
         self.fake.push(stop_body(confirmed_d1=noul(1)))
-        self.assertEqual(core.replay_pending(self.work(), self.config), {"sorted": 1, "kept": 1})
+        self.assertEqual(core.replay_pending(captured, self.config), {"sorted": 1, "kept": 1})
         self.assertEqual(len(store.read_notes(self.repo)["entries"]), 2)
         self.assertEqual(store.read_notes(self.repo)["pending"], {})
 

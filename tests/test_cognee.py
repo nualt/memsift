@@ -86,11 +86,11 @@ class CogneeTests(IsolatedTest):
         for ident, prefix in ((A, "a"), (B, "b")):
             self.fake.push([{"source": "graph", "text": "\n---\n".join(prefix + str(i) for i in range(1, 4))}],
                            delay=0.2, path="/api/v1/recall?test=" + ident)
-        def routed(request, timeout):
+        def routed(request, timeout, **kwargs):
             ident = json.loads(request.data)["dataset_ids"][0]
             request.full_url += "?test=" + ident
             return observed(request, timeout)
-        with patch("urllib.request.urlopen", side_effect=routed):
+        with patch("memsift.transport.open_request", side_effect=routed):
             result = self.cognee.recall(self.config, "header", [self.dataset("A", A), self.dataset("B", B)])
         self.assertEqual([p["text"] for p in result], ["a1", "b1", "a2", "b2", "a3"])
         self.assertEqual([p["dataset"] for p in result], ["A", "B", "A", "B", "A"])
@@ -304,7 +304,7 @@ class CogneeTests(IsolatedTest):
         for status, failures, paused in ((404, 0, False), (401, 1, True), (403, 1, True), (429, 0, False), (529, 0, False), (400, 1, False), (500, 1, False)):
             with self.subTest(status=status):
                 self.breaker.resume("cognee")
-                self.fake.push({"detail": "PASSWORD=invented-response"}, status=status)
+                self.fake.push({"detail": "DatasetNotFoundError" if status == 404 else "PASSWORD=invented-response"}, status=status)
                 if status == 404:
                     self.assertEqual(self.cognee.recall(self.config, "header", [self.dataset()]), [])
                 else:
@@ -412,10 +412,10 @@ class CogneeTests(IsolatedTest):
         import io
         import urllib.error
         class BrokenBody(io.BytesIO):
-            def read(self, *args):
+            def read1(self, *args):
                 raise OSError("injected body read failure")
         exc = urllib.error.HTTPError(self.fake.url + "/api/v1/datasets", 503, "down", {}, BrokenBody())
-        with patch("urllib.request.urlopen", side_effect=exc), self.assertRaises(self.breaker.ServiceError) as caught:
+        with patch("memsift.transport.open_request", side_effect=exc), self.assertRaises(self.breaker.ServiceError) as caught:
             self.cognee.list_datasets(self.config)
         self.assertIs(caught.exception.__cause__, exc)
         self.assertEqual(caught.exception.status, 503)
