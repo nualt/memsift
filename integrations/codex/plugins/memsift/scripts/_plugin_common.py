@@ -4123,7 +4123,7 @@ _UPDATE_CHECK_FILE = _PLUGIN_DIR / "update-check.json"
 _UPDATE_CHECK_INTERVAL_DEFAULT = 3600.0
 _UPDATE_DEFAULT_REPO = "topoteretes/cognee-integrations"
 _UPDATE_DEFAULT_REF = "main"
-_UPDATE_MANIFEST_PATH = "integrations/codex/plugins/cognee/.codex-plugin/plugin.json"
+_UPDATE_MANIFEST_PATH = "integrations/codex/plugins/memsift/.codex-plugin/plugin.json"
 
 
 def _update_check_enabled() -> bool:
