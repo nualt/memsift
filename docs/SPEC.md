@@ -90,7 +90,7 @@ follows. Upstream files carry no per-file header, so each kept file gets one:
 | `_capture_policy.py` | 198 | `vendor/redact.py` | redacts secrets before anything leaves the machine |
 | `_env_file.py` | 284 | `vendor/env_file.py` | reads `~/.cognee/.env` |
 | `_file_lock.py` | 53 | `vendor/file_lock.py` | cross-process lock for compaction |
-| `_logfiles.py` | 203 | `vendor/logfiles.py` | bounded append-only logs (debug log, recall audit) |
+| `_logfiles.py` | 203 | `vendor/logfiles.py` | bounded append-only logs (`debug.log`) |
 | `_dataset_access.py` | 41 | `vendor/dataset_access.py` | dataset id / name fields, used by the two HTTP modules |
 
 `hook_runner.py` is not kept: `run.py` does the same job (catch everything,
@@ -130,7 +130,7 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 ~/.memsift/
 ├── datasets.md             one line per Cognee dataset
 ├── state.json              per machine: consecutive failures and pause, for Jev, compactor, Cognee (part 6)
-├── debug.log               Jev decisions in plain text, if MEMSIFT_DEBUG=1
+├── debug.log               every error, always; every decision if MEMSIFT_DEBUG=1 (part 7)
 ├── sessions/<session>.json one per running session, deleted at session end
 └── repos/<repo-key>/
     ├── digest.md           compacted project memory, written by the compactor  ≤ 3 000 tokens
@@ -397,7 +397,8 @@ SessionEnd          compact what is left           returns nothing      backgrou
 ```
 
 Both hosts call `memsift/run.py <event>` with the hook JSON on stdin. `run.py`
-never fails the host: any error is logged and the hook returns nothing.
+never fails the host: any error is written to `debug.log` with its traceback
+(part 7) and the hook returns nothing.
 
 **Background work.** The hook starts a detached copy of `run.py` with the same
 input and returns at once. The detached process outlives the hook, and the
@@ -1012,3 +1013,124 @@ One line per check, `✓` or `✗` with what to do. Key values are never printed
 ✗ datasets.md: "clients" has no description
 ✓ this repo: jev.md found
 ```
+
+## 7. Configuration and tests
+
+### Configuration
+
+Read from the environment first, then from `~/.cognee/.env`, the file the
+Cognee plugins already use. Values are never printed or logged.
+
+| Variable | Default | Description |
+|---|---|---|
+| `COGNEE_BASE_URL` | required | URL of the Cognee server |
+| `COGNEE_API_KEY` | required | Cognee API key, sent as `X-Api-Key` |
+| `OPENROUTER_API_KEY` | required | key for Jev |
+| `MEMSIFT_JEV_MODEL` | `typesafe/jev-1.13` | Jev model, pinned to a version (part 4) |
+| `MEMSIFT_COMPACTOR_URL` | `https://api.deepinfra.com/v1/openai` | any OpenAI-compatible base URL |
+| `MEMSIFT_COMPACTOR_API_KEY` | required | key for that endpoint |
+| `MEMSIFT_COMPACTOR_MODEL` | `google/gemma-4-26B-A4B-it` | compactor model at that endpoint |
+| `MEMSIFT_DATASET` | `memsift` | the only Cognee dataset memsift writes to |
+| `MEMSIFT_DEBUG` | `0` | `1` writes every decision to `debug.log` |
+
+Thresholds, sizes and timeouts are not settings: they live in the code, one
+place per module, and change only with calibration.
+
+### debug.log
+
+`~/.memsift/debug.log`, bounded by `vendor/logfiles.py`: past 20 MB it is
+rotated once (`debug.log.1`), so it never holds more than 40 MB. It never
+leaves the machine, and it is redacted like everything else.
+
+**Errors are always written**, whatever `MEMSIFT_DEBUG` says: every exception
+with its full traceback, every failed call with its service, HTTP status,
+duration and the first 300 characters of the response, every invalid
+compactor answer. memsift never fails the host, so this file is where a
+failure must show.
+
+```
+09:58:31 ERROR stop    compactor: answer invalid (missing "packet"), retry 1/1
+09:58:44 ERROR stop    compactor: answer invalid again → nothing written · failures 1/3
+10:02:10 ERROR prompt  cognee: timeout after 12.0 s · failures 2/3
+10:04:55 ERROR tool    KeyError: 'tool_input'
+                       Traceback (most recent call last): …
+```
+
+**Decisions are written with `MEMSIFT_DEBUG=1`**, one line each, with timings
+and token counts:
+
+```
+09:41:02 prompt  "back to the header"  missing 0.85 · g1 0.92 → 1 entry pasted
+                 jev 0.4 s · 21 300 tokens (estimated 22 100)
+09:41:40 stop    decision · this task · 0.81 → d7 appended
+09:52:13 prompt  "pick up the footer from two weeks ago"  missing 0.95 · cognee 0.90
+                 → Cognee lessons, memsift 5.8 s → p2 kept · total 6.6 s
+```
+
+### Automatic tests
+
+`python3 -m unittest discover -s tests`, standard library only, no network,
+no model. Each test runs with a temporary `HOME`, so it never touches the real
+`~/.memsift` or `~/.cognee`.
+
+```
+tests/
+├── fake_services.py      a local HTTP server playing Jev, the compactor and
+│                         Cognee from scripted answers: probabilities, a delay,
+│                         HTTP 401 / 429 / 500, an invalid JSON, a timeout;
+│                         it records every request it receives
+├── fixtures/
+│   ├── hooks/            real hook JSON shapes, Claude Code and Codex, one per
+│   │                     event and tool
+│   └── transcripts/      invented acme-shop conversations in both transcript
+│                         formats, with and without compaction; never real
+│                         sessions
+└── test_*.py
+```
+
+What each module checks:
+
+| Module | Cases |
+|---|---|
+| `test_store` | two processes appending 200 entries each to one `draft.md`: no line lost or interleaved · a rewrite under lock is never seen half-written · cuts at 1 500 / 1 000 tokens keep start and end with `[…]` · two repos with the same name get different keys · outside git the working directory is the repo · missing files read as empty |
+| `test_redact` | API keys, tokens, private keys and `PASSWORD=`-style values are masked in `draft.md`, `pending.jsonl`, `debug.log`, the outbox, and in every request the fake server records |
+| `test_transcript` | Claude Code: only the last summary after the last marker is read; tool calls replaced by action notes · Codex: the encrypted summary is skipped, the user messages kept in clear are read · the over-budget cut order of part 3 · a transcript of several MB is read from the end, not loaded whole |
+| `test_actions` | in a temporary git repo: an edit in the repo is noted with a diff of at most 200 characters · a write keeps the file name only · edits outside the repo are ignored · a read-only command is ignored · a command changing an already modified file is noted · a commit is noted · outside git, commands are not noted · failed then succeeded is marked · Codex `apply_patch` is noted like an edit · only the last 5 turns are kept |
+| `test_decisions` | table-driven, probabilities in, outcome out: the prompt cascade (thresholds and their boundaries, dataset fallback to the highest) · the passage rule · the stop rule, including the lower bar for corrections · confirmed corrections · each flag given once, then removed |
+| `test_compaction` | lines appended during a compaction survive it · pending corrections are carried over · an invalid answer twice writes nothing and counts one failure · an over-long digest loses its oldest lines of the last section · lines are numbered `g1`… by code · a second compaction finding the lock does nothing · packet names carry the time · Cognee down puts the packet in the outbox |
+| `test_failures` | 3 timeouts pause a service · 401 pauses at once · 429 and 529 are not counted · a success resets the counter · the notice is given once per session · a pause seen by one session applies to all · `/memsift-resume` tests, resumes, sends the outbox, sorts this repo's `pending.jsonl` and prints its summary · another repo's pending turns are sorted by its first stop |
+| `test_hooks` | `run.py` end to end for every event and host, against the fake server: output shape per host · background hooks return in under a second · the prompt hook returns nothing within about 2 s when Jev takes 3 s · an exception inside the core still exits 0 and is in `debug.log` with its traceback |
+| `test_doctor` | each check reports ✓ and ✗ correctly · no key value appears in the output |
+
+**Continuous integration.** `.github/workflows/tests.yml` runs the suite on
+each push and pull request, on Python 3.9 (the minimum) and the latest stable
+Python.
+
+### Calibration
+
+Calibration calls real models, so each script first prints its estimated cost
+and waits for confirmation. Labelled data stays outside the repo.
+
+- `tests/calibrate_jev.py <labels.jsonl>`: each line holds a prompt, the notes
+  and conversation it came with, and the expected outcome (nothing, which
+  entries, or Cognee). Prints the thresholds that match the labels best, how
+  often Cognee would be asked, and the checks listed in part 4.
+- `tests/compare_compactors.py <draft.md>`: compacts the same draft with each
+  model of part 5 and prints the results side by side, for a person to judge
+  fidelity.
+
+### Live tests
+
+With `MEMSIFT_DEBUG=1` and `tail -f ~/.memsift/debug.log` in a second pane,
+first on Claude Code, then on Codex:
+
+| # | Do | Expect |
+|---|---|---|
+| 1 | new session, "back to the header" | the digest entry about the header is pasted |
+| 2 | "fix the typo in the README" | nothing is pasted |
+| 3 | correct the agent, then let it commit | `confirmed` appended for that correction |
+| 4 | ask about a topic two weeks old | Cognee asked; waiting time measured |
+| 5 | state a structuring decision without a reason | the agent asks why at the next prompt |
+| 6 | fill the draft | compaction runs; a packet reaches Cognee |
+| 7 | set a wrong Cognee key | pause after the first call, one line to the agent, `/memsift-resume` after fixing |
+| 8 | `/compact`, then ask about something from before | Jev reads the summary; nothing redundant pasted |

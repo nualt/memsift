@@ -326,9 +326,8 @@ compactor answer, and says what to fix.
 
 ## Configuration
 
-Settings are read from the environment, then from `~/.cognee/.env`. The names
-below are the planned ones; [docs/SPEC.md](docs/SPEC.md), part 7, is the
-reference.
+Settings are read from the environment, then from `~/.cognee/.env`.
+[docs/SPEC.md](docs/SPEC.md), part 7, is the reference.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -364,13 +363,16 @@ on your own server.
 
 ## Watching what it does
 
-With `MEMSIFT_DEBUG=1`, each decision is written in plain text:
+Errors are always written to `~/.memsift/debug.log`, with their traceback:
+memsift never breaks your agent, so this is where a failure shows. With
+`MEMSIFT_DEBUG=1`, every decision is written too:
 
 ```
 tail -f ~/.memsift/debug.log
 
-  "you're annoying me"            → ephemeral → dropped
-  "back to the header"            → missing 0.85 · in notes 0.91 → 1 line added
+09:41:02 prompt  "back to the header"  missing 0.85 · g1 0.92 → 1 entry pasted
+09:41:40 stop    decision · this task · 0.81 → d7 appended
+10:02:10 ERROR prompt  cognee: timeout after 12.0 s · failures 2/3
 ```
 
 ## When something fails
