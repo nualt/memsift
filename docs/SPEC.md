@@ -329,6 +329,9 @@ behind, so session start removes session files older than 7 days.
   "host": "claude-code",
   "source": "startup",
   "started_at": "2026-10-14T07:02:10Z",
+  "turn": 3,
+  "prompt": "commit it",
+  "snapshot": "9b1e…",
   "actions": [
     {"turn": 2, "items": ["Edit src/product-grid.tsx: grid-cols-10 → grid-cols-12"]},
     {"turn": 3, "items": ["Bash: git commit -m \"product grid in 12 columns\" (ok)"]}
@@ -340,7 +343,10 @@ behind, so session start removes session files older than 7 days.
 
 | Field | Meaning |
 |---|---|
-| `source` | how the session started: `startup`, `resume`, `clear`, `compact` |
+| `source` | how the session started: `startup`, `resume`, `clear`, `compact`; `fork` is stored as `resume` |
+| `turn` | number of the current turn, increased by the prompt hook |
+| `prompt` | the current prompt, kept by the prompt hook for the stop hook |
+| `snapshot` | hash of the repo state (`HEAD` and the uncommitted diff), to tell whether a command changed something (part 3) |
 | `actions` | the action notes of the last 5 turns (part 3); an `Edit` keeps a diff of about 200 characters, a `Write` only its file name |
 | `flags` | messages for the agent at the next prompt: `jev_md_missing`, `jev_md_outdated`, `dataset_undescribed:<name>` |
 | `outage_notice_sent` | the one-line outage notice was already given (part 6) |
@@ -373,3 +379,229 @@ do not keep: commit status, one-off visual tweaks
 memsift never writes `jev.md`. When it is missing or looks outdated, a flag asks
 the agent to propose a version, and the agent writes it once the user approves.
 A repo that must not show it adds it to its `.gitignore`.
+
+## 3. Hooks
+
+### Overview
+
+```
+SessionStart        read source, prepare           returns nothing      background: Cognee index
+UserPromptSubmit    Jev decides what to paste      returns the context  the only hook that waits
+PostToolUse         action note, local only        returns nothing
+PostToolUseFailure  same, for a failed call        returns nothing      Claude Code only
+Stop                Jev sorts the turn             returns nothing      background
+SessionEnd          compact what is left           returns nothing      background
+```
+
+Both hosts call `memsift/run.py <event>` with the hook JSON on stdin. `run.py`
+never fails the host: any error is logged and the hook returns nothing.
+
+**Background work.** The hook starts a detached copy of `run.py` with the same
+input and returns at once. The detached process outlives the hook, and the
+session, so closing the agent never waits for memsift.
+
+memsift registers no `PreCompact` hook: every turn worth keeping is already in
+`draft.md` when the stop hook ends, so there is nothing to save before a
+compaction.
+
+### Session start
+
+```
+input    session_id, cwd, source, transcript_path
+does     1. writes sessions/<session>.json: repo key, host, source
+         2. removes session files older than 7 days
+         3. jev.md missing at the repo root      → flag jev_md_missing
+         4. in the background: rebuilds cognee-index.json, then compares the
+            server's datasets with datasets.md
+            dataset without a line               → flag dataset_undescribed:<name>
+returns  nothing
+```
+
+Codex runs this hook only for the sources listed in its matcher, so
+`hooks/codex.json` lists all of them: `startup|resume|clear|compact|fork`.
+
+### Prompt
+
+The only hook the user waits for.
+
+```
+input    session_id, prompt, transcript_path
+does     1. memsift paused (part 6)?  → outage notice once, then nothing
+         2. turn + 1; keeps the prompt in the session file
+         3. Jev, one request, 2 s at most:
+              ① is the agent missing information that already exists?
+              ② is it in the working notes, and in which entries?
+              ③ is it worth asking Cognee, and in which datasets?
+         4. decides:
+              P① < 0.7                         → nothing from memory
+              P① ≥ 0.7 and P② ≥ 0.5            → the notes entries Jev chose
+              P① ≥ 0.7, P② < 0.5, P③ ≥ 0.8     → Cognee
+         5. Cognee: recall on the chosen datasets, 12 s at most,
+            then Jev ④ sorts the passages, 2 s at most
+returns  what was kept, then the pending flags, as additionalContext
+```
+
+The thresholds are starting points, set at calibration. The questions and
+their criteria are in part 4.
+
+**Waiting time.** Most prompts stop at Jev (under 2 s). When Cognee is asked,
+the worst case is 2 + 12 + 2 = 16 s. Any step that times out ends the hook
+with nothing from memory; unsorted Cognee passages are never pasted.
+
+**What Jev reads.** Budget for one request, about 26 000 tokens, inside Jev's
+32 000:
+
+| Part | Tokens |
+|---|---|
+| prompt, questions, how the session started | 2 000 |
+| `jev.md` | ≤ 3 000 |
+| last compaction summary | ≤ 6 000 |
+| recent exchanges | ~ 5 000 |
+| working notes (`digest.md` + `draft.md`) | ≤ 8 000 |
+| `cognee-index.json` | ≤ 1 000 |
+
+How the session started, as told to Jev:
+
+| `source` | What the agent has in mind |
+|---|---|
+| `startup`, `clear` | nothing: new session, the agent knows nothing of this repo |
+| `compact` | only the compaction summary and what followed |
+| `resume` | the whole previous conversation |
+
+`CLAUDE.md` and `AGENTS.md` are not sent here: the agent already has them.
+
+**Reading the conversation.** memsift reads the host's transcript
+(`transcript_path`) from the end and never loads the whole file:
+
+- **Claude Code.** Each compaction adds a `Conversation compacted` marker
+  followed by the summary; nothing is removed. Only the last summary counts,
+  since each one includes the previous.
+- **Codex.** Each compaction adds a `compacted` record whose summary is
+  encrypted. memsift sends instead the user messages that Codex keeps in clear
+  in that record. Jev then knows what was discussed but not all the agent
+  retained, so it may sometimes paste an entry the agent already has.
+- **Recent exchanges.** The text of the prompts and answers since the last
+  compaction, newest kept first. Tool calls and their output are dropped; each
+  turn carries its action note instead, when the session file still has it.
+
+```
+transcript                                 sent to Jev
+User: continue the footer                  User: continue the footer
+Read footer.tsx → 240 lines                Agent: added the border on the left,
+Edit footer.tsx → diff                       tests pass.
+Bash pnpm test → 80 lines of output          Actions: Edit footer.tsx ×3 ·
+Edit footer.tsx → diff                       pnpm test failed → ok · git commit
+Bash pnpm test → 60 lines                  User: same for the header
+Bash git commit → output
+Agent: added the border on the left, …
+User: same for the header
+```
+
+**Over budget.** Cut in this order: oldest recent exchanges, then the end of
+the summary, then the oldest draft entries. The prompt, the questions and
+`jev.md` are never cut. If Jev still refuses the request as too large, it is
+retried once with half the recent exchanges; if that fails, nothing is pasted.
+
+**What the agent receives.** One block per source, entries pasted as they are,
+since Jev cannot write. When nothing was kept and no flag is pending, the hook
+returns nothing at all.
+
+```
+memsift, from the working notes:
+- [d3] 2026-10-12 decision
+  User: no, the header must reuse the footer grid
+  Agent: ok, the header now uses the footer's 12-column grid
+
+memsift, from Cognee (dataset lessons):
+- pnpm blocks dependency build scripts; allow them in package.json
+  under pnpm.onlyBuiltDependencies.
+
+memsift:
+- This repo has no jev.md. Propose a first version to the user.
+```
+
+**Flags.** A flag is given once, at the next prompt, then removed from the
+session file:
+
+| Flag | Raised by | Message to the agent |
+|---|---|---|
+| `jev_md_missing` | session start | This repo has no jev.md. Propose a first version to the user. |
+| `jev_md_outdated` | stop | jev.md looks outdated. Propose an update to the user. |
+| `dataset_undescribed:<name>` | session start | Cognee dataset `<name>` has no line in datasets.md. Propose a description to the user, or IGNORED. |
+
+### Tool use
+
+Builds the turn's action note, in code. Nothing is sent anywhere.
+
+| Call | Note |
+|---|---|
+| `Edit`, `MultiEdit`, `NotebookEdit` (Claude Code), `apply_patch` (Codex), on a file in the repo | `Edit <path>: <diff>`, diff cut to about 200 characters |
+| `Write` on a file in the repo | `Write <path>`, file name only |
+| any edit outside the repo (`/tmp`, scratchpad) | ignored |
+| `Bash` that changed the repo | `Bash: <command> (ok)` |
+| `Bash` that changed nothing | ignored |
+| a command that failed, then succeeded in the same turn | `Bash: <command> failed → ok`, marked as a possible lesson |
+| any other tool (reads, searches, web) | ignored |
+
+**Did a command change the repo?** memsift compares a snapshot of the repo
+taken after the call with the one kept in the session file. The snapshot is a
+hash of `HEAD` and of the uncommitted diff (`git diff HEAD` plus the list of
+untracked files), so it catches a commit, a new file, and a further change to
+an already modified file alike. It costs one `git` call of a few tens of
+milliseconds. It is refreshed after every edit too, so the next command is
+compared with an up-to-date state. Outside a git repo, commands are not noted.
+
+The action notes of the last 5 turns are kept in the session file.
+
+### Stop
+
+Runs in the background; the agent never waits for it.
+
+```
+input    session_id, last_assistant_message, transcript_path
+does     1. memsift paused?  → appends the turn to pending.jsonl, stops
+         2. Jev, one request (part 4):
+              nature: working_rule (this project) / decision / project_fact /
+                      lesson / nothing
+              is it a correction of the agent?
+              each pending correction: confirmed?
+              already known (working notes, CLAUDE.md, AGENTS.md)?
+              does jev.md look outdated?
+         3. worth keeping and not already known → entry appended to draft.md
+            confirmed correction                → "- [dN] confirmed" appended
+            jev.md outdated                     → flag jev_md_outdated
+         4. working notes ≥ 8 000 tokens → compaction (part 5)
+returns  nothing
+```
+
+The prompt comes from the session file, the answer from
+`last_assistant_message`, the action note from the session file.
+
+**What Jev reads.** About 21 000 tokens:
+
+| Part | Tokens |
+|---|---|
+| prompt, answer, action notes of the last 5 turns | ~ 3 000 |
+| questions and criteria | 2 000 |
+| `jev.md` | ≤ 3 000 |
+| `CLAUDE.md` and `AGENTS.md` at the repo root, those that exist | ≤ 3 000 together |
+| working notes | ≤ 10 000 |
+
+`CLAUDE.md` and `AGENTS.md` are the same kind of file under two conventions
+and are treated alike. Only the repo's own are read: general working rules are
+never kept in the notes (part 2), so the user's global files add nothing here.
+
+### Session end
+
+Runs in the background, so the terminal closes at once.
+
+```
+input    session_id
+does     1. draft.md not empty → compaction, even below 8 000 tokens:
+            packets sent to Cognee, digest.md rewritten (part 5)
+         2. deletes sessions/<session>.json
+returns  nothing
+```
+
+A session that crashes runs no session end. Its entries stay in `draft.md`
+and go out with the next compaction; its session file is removed after 7 days.
