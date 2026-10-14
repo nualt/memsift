@@ -1,0 +1,15 @@
+{
+  "name": "memsift",
+  "owner": {
+    "name": "nualt",
+    "url": "https://github.com/nualt"
+  },
+  "plugins": [
+    {
+      "name": "memsift",
+      "source": "./",
+      "version": "0.1.0",
+      "description": "Selective memory for coding agents, backed by Cognee."
+    }
+  ]
+}
