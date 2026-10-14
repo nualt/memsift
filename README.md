@@ -29,29 +29,30 @@ commands/            /memsift-resume, /memsift-doctor
 memsift/             the code, Python standard library only
 tests/               offline tests, with Jev, the compactor and Cognee simulated
 docs/SPEC.md         what memsift does, precisely enough to implement and test
-docs/ARCHITECTURE.md why it is built this way
+docs/ARCHITECTURE.md the full picture, and why it is built this way
 LICENSE, NOTICE      Apache-2.0, and the credit to the upstream project
 ```
 
 ## How it works
 
-memsift hooks into four moments of a session. None of them blocks you for long,
-and only the first one adds anything to the agent's context.
+memsift hooks into five moments of a session. Only the prompt makes you wait,
+and only the prompt adds anything to the agent's context.
 
 ```
   you type a prompt
       │
       ▼
-  Jev: is the agent missing something that already exists?
+  Jev, two seconds at most: is the agent missing something
+  that already exists?
       │
       ├── no (most prompts) ──────────────────────► nothing is added
       │
-      ├── yes, it is in this project's notes ─────► those lines are added
+      ├── yes, it is in this project's notes ─────► those entries are added
       │
       └── yes, and it is worth asking Cognee
               │
               ▼
-          Cognee returns its closest passages
+          Cognee returns its closest passages (12 s at most)
               │
               ▼
           Jev keeps the ones that change what the agent will do
@@ -60,22 +61,28 @@ and only the first one adds anything to the agent's context.
           a few lines are added, often none
 ```
 
-1. **Session start.** memsift fetches the list of what Cognee holds and checks
-   that the project has a `jev.md`. Nothing is sent to the agent.
-2. **Each prompt.** Jev answers three questions in one request: is anything
-   missing, is it in the working notes, and is it worth asking Cognee (and in
-   which datasets). Cognee is only queried when Jev is confident it will help.
+1. **Session start.** memsift notes how the session started, checks that the
+   project has a `jev.md`, and in the background fetches the list of what
+   Cognee holds. Nothing is sent to the agent.
+2. **Each prompt.** Jev answers in one request: is anything missing, which
+   entries of the working notes hold it, and is it worth asking Cognee (and in
+   which datasets). Cognee is only queried when Jev is confident it will help,
+   and Jev sorts its passages before anything is added.
 3. **While the agent works.** memsift notes what changed the repo: edits,
    commits, a command that failed and then worked. Reads are ignored. Nothing
    leaves the machine.
 4. **After each answer.** Jev decides, in the background, whether the turn
-   taught anything worth keeping, and where it belongs.
+   taught anything worth keeping. A correction waits until later turns confirm
+   it.
+5. **Session end.** Whatever is left in the notes is compacted and sent to
+   Cognee, in the background.
 
 | Kind | Example | Where it goes |
 |---|---|---|
-| this project | "the header reuses the footer grid" | the project's working notes, then Cognee |
+| a decision | "the header reuses the footer grid" | the project's working notes, then Cognee |
+| a project fact | "sharp must be allowed in pnpm here" | the project's working notes, then Cognee |
 | a rule for this project | "no Tailwind in this repo" | the project's working notes, then Cognee |
-| a technical lesson | "pnpm blocks build scripts unless allowed" | Cognee only |
+| a technical lesson | "pnpm blocks build scripts unless allowed" | the working notes until compaction, then Cognee only |
 | nothing | "ok", typos, status updates | dropped |
 
 How you like to work in general ("ask before committing") is not kept: it
@@ -86,173 +93,14 @@ When the working notes reach 8 000 tokens, a cheap model (Gemma) cleans and
 deduplicates them, sends them to Cognee, and rewrites a short digest of the
 project. At the end of a session, whatever is left goes the same way.
 
-<details>
-<summary>The full picture</summary>
-
-```
-  WHAT JEV HAS AT HAND  (almost free, never pasted as is into the agent)
-  ┌────────────────┐ ┌────────────────┐ ┌──────────────────────┐ ┌────────────────┐
-  │ jev.md         │ │ CLAUDE.md      │ │ what the agent has   │ │ the repo's     │
-  │ project, what  │ │ "already       │ │ in mind: last        │ │ WORKING NOTES  │
-  │ matters, phase │ │ written" (③)   │ │ /compact + recent    │ │ digest + draft │
-  └────────────────┘ └────────────────┘ └──────────────────────┘ └────────────────┘
-
-
- ⓪ SESSION START ─────────────────────────────────────────────── hook SessionStart
-     │
-     ├─ nothing to load: the WORKING NOTES are this repo's digest.md
-     │  (compacted) + draft.md (since then), read as they are
-     ├─ note how the session starts (new, /clear, /compact, resume)
-     │  → Jev will know whether the agent starts from scratch
-     ├─ Cognee: list of what it holds ──► cognee-index.json
-     │  (in the background, ~1-3 s, rewritten each session)
-     ├─ Cognee datasets compared to datasets.md: a new one?
-     │  ──► flag "propose a description"
-     └─ no jev.md?  ──► flag "propose a first draft"
-
-
- ① YOU TYPE A PROMPT ─────────────────────────────────────── hook UserPromptSubmit
-     │
-     ▼
-   ┌─────────────── JEV · one request · ~0.1-0.5 s ───────────────┐
-   │ ① "Is the agent missing something that ALREADY EXISTS?"      │
-   │ ② "Is it in the WORKING NOTES?"  → if so, which lines        │
-   │ ③ "Is it worth asking COGNEE?"                               │
-   │    (is the topic in cognee-index.json?)                      │
-   │    if so: in which datasets (read from datasets.md)          │
-   │ → each answer comes with a probability (0 to 1)              │
-   └───────────────────────────────┬──────────────────────────────┘
-          ┌────────────────────────┴─────────────────────────┐
-          ▼                        ▼                         ▼
-   nothing missing       it is in the notes          not in the notes,
-   (most prompts)        → the useful lines          and Jev ≥ 80 % sure
-   → NOTHING ADDED         are added                 (otherwise: nothing)
-                           │                                   │
-                           │                                   ▼
-                           │                         COGNEE: we wait
-                           │                         (~6 s, 12 s max)
-                           │                         it returns its 5
-                           │                         passages CLOSEST to
-                           │                         the question (not the
-                           │                         most useful ones)
-                           │                                   │
-                           │                                   ▼
-                           │               ┌────────────────── JEV ───────────────────┐
-                           │               │ ④ for each passage:                      │
-                           │               │    already in front of it? → dropped     │
-                           │               │    off topic / useless?    → dropped     │
-                           │               │    changes its next move?  → kept        │
-                           │               └───────────────────┬──────────────────────┘
-                           │                                   │
-                           └───────────────────────────────────┤
-                                                               ▼
-   ┌────────────────────────────── AGENT CONTEXT ───────────────────────────────┐
-   │ … our conversation …                                                       │
-   │ [ what the sorting kept, often nothing. For example:                       │
-   │   "Decision: the header reuses the footer grid" ]                          │
-   │ [ if flagged: "jev.md looks outdated, propose an update" ]                 │
-   │ your prompt                                                                │
-   └────────────────────────────────────────────────────────────────────────────┘
-
-   WAIT   usual plugin: ~6 s on EVERY prompt (median, up to 12 s)
-          memsift     : ~0.1-0.5 s when the notes are enough,
-                        a few seconds only when Jev judges
-                        that Cognee is worth it
-
-
- ② THE AGENT WORKS ───────────────────────────────────────────── hook PostToolUse
-     │   nothing is sent anywhere
-     ▼
-   ┌────────────── ACTION NOTE · local, plain code ───────────────┐
-   │ Bash that reads (git status, ls…)      ✗ ignored             │
-   │ Bash that changes (git commit…)        ✔ noted               │
-   │ Edit / Write in the repo               ✔ noted               │
-   │ Edit / Write in /tmp, scratch dirs     ✗ ignored             │
-   │ Python script via Bash                 ✔ if the repo changed │
-   │ failure, then success                  ✔ marked "lesson?"    │
-   └──────────────────────────────────────────────────────────────┘
-
-
- ③ THE AGENT ANSWERED ─────────────────────────── hook Stop · in the background
-     │   your prompt + its answer + action note
-     ▼
-   ┌──────────────────────────── JEV ─────────────────────────────┐
-   │ "What kind of information is this?"                          │
-   │   nothing important · this project · a technical lesson      │
-   │ "Already known?"  in the notes, CLAUDE.md                    │
-   │ "Is jev.md outdated?"                                        │
-   └──────────────────────────────┬───────────────────────────────┘
-     ┌────────────────────────────┴───────────────────────────┐
-     ▼                            ▼                           ▼
-   NOTHING                  PROJECT, LESSON             JEV.MD TO REVIEW
-   "commit pls"             "header: footer grid"       → FLAG, added to
-   "ask before              "no Tailwind here"            the next prompt:
-     committing"            "pnpm blocks build            the agent proposes,
-   → dropped                  scripts"                    you approve
-                            → repo draft.md
-                                  │
-                                  ▼
-                    notes full?  (digest + draft ≥ 8 000 tokens)
-                    no → carry on
-                                  │ yes
-                                  ▼
-   ┌───────────────── COMPACTION · in the background ─────────────────┐
-   │ GEMMA reads ALL of the repo's notes, in one pass:                │
-   │   ├─ cleans, deduplicates ──────────► SENDS TO COGNEE            │
-   │   │    technical lessons go there only: Jev will                 │
-   │   │    fetch them the day the problem comes back                 │
-   │   └─ rewrites digest.md (≤ 3 000 tokens), empties draft.md       │
-   │        this project: decisions, work in progress                 │
-   │        priority: work in progress, then most recent              │
-   │                                                                  │
-   │ meanwhile, Jev keeps using the old notes                         │
-   └──────────────────────────────┬───────────────────────────────────┘
-                                  │
-                                  ▼
-          NEXT TURN: Jev reads the new digest.md
-          + draft.md, holding only the turns added
-            during compaction
-
-   LONG SESSIONS: each compaction rewrites digest.md with the new turns
-   → never more than 3 000 tokens.
-   What drops out of digest.md is not lost: it is already in Cognee.
-
-   SESSION END: Gemma sends what is left in the notes to Cognee,
-   even if they are not full, and rewrites digest.md for the next ⓪.
-
-══════════════════════════════════════════════════════════════ COGNEE SERVER ═══
-
-   ┌──────────────────── COGNEE · memsift dataset ────────────────────┐
-   │ receives only clean, deduplicated packets                        │
-   │ stores and links them (graph)                                    │
-   │ → queried only at ①, when Jev judges it worth it                 │
-   └──────────────────────────────────────────────────────────────────┘
-
-   ┌─────────────────── YOUR CURATED KNOWLEDGE ───────────────────┐
-   │ your other datasets: playbooks, projects, lessons…           │
-   │ read at ① when Jev picks them (datasets.md) · NEVER written  │
-   │ datasets marked IGNORED in datasets.md: never queried        │
-   └──────────────────────────────────────────────────────────────┘
-
-
-  EXAMPLE: two panes on the same repo
-    pane A  "the header must reuse the footer grid"
-            ③ Jev: this project → draft.md
-    pane B  "why is the header misaligned?"
-            ① Jev reads the same draft.md, ② finds the line
-            → added, without asking Cognee
-
-  "ask before committing" applies everywhere: it belongs in CLAUDE.md /
-  AGENTS.md, which the agent already loads. memsift keeps project memory only.
-```
-
-</details>
+The full picture, moment by moment, is in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Why it is built this way
 
 1. **A decision model, not a chat model, decides what to inject.** Jev returns
-   probabilities, not text. It reads up to 26 000 tokens of context and answers
-   in a fraction of a second, for a fraction of a cent. That is what makes it
+   probabilities, not text. It reads up to 26 000 tokens of context and is
+   announced to answer in under half a second, for a fraction of a cent. That is what makes it
    affordable to ask on every prompt.
 2. **Missing means it already exists somewhere.** When you are writing a spec,
    everything is new and nothing is in memory yet. Asking Cognee then is wasted
@@ -277,15 +125,19 @@ project. At the end of a session, whatever is left goes the same way.
 
 ```
 ~/.memsift/
-├── datasets.md            what each Cognee dataset is for, one line each
-├── debug.log              every Jev decision in plain text, when MEMSIFT_DEBUG=1
+├── datasets.md             what each Cognee dataset is for, one line each
+├── state.json              failures and pauses, per service, for the whole machine
+├── debug.log               every error, always; every decision when MEMSIFT_DEBUG=1
+├── sessions/<session>.json one per running session, deleted at session end
 └── repos/<repo>/
-    ├── digest.md          compacted project memory (≤ 3 000 tokens)
-    ├── draft.md           turns kept by Jev since the last compaction
-    ├── pending.jsonl      turns noted while Jev was unreachable
-    └── cognee-index.json  what Cognee holds, refreshed each session
+    ├── digest.md           compacted project memory (≤ 3 000 tokens)
+    ├── draft.md            turns kept by Jev since the last compaction
+    ├── pending.jsonl       turns noted while Jev was unreachable
+    ├── outbox/             packets waiting for Cognee
+    ├── compaction.lock     held while a compaction runs
+    └── cognee-index.json   what Cognee holds, refreshed each session
 
-<repo>/jev.md              a short project card: what it is, what matters, which phase
+<repo>/jev.md               a short project card: what it is, what matters, which phase
 ```
 
 The working notes are `digest.md` and `draft.md` read together, up to 8 000
@@ -339,15 +191,15 @@ Settings are read from the environment, then from `~/.cognee/.env`.
 | `MEMSIFT_COMPACTOR_API_KEY` | none (required) | key for that endpoint |
 | `MEMSIFT_COMPACTOR_MODEL` | Gemma 4 26B-A4B | compactor model id at that endpoint |
 | `MEMSIFT_DATASET` | `memsift` | the Cognee dataset memsift writes to; it never writes elsewhere |
-| `MEMSIFT_DEBUG` | `0` | `1` writes every Jev decision to `~/.memsift/debug.log` |
+| `MEMSIFT_DEBUG` | `0` | `1` also writes every decision to `~/.memsift/debug.log`; errors are always written |
 
 ## What leaves your machine
 
 | Sent to | What | When |
 |---|---|---|
-| OpenRouter (Jev) | your prompt, the recent exchanges, the working notes, `jev.md` | each prompt and after each answer |
+| OpenRouter (Jev) | your prompt, the recent exchanges and last compaction summary, the working notes, `jev.md`, the dataset descriptions and item names; after each answer, also the agent's answer, the action notes and the repo's `CLAUDE.md` / `AGENTS.md` | each prompt and after each answer |
 | the compactor | the working notes of one project | when they are full, and at session end |
-| Cognee | the cleaned notes, the dataset list | at compaction; the list at session start |
+| Cognee | the cleaned notes; a request for the list of datasets and items | at compaction; the list at session start |
 
 Secrets are redacted before anything is sent: API keys, tokens, private keys,
 and values of variables whose names look like credentials. Tool output is never
@@ -383,7 +235,8 @@ tail -f ~/.memsift/debug.log
 | the compactor | Jev keeps working; compaction waits |
 | Cognee | Jev keeps working from the local notes; packets wait to be sent |
 
-Three failures in a row trigger the pause. The agent is told once, in one line,
+Three failures in a row trigger the pause; a refused key triggers it at once.
+The agent is told once, in one line,
 and you resume with `/memsift-resume`. On a prompt, Jev gets two seconds; past
 that, the prompt goes through without memory.
 
