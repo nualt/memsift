@@ -348,7 +348,7 @@ behind, so session start removes session files older than 7 days.
 | `prompt` | the current prompt, kept by the prompt hook for the stop hook |
 | `snapshot` | hash of the repo state (`HEAD` and the uncommitted diff), to tell whether a command changed something (part 3) |
 | `actions` | the action notes of the last 5 turns (part 3); an `Edit` keeps a diff of about 200 characters, a `Write` only its file name |
-| `flags` | messages for the agent at the next prompt: `jev_md_missing`, `jev_md_outdated`, `dataset_undescribed:<name>` |
+| `flags` | messages for the agent at the next prompt: `jev_md_missing`, `jev_md_outdated`, `dataset_undescribed:<name>`, `decision_reason_missing:<id>` |
 | `outage_notice_sent` | the one-line outage notice was already given (part 6) |
 
 ### jev.md
@@ -430,12 +430,12 @@ does     1. memsift paused (part 6)?  → outage notice once, then nothing
          2. turn + 1; keeps the prompt in the session file
          3. Jev, one request, 2 s at most:
               ① is the agent missing information that already exists?
-              ② is it in the working notes, and in which entries?
+              ② for each notes entry: does it hold what is missing?
               ③ is it worth asking Cognee, and in which datasets?
          4. decides:
-              P① < 0.7                         → nothing from memory
-              P① ≥ 0.7 and P② ≥ 0.5            → the notes entries Jev chose
-              P① ≥ 0.7, P② < 0.5, P③ ≥ 0.8     → Cognee
+              P① < 0.7                            → nothing from memory
+              P① ≥ 0.7, entries with P② ≥ 0.5     → those entries
+              P① ≥ 0.7, no such entry, P③ ≥ 0.8   → Cognee
          5. Cognee: recall on the chosen datasets, 12 s at most,
             then Jev ④ sorts the passages, 2 s at most
 returns  what was kept, then the pending flags, as additionalContext
@@ -528,6 +528,7 @@ session file:
 | `jev_md_missing` | session start | This repo has no jev.md. Propose a first version to the user. |
 | `jev_md_outdated` | stop | jev.md looks outdated. Propose an update to the user. |
 | `dataset_undescribed:<name>` | session start | Cognee dataset `<name>` has no line in datasets.md. Propose a description to the user, or IGNORED. |
+| `decision_reason_missing:<id>` | stop | Entry `<id>` records a structuring decision without its reason. Ask the user why. |
 
 ### Tool use
 
@@ -567,9 +568,11 @@ does     1. memsift paused?  → appends the turn to pending.jsonl, stops
               each pending correction: confirmed?
               already known (working notes, CLAUDE.md, AGENTS.md)?
               does jev.md look outdated?
+              a structuring decision given without its reason?
          3. worth keeping and not already known → entry appended to draft.md
             confirmed correction                → "- [dN] confirmed" appended
             jev.md outdated                     → flag jev_md_outdated
+            structuring decision, no reason     → flag decision_reason_missing
          4. working notes ≥ 8 000 tokens → compaction (part 5)
 returns  nothing
 ```
@@ -605,3 +608,179 @@ returns  nothing
 
 A session that crashes runs no session end. Its entries stay in `draft.md`
 and go out with the next compaction; its session file is removed after 7 days.
+
+## 4. Jev
+
+### Request
+
+Jev is TypeSafe's classifier, reached through OpenRouter. It never writes text:
+each question returns a probability, and code decides with thresholds.
+
+```
+POST https://openrouter.ai/api/alpha/decisions
+Authorization: Bearer $OPENROUTER_API_KEY
+{"model": "typesafe/jev-1.13", "state": {…}, "questions": {"<id>": {…}, …}}
+```
+
+| Question type | Returns | Used for |
+|---|---|---|
+| `noul` | probability of yes, 0 to 1 | every yes/no question |
+| `choice` | one option and the distribution | the nature of a turn |
+| `score` | a position on ordered levels | the scope of a turn |
+
+Rules that follow from how Jev works:
+
+- **Questions are in English**, Jev's strongest language. The state stays in the
+  user's language.
+- **One judgment per question.** To pick items from a list (notes entries,
+  datasets, passages), code asks one `noul` per item: Jev cannot write a list.
+- **State is a JSON object with named fields**, and questions point at them by
+  name (`notes.d3`). Each request sends only the fields its questions need: a
+  large state full of unrelated text lowers Jev's accuracy.
+- **No dates or numbers to compare.** Ordering and counting stay in code.
+- The model is pinned to a version (`MEMSIFT_JEV_MODEL`), since the thresholds
+  are tuned against it.
+
+### Prompt request
+
+Sent by the prompt hook. 2 s timeout.
+
+```json
+{
+  "prompt": "…",
+  "session_start": "new session: the agent knows nothing of this repo",
+  "project_card": "<jev.md>",
+  "compaction_summary": "…",
+  "recent_exchanges": "…",
+  "notes": {"g1": "…", "d3": "…"},
+  "datasets": {"lessons": {"description": "<datasets.md line>", "items": ["…"]}}
+}
+```
+
+`notes` holds every entry of `digest.md` and `draft.md` under its id.
+`datasets` merges `datasets.md` and `cognee-index.json`, without `IGNORED`
+datasets.
+
+| Id | Type | Question |
+|---|---|---|
+| `missing` | noul | Does the agent lack information, needed to act on `prompt`, that already exists: said or decided before this conversation, and not in `compaction_summary` or `recent_exchanges`? |
+| `entry_<id>` | noul | Does `notes.<id>` hold information the agent needs to act on `prompt` and does not have yet? |
+| `cognee` | noul | Is it worth searching the long-term memory? |
+| `dataset_<name>` | noul | Given its description and items, would `datasets.<name>` hold what the agent needs for `prompt`? |
+
+Criteria for `missing`:
+
+```
+true    the prompt refers to work, a decision or a preference from before this
+        conversation, which the agent cannot see
+false   the information does not exist yet (it is being decided now), or the
+        agent already has it, or the prompt needs no memory
+```
+
+Criteria for `cognee`:
+
+```
+true    the prompt refers to past work, a decision or a preference, absent from
+        the conversation and the notes, and the agent would act differently
+        knowing it
+false   a general question, an answer found in the code or the docs, or memory
+        would only be a bonus without changing what the agent does
+```
+
+Code:
+
+```
+missing < 0.7                                → nothing
+entries with entry_<id> ≥ 0.5                → those entries, in notes order
+no such entry, cognee ≥ 0.8                  → Cognee, in datasets with
+                                               dataset_<name> ≥ 0.5, or the
+                                               highest one if none passes
+otherwise                                    → nothing
+```
+
+### Passage request
+
+Sent after a Cognee recall. 2 s timeout. Its state holds only what the
+judgment needs: `prompt`, `compaction_summary`, `recent_exchanges` and
+`passages` (`p1` to `p5`). The notes are not sent: the prompt request already
+found the answer was not there.
+
+| Id | Type | Question |
+|---|---|---|
+| `useful_<n>` | noul | Would `passages.p<n>` change what the agent does for `prompt`? |
+| `known_<n>` | noul | Is the information in `passages.p<n>` already in `compaction_summary` or `recent_exchanges`? |
+
+Code: a passage is pasted when `useful ≥ 0.7` and `known < 0.5`.
+
+### Stop request
+
+Sent by the stop hook, in the background, and for each turn of
+`pending.jsonl` on `/memsift-resume`.
+
+```json
+{
+  "turn": {"prompt": "…", "answer": "…", "actions": ["…"]},
+  "recent_actions": ["…"],
+  "project_card": "<jev.md>",
+  "instruction_files": "<CLAUDE.md and AGENTS.md at the repo root>",
+  "notes": {"g1": "…", "d3": "…"},
+  "pending_corrections": {"d4": "…"}
+}
+```
+
+| Id | Type | Question |
+|---|---|---|
+| `nature` | choice | What kind of information does `turn` carry? |
+| `scope` | score | How long does it stay true? |
+| `correction` | noul | Does the user correct the agent in `turn`? |
+| `confirmed_<id>` | noul | Do `turn` and `recent_actions` confirm `pending_corrections.<id>`: applied, and not taken back? |
+| `known` | noul | Is it already in `notes` or `instruction_files`, or written this turn to a file listed under "documented in" in `project_card` (an edit in `turn.actions`)? |
+| `card_outdated` | noul | Does `turn` make `project_card` outdated: a new stake, a change of phase, or a contradiction? |
+| `reason_missing` | noul | Does `turn` take a structuring decision without giving its reason? |
+
+`card_outdated` is asked only when `jev.md` exists, `confirmed_<id>` only for
+pending corrections.
+
+`nature` options:
+
+| Option | Criteria |
+|---|---|
+| `working_rule` | how the user wants the agent to work: form of answers, way of coding, steps, what to ask before acting |
+| `decision` | a choice that steers what follows and cannot be read in the code or docs: the why, what was ruled out, where things stand |
+| `project_fact` | lasting information about this project: an address, an account, a constraint, a business rule |
+| `lesson` | a technical problem, and what worked or did not (a dead end saves trying it again) |
+| `nothing` | status, reaction, small talk, typo, a one-off instruction, a micro-choice applied in the code |
+
+`scope` levels: this turn · this task · this project · always.
+
+`reason_missing` is about structuring decisions ("we go with Medusa"), not
+micro-choices ("the button in blue").
+
+Code:
+
+```
+nature nothing, or scope "this turn"           → dropped
+working_rule with scope "always"               → dropped: general rules
+                                                 belong in CLAUDE.md / AGENTS.md
+known ≥ 0.5                                    → dropped
+nature confidence < 0.6 (< 0.4 for a correction) → dropped
+otherwise                                      → entry appended to draft.md,
+                                                 "· correction · pending" when
+                                                 correction ≥ 0.5
+confirmed_<id> ≥ 0.7                           → "- [<id>] confirmed" appended
+card_outdated ≥ 0.7                            → flag jev_md_outdated
+kept decision with reason_missing ≥ 0.7        → flag decision_reason_missing:<id>
+```
+
+### Thresholds
+
+Every number above is a starting point, kept in one place in `jev.py`, and set
+at calibration: about 50 real prompts labelled by hand ("should memory have
+pasted something, and what?"), run through Jev, and the thresholds that match
+the labels best are kept. Calibration also checks:
+
+- accuracy on prompts in the user's language, Jev being strongest in English;
+- the prompt request with its full state against a minimal one (`jev.md` and
+  notes only), keeping whichever errs less;
+- the `nature` answer with its options in another order, since Jev can lean
+  toward the first option.
