@@ -36,15 +36,22 @@ memsift/
 │   ├── plugin.json            Claude Code manifest, "hooks": "./hooks/claude-code.json"
 │   └── marketplace.json       plugin source "./"
 ├── .codex-plugin/
-│   └── plugin.json            Codex manifest, "hooks": "./hooks/codex.json"
-├── .agents/plugins/
-│   └── marketplace.json       Codex marketplace, plugin path "./"
+│   └── plugin.json            Codex manifest, "hooks": "./hooks/codex.json",
+│                              "skills": "./skills/"
+├── .agents/
+│   └── plugins/
+│       └── marketplace.json   Codex marketplace, plugin path "./"
 ├── hooks/
 │   ├── claude-code.json       ${CLAUDE_PLUGIN_ROOT}/memsift/run.py <event>
 │   └── codex.json             ${PLUGIN_ROOT}/memsift/run.py <event>
 ├── commands/
-│   ├── memsift-resume.md       /memsift-resume, after an outage
-│   └── memsift-doctor.md       /memsift-doctor, checks the setup
+│   ├── memsift-resume.md       Claude Code: /memsift-resume, after an outage
+│   └── memsift-doctor.md       Claude Code: /memsift-doctor, checks the setup
+├── skills/
+│   ├── memsift-resume/
+│   │   └── SKILL.md           Codex: $memsift-resume, after an outage
+│   └── memsift-doctor/
+│       └── SKILL.md           Codex: $memsift-doctor, checks the setup
 ├── memsift/                   the code, Python standard library only
 │   ├── run.py                 entry point: reads the hook JSON, calls the core,
 │   │                          prints the host's answer, never crashes the host
@@ -65,6 +72,13 @@ memsift/
 ├── NOTICE                     origin and copyright of upstream
 └── README.md
 ```
+
+Claude Code exposes the two recovery commands through `commands/`. Codex
+exposes them as skills through `skills/`: invoke `$memsift-resume` or
+`$memsift-doctor`, or ask the agent to run that skill. Both reach the same
+`memsift/run.py resume` and `doctor` entry points. A Codex skill resolves the
+plugin root two directories above its containing directory and shows the
+runner's output to the user.
 
 `host.py` holds every difference between hosts. Claude Code and Codex hooks
 share the same events and almost the same JSON, so one module with a few

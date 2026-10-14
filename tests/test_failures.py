@@ -1,6 +1,7 @@
 """Machine-wide service failure and token calibration contracts."""
 
 from datetime import datetime, timezone
+import io
 import multiprocessing
 import os
 import subprocess
@@ -55,7 +56,7 @@ class FailureTests(IsolatedTest):
             expected = "auth" if status in (401, 403) else "limited" if status in (429, 529) else "failure"
             errors = [breaker.ServiceError("cognee", "refused", status)]
             if status:
-                http_error = HTTPError("https://service.invalid/recall", status, "refused", {}, None)
+                http_error = HTTPError("https://service.invalid/recall", status, "refused", {}, io.BytesIO())
                 self.addCleanup(http_error.close)
                 errors.append(http_error)
             for exc in errors:

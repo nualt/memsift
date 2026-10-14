@@ -16,18 +16,22 @@ It was built for the agents that run [Nualt](https://nualt.fr)'s own projects,
 on a self-hosted [Cognee](https://github.com/topoteretes/cognee) server, as a
 fork of Cognee's own Claude Code and Codex integrations.
 
-> Status: specification in progress, not usable yet. The design is fixed in
-> [docs/SPEC.md](docs/SPEC.md); this README describes what 0.1 will do.
+> Status: 0.1 implementation with offline tests. Live installation, context
+> delivery and model acceptance remain unverified. The contract is in
+> [docs/SPEC.md](docs/SPEC.md); calibrate before relying on the thresholds.
 
 ## What is in here
 
 ```
 .claude-plugin/      Claude Code manifest and marketplace
 .codex-plugin/       Codex manifest
+.agents/plugins/    Codex marketplace, plugin path ./
 hooks/               one hook file per host, both calling the same code
-commands/            /memsift-resume, /memsift-doctor
+commands/            Claude Code: /memsift-resume, /memsift-doctor
+skills/              Codex: memsift-resume/SKILL.md, memsift-doctor/SKILL.md
 memsift/             the code, Python standard library only
-tests/               offline tests, with Jev, the compactor and Cognee simulated
+tests/               isolated offline tests and opt-in calibration tools
+.github/workflows/   offline tests on Python 3.9 and stable 3.x
 docs/SPEC.md         what memsift does, precisely enough to implement and test
 docs/ARCHITECTURE.md the full picture, and why it is built this way
 LICENSE, NOTICE      Apache-2.0, and the credit to the upstream project
@@ -55,7 +59,7 @@ and only the prompt adds anything to the agent's context.
           Cognee returns its closest passages (12 s at most)
               │
               ▼
-          Jev keeps the ones that change what the agent will do
+          Jev, two seconds at most: keeps the useful, unknown passages
               │
               ▼
           a few lines are added, often none
@@ -72,10 +76,10 @@ and only the prompt adds anything to the agent's context.
    commits, a command that failed and then worked. Reads are ignored. Nothing
    leaves the machine.
 4. **After each answer.** Jev decides, in the background, whether the turn
-   taught anything worth keeping. A correction waits until later turns confirm
-   it.
+   taught anything worth keeping. A correction stays pending until later turns
+   confirm it; compaction applies confirmed corrections.
 5. **Session end.** Whatever is left in the notes is compacted and sent to
-   Cognee, in the background.
+   Cognee, in the background. A failed upload stays in the outbox.
 
 | Kind | Example | Where it goes |
 |---|---|---|
@@ -99,9 +103,10 @@ The full picture, moment by moment, is in
 ## Why it is built this way
 
 1. **A decision model, not a chat model, decides what to inject.** Jev returns
-   probabilities, not text. It reads up to 26 000 tokens of context and is
-   announced to answer in under half a second, for a fraction of a cent. That is what makes it
-   affordable to ask on every prompt.
+   probabilities, not text. A typical full prompt budget is about 26 000
+   estimated tokens. Each prompt classification has a two-second deadline;
+   the whole Cognee cascade has at most 2 + 12 + 2 = 16 seconds. Live latency
+   and costs still need operator measurement.
 2. **Missing means it already exists somewhere.** When you are writing a spec,
    everything is new and nothing is in memory yet. Asking Cognee then is wasted
    time. Jev looks for information that exists, not information the agent
@@ -111,13 +116,13 @@ The full picture, moment by moment, is in
    blue") is not a decision worth remembering; the reason behind it might be.
 4. **Corrections wait for proof.** When you correct the agent, the old line is
    only replaced once an edit, a commit or the following turns confirm it.
-5. **Local first, Cognee second.** The working notes answer most questions in
-   milliseconds. Cognee is the long-term store, queried on purpose.
+5. **Local first, Cognee second.** Jev selects entries from the working notes
+   before considering Cognee, the long-term store.
 6. **One source of truth per thing.** General working rules stay in the
    host's own instruction files; memsift does not keep a second copy. The list
    of what Cognee holds is a cache rebuilt each session, never edited by hand.
 7. **Stop instead of failing quietly.** After three failures in a row, memsift
-   pauses and the agent tells you, rather than running models in the void.
+   pauses that service and the agent tells you at its next prompt.
 
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) gives the full reasoning.
 
@@ -135,13 +140,15 @@ The full picture, moment by moment, is in
     ├── pending.jsonl       turns noted while Jev was unreachable
     ├── outbox/             packets waiting for Cognee
     ├── compaction.lock     held while a compaction runs
+    ├── replay.lock         held while pending turns are sorted and acknowledged
     └── cognee-index.json   what Cognee holds, refreshed each session
 
 <repo>/jev.md               a short project card: what it is, what matters, which phase
 ```
 
-The working notes are `digest.md` and `draft.md` read together, up to 8 000
-tokens. Every session on the machine reads the same files on each hook, so a
+The working notes are `digest.md` and `draft.md` read together. At 8 000
+estimated tokens they trigger compaction; they can grow while it is paused.
+Every session on the machine reads the same notes for its repo, so a
 decision noted in one pane is seen at the next prompt of another pane on the
 same repo. Writes are append-only; compaction runs under a lock.
 
@@ -171,9 +178,14 @@ codex plugin marketplace add nualt/memsift --ref main
 codex plugin add memsift@memsift
 ```
 
+These commands match the locally checked host CLI syntax. Marketplace
+installation, Codex's root source `./`, skill discovery and prompt-context
+delivery still require live verification.
+
 Then put your keys in `~/.cognee/.env`, start a new session and run
-`/memsift-doctor`: it checks the configuration and that Cognee, Jev and the
-compactor answer, and says what to fix.
+`/memsift-doctor` in Claude Code or `$memsift-doctor` in Codex (or ask for the
+skill). It checks the configuration and each service with one minimal request,
+even when paused, and says what to fix. Doctor does not resume services.
 
 ## Configuration
 
@@ -186,7 +198,7 @@ Settings are read from the environment, then from `~/.cognee/.env`.
 | `COGNEE_API_KEY` | none (required) | Cognee API key, sent as `X-Api-Key` |
 | `OPENROUTER_API_KEY` | none (required) | key for Jev; usage shows on your OpenRouter dashboard |
 | `MEMSIFT_JEV_MODEL` | `typesafe/jev-1.13` | Jev model on OpenRouter |
-| `MEMSIFT_COMPACTOR_URL` | OpenRouter | any OpenAI-compatible base URL |
+| `MEMSIFT_COMPACTOR_URL` | `https://openrouter.ai/api/v1` | any OpenAI-compatible base URL |
 | `MEMSIFT_COMPACTOR_API_KEY` | `OPENROUTER_API_KEY` | key for that endpoint; needed only for another endpoint |
 | `MEMSIFT_COMPACTOR_MODEL` | `anthropic/claude-haiku-5.5` | compactor model id at that endpoint |
 | `MEMSIFT_DATASET` | `memsift` | the Cognee dataset memsift writes to; it never writes elsewhere |
@@ -196,65 +208,95 @@ Settings are read from the environment, then from `~/.cognee/.env`.
 
 | Sent to | What | When |
 |---|---|---|
-| OpenRouter (Jev) | your prompt, the recent exchanges and last compaction summary, the working notes, `jev.md`, the dataset descriptions and item names; after each answer, also the agent's answer, the action notes and the repo's `CLAUDE.md` / `AGENTS.md` | each prompt and after each answer |
-| the compactor | the working notes of one project | when they are full, and at session end |
-| Cognee | the cleaned notes; a request for the list of datasets and items | at compaction; the list at session start |
+| OpenRouter (Jev) | prompt classification: your prompt, session-start source, recent user/assistant exchanges, last compaction summary, working notes, `jev.md`, dataset descriptions and item names; Stop: the turn's prompt, answer and action notes, recent actions, `jev.md`, notes, pending corrections and repo-root `CLAUDE.md` / `AGENTS.md`, plus recent exchanges when corrections are pending; passage selection: prompt, summary, recent exchanges and recalled passages | each prompt and after each answer, while Jev is active |
+| the compactor | one project's digest and eligible draft entries, with compaction instructions and a response schema | at 8 000 estimated tokens, at session end, or a minimal doctor/resume probe |
+| Cognee | recall: the current redacted prompt as the query, selected dataset IDs/names and search metadata; upload: cleaned packet text, packet filename, target dataset and node-set fields; index: requests for dataset and item lists | recall only when Jev selects it; uploads after compaction, at session start and on resume; index at session start; minimal doctor/resume probes |
+
+Model requests also carry the configured model ID and the questions or
+instructions. Each service receives its API key in an authentication header;
+redaction applies to content, not to the key needed to authenticate the call.
 
 Secrets are redacted before anything is sent: API keys, tokens, private keys,
-and values of variables whose names look like credentials. Tool output is never
+and values of variables whose names look like credentials. Generated local
+files and temporary worker inputs are redacted before writing too. Tool output is never
 sent as is; memsift only keeps a short note of what changed.
+
+Codex compaction summaries are encrypted. memsift uses the user messages kept
+in clear in the compacted record, so it can sometimes inject something the
+agent already retained. Claude Code uses the latest clear summary.
 
 ## Cost
 
-At the time of writing, Jev costs $0.042 per million input tokens. A prompt
-with a full context (about 26 000 tokens) costs about a tenth of a cent; most
-prompts carry much less. A compaction with Claude Haiku 5.5 through
-OpenRouter ($0.10 in, $0.50 out per million tokens) costs about half a cent,
-a few times a day. Cognee runs
-on your own server.
+Cost depends on provider prices, actual token usage and how often memory is
+selected. The opt-in calibration scripts print estimates from their dated
+price table and ask for confirmation before calling models. Check prices
+with your provider before running them; these estimates are not measured
+session costs. Cognee runs on your own server.
 
 ## Watching what it does
 
 Errors are always written to `~/.memsift/debug.log`, with their traceback:
-memsift never breaks your agent, so this is where a failure shows. With
+memsift never breaks your agent, so this is where a failure shows. If the log
+itself is physically unwritable, the runner still returns zero without context
+and cannot record that failure there. With
 `MEMSIFT_DEBUG=1`, every decision is written too:
 
 ```
 tail -f ~/.memsift/debug.log
 
-09:41:02 prompt  "back to the header"  missing 0.85 · g1 0.92 → 1 entry pasted
-09:41:40 stop    decision · this task · 0.81 → d7 appended
-10:02:10 ERROR prompt  cognee: timeout after 12.0 s · failures 2/3
+DECISION core-prompt {"entries": ["g1"], "datasets": [], "recall": false}
+DECISION jev-tokens {"estimated_tokens": 21300, "input_tokens": 21100}
+ERROR core-prompt cognee status=0 duration=12.000
 ```
+
+These are illustrative records, not measured latency. The log rotates at
+20 000 000 bytes and keeps one previous file.
 
 ## When something fails
 
 | Down | What happens |
 |---|---|
-| Jev | memsift pauses entirely; turns are queued in `pending.jsonl` and sorted on resume |
+| Jev | failed Stop calls queue turns immediately; once paused, automatic model work stops and turns keep queuing |
 | the compactor | Jev keeps working; compaction waits |
 | Cognee | Jev keeps working from the local notes; packets wait to be sent |
 
-Three failures in a row trigger the pause; a refused key triggers it at once.
-The agent is told once, in one line,
-and you resume with `/memsift-resume`. On a prompt, Jev gets two seconds; past
-that, the prompt goes through without memory.
+Three consecutive failures trigger a pause; HTTP 401/403 triggers it at once.
+HTTP 429/529 is logged but does not increment or reset the counter. A successful
+ordinary call resets failures without lifting a pause. Each paused service is
+announced once per running session at its next prompt.
+
+Resume explicitly with `/memsift-resume` in Claude Code or `$memsift-resume`
+in Codex (or ask for the skill). Successful probes clear that service's pause
+and counter and allow later outages to be announced again. Resume drains every
+repo's outbox and sorts pending turns in the current repo. Other repos replay
+at their next successful Stop; this repo can also replay at a successful Stop.
+There is no automatic resume. On a prompt timeout, work continues without memory.
 
 ## Hosts
 
 | Host | Status |
 |---|---|
-| Claude Code | planned for 0.1 |
-| Codex | planned for 0.1 |
+| Claude Code | implemented and tested offline; live install and acceptance pending |
+| Codex | implemented and tested offline; root install, skill discovery and acceptance pending |
 | Gemini CLI | later; its hooks can inject context |
 | Cursor | later, partial; its prompt hook cannot inject context |
 
 ## Status
 
-memsift is the memory layer we use at Nualt, on our own projects, with one
-Cognee server. The probability thresholds are first guesses, to be calibrated
-on about fifty real prompts once the code runs. Reports of wrong injections and
-missed recalls are welcome as issues.
+Run the isolated suite with `python3 -m unittest discover -s tests -t .`.
+It uses invented `acme-shop` data, temporary HOME directories and a fake HTTP
+server on `127.0.0.1`; external sockets are refused in tests and their guarded
+children. No dependencies, real credentials or model calls are needed. CI is
+configured for Python 3.9 and the latest stable `3.x`, with prereleases disabled.
+
+Live acceptance is separate: follow the eight checks in
+[SPEC part 7](docs/SPEC.md#live-tests), first on Claude Code, then Codex, with
+`MEMSIFT_DEBUG=1`. Installation and those checks have not been run as part of
+offline integration. The probability thresholds remain first guesses.
+Calibrate on about fifty real prompts and compare two or three real drafts
+only after reviewing and confirming each script's cost estimate. Keep labels
+and captures outside the repository. Reports of wrong injections and missed
+recalls are welcome as issues.
 
 ## Origin and license
 

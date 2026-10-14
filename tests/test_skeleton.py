@@ -55,7 +55,7 @@ class SkeletonTests(IsolatedTest):
     def test_fake_timeout_is_bounded(self):
         self.fake.push({"answers": {}}, delay=3.0)
         request = urllib.request.Request("https://example.invalid/decision")
-        with self.assertRaises((TimeoutError, urllib.error.URLError)):
+        with self.assertRaises((TimeoutError, socket.timeout, urllib.error.URLError)):
             self.fake.open(request, timeout=2.0)
         self.assertEqual(len(self.fake.requests), 1)
 
