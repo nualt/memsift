@@ -108,6 +108,14 @@ def error(event: str, exc: Exception, service: str = "", status: int = 0,
 def decision(event: str, details: dict) -> None:
     from .env_file import load_config
 
-    if load_config()["MEMSIFT_DEBUG"] == "1":
-        append_line(Path.home() / ".memsift" / "debug.log",
-                    "DECISION %s %s" % (event, json.dumps(redact(details), ensure_ascii=False)))
+    # A busy debug.log lock logs a decision into debug.log itself: without this guard
+    # each nested write waits on the lock its caller holds, about 10 s of recursion.
+    if getattr(_logging, "active", False):
+        return
+    _logging.active = True
+    try:
+        if load_config()["MEMSIFT_DEBUG"] == "1":
+            append_line(Path.home() / ".memsift" / "debug.log",
+                        "DECISION %s %s" % (event, json.dumps(redact(details), ensure_ascii=False)))
+    finally:
+        _logging.active = False

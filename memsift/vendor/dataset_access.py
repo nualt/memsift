@@ -8,12 +8,10 @@ from uuid import UUID
 
 
 def dataset_id(value):
+    # Not a UUID means a dataset name: the normal fallback, not an error.
     try:
         return str(UUID(str(value)))
-    except (TypeError, ValueError, AttributeError) as exc:
-        from .logfiles import error
-
-        error("dataset-id", exc)
+    except (TypeError, ValueError, AttributeError):
         return ""
 
 

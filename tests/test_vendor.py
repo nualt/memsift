@@ -137,6 +137,21 @@ class VendorTests(IsolatedTest):
             decision("from-file", {})
         self.assertIn("from-file", self.log())
 
+    def test_busy_debug_log_lock_does_not_recurse(self):
+        import fcntl
+        from memsift.vendor.logfiles import decision
+        lock = self.home / ".memsift" / "debug.log.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock, "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            started = time.monotonic()
+            with patch.dict(os.environ, {"MEMSIFT_DEBUG": "1"}):
+                decision("prompt", {"n": 1})
+            elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 0.5)
+        self.assertEqual(self.log().count("debug.log.lock"), 0)
+        self.assertIn('"n": 1', self.log())
+
     def test_log_rotates_before_crossing_cap_and_redacts(self):
         from memsift.vendor.logfiles import append_line
         path = self.home / ".memsift" / "debug.log"
@@ -230,7 +245,7 @@ class VendorTests(IsolatedTest):
         self.assertEqual(write_fields(ident), {"dataset_id": ident})
         self.assertEqual(write_fields("memsift"), {"dataset_name": "memsift"})
         self.assertEqual(dataset_id(None), "")
-        self.assertIn("Traceback", self.log())
+        self.assertEqual(self.log(), "")  # a name is the normal fallback, not an error
 
     def recall(self, **kwargs):
         from memsift.vendor.recall_http import do_recall
