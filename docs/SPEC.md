@@ -903,6 +903,6 @@ content.
 
 ### Calibration
 
-On two or three real drafts: the compacted digest and packet must keep what
-the user said without changing it. If Gemma 4 26B-A4B distorts, try Gemma 4
-31B.
+On two or three real drafts, Gemma 4 26B-A4B is compared with Gemma 4 31B and
+Claude Haiku 5.5: the compacted digest and packet must keep what the user said
+without changing it. The cheapest model that does not distort is the default.
