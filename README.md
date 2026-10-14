@@ -89,7 +89,7 @@ How you like to work in general ("ask before committing") is not kept: it
 belongs in your `CLAUDE.md` or `AGENTS.md`, which the agent already loads in
 full. memsift keeps project memory only.
 
-When the working notes reach 8 000 tokens, a cheap model (Gemma) cleans and
+When the working notes reach 8 000 tokens, a cheap model (Claude Haiku, by default) cleans and
 deduplicates them, sends them to Cognee, and rewrites a short digest of the
 project. At the end of a session, whatever is left goes the same way.
 
@@ -154,9 +154,8 @@ Requirements:
 
 - Python 3.9 or later as `python3`; standard library only, nothing to install
 - a running Cognee server and its API key
-- an [OpenRouter](https://openrouter.ai) key, for Jev
-- any OpenAI-compatible endpoint for the compactor, for example Gemma 4 on
-  [DeepInfra](https://deepinfra.com)
+- an [OpenRouter](https://openrouter.ai) key, for Jev and, by default, the
+  compactor; any other OpenAI-compatible endpoint can run the compactor
 
 Claude Code:
 
@@ -187,9 +186,9 @@ Settings are read from the environment, then from `~/.cognee/.env`.
 | `COGNEE_API_KEY` | none (required) | Cognee API key, sent as `X-Api-Key` |
 | `OPENROUTER_API_KEY` | none (required) | key for Jev; usage shows on your OpenRouter dashboard |
 | `MEMSIFT_JEV_MODEL` | `typesafe/jev-1.13` | Jev model on OpenRouter |
-| `MEMSIFT_COMPACTOR_URL` | DeepInfra's OpenAI-compatible endpoint | any OpenAI-compatible base URL |
-| `MEMSIFT_COMPACTOR_API_KEY` | none (required) | key for that endpoint |
-| `MEMSIFT_COMPACTOR_MODEL` | Gemma 4 26B-A4B | compactor model id at that endpoint |
+| `MEMSIFT_COMPACTOR_URL` | OpenRouter | any OpenAI-compatible base URL |
+| `MEMSIFT_COMPACTOR_API_KEY` | `OPENROUTER_API_KEY` | key for that endpoint; needed only for another endpoint |
+| `MEMSIFT_COMPACTOR_MODEL` | `anthropic/claude-haiku-5.5` | compactor model id at that endpoint |
 | `MEMSIFT_DATASET` | `memsift` | the Cognee dataset memsift writes to; it never writes elsewhere |
 | `MEMSIFT_DEBUG` | `0` | `1` also writes every decision to `~/.memsift/debug.log`; errors are always written |
 
@@ -209,8 +208,9 @@ sent as is; memsift only keeps a short note of what changed.
 
 At the time of writing, Jev costs $0.042 per million input tokens. A prompt
 with a full context (about 26 000 tokens) costs about a tenth of a cent; most
-prompts carry much less. A compaction with Gemma 4 26B on DeepInfra
-($0.07 in, $0.34 out per million tokens) costs well under a cent. Cognee runs
+prompts carry much less. A compaction with Claude Haiku 5.5 through
+OpenRouter ($0.10 in, $0.50 out per million tokens) costs about half a cent,
+a few times a day. Cognee runs
 on your own server.
 
 ## Watching what it does

@@ -22,7 +22,7 @@ Contents:
   └──────────────┘ added context │           │    probabilities    └──────────────────────┘
                                  │           │
                                  │  memsift  │  working notes      ┌──────────────────────┐
-                                 │           │ ──────────────────► │ compactor (Gemma)    │
+                                 │           │ ──────────────────► │ compactor (Haiku)    │
                                  │           │ ◄────────────────── │ the only writer      │
                                  │           │  digest + packet    └──────────────────────┘
                                  │           │
@@ -47,7 +47,7 @@ Cognee                           ~6 s        asked only when Jev judges it worth
 Two models, two jobs. **Jev** is a classifier: it reads a lot of context and
 returns probabilities, and code decides with thresholds. It decides what to
 add to the agent's context and what to keep from each turn. **The compactor**
-(Gemma 4 by default) is the only component that writes sentences: from time
+(Claude Haiku by default) is the only component that writes sentences: from time
 to time it turns the raw notes into a short digest and a clean packet for
 Cognee.
 
@@ -175,7 +175,7 @@ set at calibration (SPEC part 4).
                                   ▼
    ┌───────────────── COMPACTION · in the background ─────────────────┐
    │ one at a time per repo (lock); a second one does nothing         │
-   │ GEMMA reads ALL of the repo's notes, in one request:             │
+   │ HAIKU reads ALL of the repo's notes, in one request:             │
    │   ├─ packet: what is new since the last compaction, cleaned      │
    │   │    and merged, lessons included ──────► COGNEE (or outbox)   │
    │   └─ digest.md rewritten: in progress · decisions ·              │
@@ -249,7 +249,7 @@ hooks/codex.json ────────┴──► memsift/run.py   reads the
             ┌──────────────┬────────┴─────┬──────────────┬──────────────┐
             ▼              ▼              ▼              ▼              ▼
         store.py        jev.py      compactor.py    cognee.py      breaker.py
-        files on disk,  questions,  Gemma request,  recall, add,   failures,
+        files on disk,  questions,  model request,  recall, add,   failures,
         locks           thresholds  answer checks   dataset list   pauses
 
         shared: vendor/, kept from upstream (Cognee HTTP, redaction,
@@ -277,10 +277,11 @@ context on every prompt and still add nothing to the agent.
 
 Since Jev cannot write, everything it picks is copied as it is: a notes entry
 is the raw turn with labels added by code, and what reaches the agent are
-entries as written. Only the compactor rewrites text. It needs fidelity, not
-reasoning: keep the user's words, invent nothing, no reasoning tokens, and a
-provider that does not keep the data. Speed does not matter, since it runs in
-the background.
+entries as written. Only the compactor rewrites text. It needs fidelity: keep
+the user's words, invent nothing, and settle corrections right. Speed does not
+matter, since it runs in the background, so a model that reasons before
+answering is affordable; on a first test it was the only one that kept every
+statement right.
 
 ### Only what is missing, and already exists
 

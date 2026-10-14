@@ -52,7 +52,7 @@ memsift/
 │   ├── core.py                start / prompt / tool / stop / end
 │   ├── store.py               files on disk (part 2), append-only, locks
 │   ├── jev.py                 Jev requests and questions (part 4)
-│   ├── compactor.py           Gemma compaction (part 5)
+│   ├── compactor.py           compaction (part 5)
 │   ├── cognee.py              Cognee HTTP: recall, add, datasets, items
 │   ├── breaker.py             3 failures in a row → pause (part 6)
 │   ├── doctor.py              config, keys, Cognee and Jev reachable (part 6)
@@ -792,9 +792,9 @@ the labels best are kept. Calibration also checks:
 ## 5. Compactor
 
 The compactor is the only part of memsift that writes sentences. It runs
-Gemma 4 26B-A4B by default, through any OpenAI-compatible API
-(`MEMSIFT_COMPACTOR_URL`, `MEMSIFT_COMPACTOR_API_KEY`,
-`MEMSIFT_COMPACTOR_MODEL`).
+Claude Haiku 5.5 by default, through OpenRouter with the same key as Jev. Any
+OpenAI-compatible API can be used instead (`MEMSIFT_COMPACTOR_URL`,
+`MEMSIFT_COMPACTOR_API_KEY`, `MEMSIFT_COMPACTOR_MODEL`).
 
 ### When
 
@@ -809,7 +809,7 @@ does nothing, since the running one will empty the draft.
 
 ```
 1. reads digest.md and draft.md, and remembers where draft.md ended
-2. Gemma, one request → new digest + packet
+2. the compactor, one request → new digest + packet
 3. code checks the answer (schema, ids, length); invalid → one retry;
    invalid again → nothing is written, the notes stay as they were
 4. rewrites digest.md
@@ -821,12 +821,12 @@ does nothing, since the running one will empty the draft.
 Jev keeps reading the old notes until step 4; nothing is lost if a turn ends
 during the compaction.
 
-### Gemma request
+### Compactor request
 
 ```
 POST $MEMSIFT_COMPACTOR_URL/chat/completions
 {
-  "model": "google/gemma-4-26B-A4B-it",
+  "model": "anthropic/claude-haiku-5.5",
   "temperature": 0.2,
   "messages": [{"role": "system", "content": "<instructions>"},
                {"role": "user", "content": "<digest.md>\n\n<draft.md>"}],
@@ -834,8 +834,9 @@ POST $MEMSIFT_COMPACTOR_URL/chat/completions
 }
 ```
 
-The system message never starts with `<|think|>`, so Gemma does not reason:
-compaction needs fidelity, not reasoning.
+The model may reason before it answers. Compaction runs in the background, so
+the extra seconds cost nobody any waiting, and the extra tokens cost a fraction
+of a cent.
 
 Instructions:
 
@@ -867,8 +868,8 @@ Answer schema:
 
 ### digest.md
 
-Code writes the file from the answer and numbers the lines; Gemma never
-handles ids. Ids start again from `g1` at each compaction.
+Code writes the file from the answer and numbers the lines; the compactor
+never handles ids. Ids start again from `g1` at each compaction.
 
 ```
 # Digest: acme-shop-3f2a91
@@ -884,7 +885,7 @@ handles ids. Ids start again from `g1` at each compaction.
 
 **Length.** If the digest goes over 3 000 tokens, code removes the oldest
 lines of the last non-empty section, then the one before, until it fits.
-Gemma cannot count tokens reliably, and a digest that grows would leave less
+A model cannot count tokens reliably, and a digest that grows would leave less
 room for the draft, until a compaction ran at every turn. The removed lines are
 already in Cognee, sent by this packet or an earlier one.
 
@@ -906,9 +907,10 @@ content.
 
 ### Calibration
 
-On two or three real drafts, Gemma 4 26B-A4B is compared with Gemma 4 31B and
-Claude Haiku 5.5: the compacted digest and packet must keep what the user said
-without changing it. The cheapest model that does not distort is the default.
+On two or three real drafts, the default model is checked: the compacted
+digest and packet must keep what the user said without changing it.
+`tests/compare_compactors.py` runs the same draft through other models (Gemma 4
+31B, for instance) for comparison.
 
 ## 6. Failures
 
@@ -1003,11 +1005,10 @@ One line per check, `✓` or `✗` with what to do. Key values are never printed
 
 ```
 ✓ Python 3.12
-✓ configuration found: COGNEE_BASE_URL, COGNEE_API_KEY, OPENROUTER_API_KEY,
-  MEMSIFT_COMPACTOR_URL, MEMSIFT_COMPACTOR_API_KEY
+✓ configuration found: COGNEE_BASE_URL, COGNEE_API_KEY, OPENROUTER_API_KEY
 ✓ Cognee reachable, key accepted, dataset memsift
 ✓ Jev reachable (one minimal request)
-✗ compactor: HTTP 401, check MEMSIFT_COMPACTOR_API_KEY
+✗ compactor: HTTP 401, check OPENROUTER_API_KEY
 ✓ ~/.memsift writable
 ✓ nothing paused · 0 turns pending · 0 packets waiting
 ✗ datasets.md: "clients" has no description
@@ -1027,9 +1028,9 @@ Cognee plugins already use. Values are never printed or logged.
 | `COGNEE_API_KEY` | required | Cognee API key, sent as `X-Api-Key` |
 | `OPENROUTER_API_KEY` | required | key for Jev |
 | `MEMSIFT_JEV_MODEL` | `typesafe/jev-1.13` | Jev model, pinned to a version (part 4) |
-| `MEMSIFT_COMPACTOR_URL` | `https://api.deepinfra.com/v1/openai` | any OpenAI-compatible base URL |
-| `MEMSIFT_COMPACTOR_API_KEY` | required | key for that endpoint |
-| `MEMSIFT_COMPACTOR_MODEL` | `google/gemma-4-26B-A4B-it` | compactor model at that endpoint |
+| `MEMSIFT_COMPACTOR_URL` | `https://openrouter.ai/api/v1` | any OpenAI-compatible base URL |
+| `MEMSIFT_COMPACTOR_API_KEY` | `OPENROUTER_API_KEY` | key for that endpoint; needed only for another endpoint |
+| `MEMSIFT_COMPACTOR_MODEL` | `anthropic/claude-haiku-5.5` | compactor model at that endpoint |
 | `MEMSIFT_DATASET` | `memsift` | the only Cognee dataset memsift writes to |
 | `MEMSIFT_DEBUG` | `0` | `1` writes every decision to `debug.log` |
 
