@@ -15,6 +15,15 @@ Parts:
 
 ## 1. Layout
 
+### Origin
+
+memsift is a fork of the Claude Code and Codex integrations from
+[cognee-integrations](https://github.com/topoteretes/cognee-integrations)
+by Topoteretes UG, the makers of Cognee (Apache-2.0). In this document,
+"upstream" means that project. memsift keeps upstream's `LICENSE` unchanged
+and adds a `NOTICE` file that names the original project and its copyright
+holder, as Apache-2.0 asks of derivative works.
+
 ### One plugin root, two hosts
 
 Claude Code and Codex each copy the plugin root into their own cache, so
@@ -50,7 +59,8 @@ memsift/
 ├── docs/
 │   ├── SPEC.md
 │   └── ARCHITECTURE.md
-├── LICENSE
+├── LICENSE                    upstream's, unchanged
+├── NOTICE                     origin and copyright of upstream
 └── README.md
 ```
 
@@ -66,8 +76,12 @@ To verify while implementing: Codex accepts a marketplace plugin path of `"./"`
 
 Upstream is 22 000 lines. memsift keeps eight small modules that stand alone
 (no import of the rest of the plugin), moved with `git mv` so their history
-follows. Each keeps its Apache-2.0 notice and gets a "Modified by memsift" line
-when changed.
+follows. Upstream files carry no per-file header, so each kept file gets one:
+
+```
+# Originally from cognee-integrations (https://github.com/topoteretes/cognee-integrations),
+# Copyright 2026 Topoteretes UG, Apache-2.0. Modified by memsift.
+```
 
 | Upstream file | Lines | Becomes | Why keep it |
 |---|---|---|---|

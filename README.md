@@ -15,4 +15,4 @@ memsift is a fork of the Claude Code and Codex integrations from
 (Claude Code plugin 1.6.6, Codex plugin 1.7.5), with their git history.
 It has been modified substantially. It is not affiliated with or endorsed by Cognee.
 
-Licensed under Apache-2.0, see [LICENSE](LICENSE).
+Licensed under Apache-2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -1,0 +1,11 @@
+memsift
+Copyright 2026 nualt
+
+This product is a fork of the Claude Code and Codex integrations from
+cognee-integrations (https://github.com/topoteretes/cognee-integrations),
+Copyright 2026 Topoteretes UG, licensed under the Apache License 2.0.
+Files under memsift/vendor/ come from that project and have been modified.
+
+memsift is not affiliated with or endorsed by Cognee or Topoteretes UG.
+"Cognee" is a trademark of its owner and is used here only to describe
+compatibility.
