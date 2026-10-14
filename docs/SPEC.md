@@ -392,7 +392,8 @@ this project, not how to work in it. At most 3 000 tokens, in practice a dozen
 lines.
 
 ```
-# jev.md
+# jev.md · project card for memsift: the five lines below only.
+# Decisions, rules and facts are kept by memsift, not here.
 project: acme-shop, an e-commerce store
 stakes: payments, stock, orders, customer data
         → any decision touching these is essential
@@ -411,6 +412,9 @@ do not keep: commit status, one-off visual tweaks
 
 memsift never writes `jev.md`. When it is missing or looks outdated, a flag asks
 the agent to propose a version, and the agent writes it once the user approves.
+The flag gives the five lines and says what does not belong: left vague, a test
+agent filled the card with the project's rules and decisions, which then read as
+"already known" and were never kept in the notes.
 A repo that must not show it adds it to its `.gitignore`.
 
 ## 3. Hooks
@@ -551,8 +555,8 @@ session file:
 
 | Flag | Raised by | Message to the agent |
 |---|---|---|
-| `jev_md_missing` | session start | This repo has no jev.md. Propose a first version to the user. |
-| `jev_md_outdated` | stop | jev.md looks outdated. Propose an update to the user. |
+| `jev_md_missing` | session start | This repo has no jev.md. Propose a first version to the user, with exactly the five lines of the card and nothing else, starting with its two comment lines (below). Do not put decisions, rules or facts in it: memsift keeps those. |
+| `jev_md_outdated` | stop | jev.md looks outdated. Propose an update to the user, keeping exactly the five lines of the card. Do not put decisions, rules or facts in it: memsift keeps those. |
 | `dataset_undescribed:<name>` | session start | Cognee dataset `<name>` has no line in datasets.md. Propose a description to the user, or IGNORED. |
 | `decision_reason_missing:<id>` | stop | Entry `<id>` records a structuring decision without its reason. Ask the user why. |
 
@@ -717,12 +721,18 @@ prompt with one entry at a time:
 Criteria for `has_info`:
 
 ```
-true    the information the prompt relies on is stated in the conversation, or
-        the prompt needs no past information at all (a new instruction, ok,
-        commit, a general question)
-false   the prompt relies on a past decision, rule, fact or state of the work
-        that the conversation does not contain
+true    the conversation states it, or the prompt needs nothing from the past:
+        ok, commit, a new instruction, a general knowledge question
+        ("what is a webhook?")
+false   the prompt relies on a past choice, rule or fact of this project
+        ("prices excluding or including tax?") that the conversation does not
+        state
 ```
+
+One example on each side shows Jev where the line runs. A first wording said "a
+general question"; Jev, which reads literally, took "prices excluding or
+including tax?" in an empty session for one, and the entry that held the answer
+was never looked at.
 
 Criteria for `cognee`:
 
@@ -1139,12 +1149,17 @@ compactor answer. memsift never fails the host, so this file is where a
 failure must show.
 
 ```
-09:58:31 ERROR stop    compactor: answer invalid (digest empty, notes had 14 lines), retry 1/1
-09:58:44 ERROR stop    compactor: answer invalid again (missing "packet") → nothing written · failures 1/3
-10:02:10 ERROR prompt  cognee: timeout after 12.0 s · failures 2/3
-10:04:55 ERROR tool    KeyError: 'tool_input'
-                       Traceback (most recent call last): …
+ERROR compactor-invalid · compactor · ValueError: digest is empty despite existing knowledge
+Traceback (most recent call last): …
+ERROR core-prompt · jev · HTTP 400 · 0.43 s · HTTPError: HTTP Error 400: Bad Request
+  response: {"error": {"message": "At least one question is required"}}
+Traceback (most recent call last): …
 ```
+
+The first line says where and what in plain words: the step, the service, the
+HTTP status and time when there is one, the exception and its message. Normal
+situations are not errors: a lock held a few milliseconds by another session,
+or an edit outside the repo, appear only in debug mode, as plain lines.
 
 **Decisions are written with `MEMSIFT_DEBUG=1`**, one line each, with timings
 and token counts:

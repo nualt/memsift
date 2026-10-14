@@ -146,7 +146,7 @@ class CogneeTests(IsolatedTest):
         self.assertIn("second", wires[2])
         self.assertFalse(first.exists())
         self.assertFalse(second.exists())
-        self.assertIn("cognee status=409", self.log())
+        self.assertIn("cognee · HTTP 409", self.log())
 
     def test_non409_failure_stops_oldest_first_and_retry_keeps_identity(self):
         later = self.cognee.queue_packet(self.repo, NAME.replace("15h32", "16h32"), "newer")
@@ -249,7 +249,7 @@ class CogneeTests(IsolatedTest):
             self.cognee.rebuild_index(self.repo, self.config)
         self.assertEqual(path.read_text(), '{"old": true}\n')
         self.assertEqual(self.failures(), 1)
-        self.assertIn("cognee status=500", self.log())
+        self.assertIn("cognee · HTTP 500", self.log())
         self.assertNotIn("invented-response", self.log())
 
     def test_mandatory_metadata_overflow_retains_cache(self):
@@ -271,7 +271,7 @@ class CogneeTests(IsolatedTest):
                     self.cognee.list_datasets(self.config)
                 self.assertEqual(self.failures(), 1)
         self.assertIn("Traceback", self.log())
-        self.assertIn("cognee status=200", self.log())
+        self.assertIn("cognee · HTTP 200", self.log())
 
     def test_malformed_items_preserve_cache(self):
         for body in ({"items": []}, [None], [{"name": 7}], [{"id": "item"}]):
@@ -314,7 +314,7 @@ class CogneeTests(IsolatedTest):
                     self.assertIsNotNone(caught.exception.__cause__)
                 self.assertEqual(self.failures(), failures)
                 self.assertEqual(self.breaker.paused("cognee"), paused)
-        self.assertIn("duration=", self.log())
+        self.assertRegex(self.log(), r"\d+\.\d\d s")
         self.assertNotIn("invented-response", self.log())
 
     def test_upload_http_errors_and_malformed_acceptance_preserve_file(self):
@@ -421,7 +421,7 @@ class CogneeTests(IsolatedTest):
         self.assertEqual(caught.exception.status, 503)
         self.assertEqual(self.failures(), 1)
         self.assertIn("injected body read failure", self.log())
-        self.assertIn("cognee status=503", self.log())
+        self.assertIn("cognee · HTTP 503", self.log())
 
     def test_outbox_delete_fault_retains_accepted_packet(self):
         path = self.cognee.queue_packet(self.repo, NAME, "one")

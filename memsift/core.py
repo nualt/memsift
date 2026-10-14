@@ -21,8 +21,8 @@ SESSION_START = {
     "resume": "the whole previous conversation",
 }
 FLAG_MESSAGES = {
-    "jev_md_missing": "This repo has no jev.md. Propose a first version to the user.",
-    "jev_md_outdated": "jev.md looks outdated. Propose an update to the user.",
+    "jev_md_missing": "This repo has no jev.md. Propose a first version to the user, with exactly these five lines and nothing else, the file starting with the two comment lines '# jev.md · project card for memsift: the five lines below only.' and '# Decisions, rules and facts are kept by memsift, not here.': project (what this repo is, in one line), stakes (where the important decisions are), phase (where the project stands), documented in (files that already hold knowledge), do not keep (what never needs remembering). Do not put decisions, rules or facts in it: memsift keeps those.",
+    "jev_md_outdated": "jev.md looks outdated. Propose an update to the user, keeping exactly these five lines and nothing else, the file starting with the two comment lines '# jev.md · project card for memsift: the five lines below only.' and '# Decisions, rules and facts are kept by memsift, not here.': project (what this repo is, in one line), stakes (where the important decisions are), phase (where the project stands), documented in (files that already hold knowledge), do not keep (what never needs remembering). Do not put decisions, rules or facts in it: memsift keeps those.",
 }
 
 

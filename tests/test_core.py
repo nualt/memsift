@@ -64,7 +64,8 @@ class CoreTests(IsolatedTest):
         second = core.prompt(self.prepare("prompt", prompt="Continue."), self.config)
         self.assertEqual(len(self.fake.requests), 4)
         self.assertTrue(all(r["body"]["questions"] for r in self.fake.requests))
-        self.assertEqual(first, "memsift:\n- This repo has no jev.md. Propose a first version to the user.")
+        self.assertEqual(first, "memsift:\n- " + core.FLAG_MESSAGES["jev_md_missing"])
+        self.assertIn("Do not put decisions, rules or facts in it", first)
         self.assertEqual(second, "")
         self.assertFalse((self.repo / "jev.md").exists())
         self.assertFalse((self.home / ".memsift/datasets.md").exists())
@@ -146,7 +147,7 @@ class CoreTests(IsolatedTest):
         self.assertEqual(self.session()["flags"], ["jev_md_outdated", "decision_reason_missing:d2"])
         self.push_prompt(entry_d1=0, entry_d2=0)
         result = core.prompt(self.prepare("prompt", prompt="Continue."), self.config)
-        self.assertIn("jev.md looks outdated. Propose an update to the user.", result)
+        self.assertIn(core.FLAG_MESSAGES["jev_md_outdated"], result)
         self.assertIn("Entry `d2` records a structuring decision without its reason. Ask the user why.", result)
         self.assertEqual(self.session()["flags"], [])
 

@@ -267,7 +267,7 @@ class CompactionTests(IsolatedTest):
             self.fake.push(envelope(invalid))
         self.assertFalse(self.compactor.compact(self.repo, self.config, force=True))
         self.assertEqual(self.service()["failures"], 1)
-        self.assertIn("compactor status=200", self.log())
+        self.assertIn("compactor · HTTP 200", self.log())
         self.assertIn("invalid-schema-marker", self.log())
         self.assertNotIn("invented-schema-secret", self.log())
         self.assertIn("Traceback", self.log())
@@ -323,7 +323,7 @@ class CompactionTests(IsolatedTest):
                 self.assertEqual(self.service()["failures"], failures)
                 self.assertEqual(self.service()["paused"], paused)
                 self.assertEqual(self.store.read_notes(self.repo), before)
-                self.assertIn("compactor status=" + str(status), self.log())
+                self.assertIn("compactor · HTTP " + str(status), self.log())
                 self.assertNotIn("invented-response-secret", self.log())
                 self.assertIn("Traceback", self.log())
 

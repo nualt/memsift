@@ -114,11 +114,11 @@ class VendorTests(IsolatedTest):
         text = self.log()
         self.assertIn("Traceback", text)
         self.assertIn("ValueError", text)
-        self.assertIn("cognee status=500 duration=0.125", text)
+        self.assertIn("cognee · HTTP 500 · 0.12 s", text)
         self.assertNotIn("invented-value", text)
         self.assertNotIn("invented-response", text)
         self.assertNotIn("AFTER-EXCERPT", text)
-        excerpt = text.split("duration=0.125\n", 1)[1].split("\n", 1)[0]
+        excerpt = text.split("\n  response: ", 1)[1].split("\n", 1)[0]
         self.assertEqual(len(excerpt), 300)
 
     def test_decision_debug_off_on_and_dotenv(self):
@@ -174,7 +174,8 @@ class VendorTests(IsolatedTest):
             self.assertTrue(acquired)
             self.assertTrue(append_line(path, "survives contention"))
         self.assertIn("survives contention", self.log())
-        self.assertIn("Traceback", self.log())
+        # A busy lock is a normal wait, not an error.
+        self.assertNotIn("ERROR file-lock", self.log())
 
     def test_rotation_failure_is_logged_and_cannot_exceed_cap(self):
         from memsift.vendor.logfiles import append_line
@@ -206,7 +207,8 @@ class VendorTests(IsolatedTest):
             self.assertLess(time.monotonic() - start, 0.5)
         with file_lock(path) as third:
             self.assertTrue(third)
-        self.assertIn("Traceback", self.log())
+        # A busy lock is a normal wait, not an error; a real lock fault still is (next test).
+        self.assertNotIn("ERROR file-lock", self.log())
 
     def test_actual_lock_error_is_logged_and_raised(self):
         if os.name == "nt":
@@ -264,7 +266,7 @@ class VendorTests(IsolatedTest):
                 with self.assertRaises(kind):
                     self.recall(opener=self.fake.open)
         self.assertIn("Traceback", self.log())
-        self.assertIn("cognee status=401", self.log())
+        self.assertIn("cognee · HTTP 401", self.log())
         self.assertNotIn("invented-response", self.log())
 
     def test_recall_injected_transport_error_is_same_exception(self):
@@ -353,7 +355,7 @@ class VendorTests(IsolatedTest):
                 self.fake.push(body, status=status)
                 with self.assertRaises(kind):
                     self.remember(opener=self.fake.open)
-        self.assertIn("cognee status=409", self.log())
+        self.assertIn("cognee · HTTP 409", self.log())
         self.assertNotIn("invented-response", self.log())
 
     def test_remember_transport_and_file_errors_raise_original(self):
@@ -394,14 +396,14 @@ class VendorTests(IsolatedTest):
                 self.assertIs(caught.exception, exc)
                 self.assertIn("OSError", self.log())
                 self.assertIn("HTTPError", self.log())
-                self.assertIn("cognee status=503", self.log())
+                self.assertIn("cognee · HTTP 503", self.log())
                 self.assertNotIn("invented-body-secret", self.log())
 
     def test_recall_invalid_utf8_body_retains_http_status(self):
         self.fake.push(b"\xff")
         with self.assertRaises(UnicodeDecodeError):
             self.recall(opener=self.fake.open)
-        self.assertIn("cognee status=200", self.log())
+        self.assertIn("cognee · HTTP 200", self.log())
         self.assertIn("UnicodeDecodeError", self.log())
 
     def test_remember_rejects_error_envelopes_and_nonboolean_ok(self):
@@ -514,5 +516,5 @@ with file_lock(Path(sys.argv[1])) as acquired:
         with self.assertRaises(UnicodeDecodeError):
             self.remember(opener=self.fake.open)
         self.assertIn("response-prefix [redacted:credential]", self.log())
-        self.assertIn("cognee status=200", self.log())
+        self.assertIn("cognee · HTTP 200", self.log())
         self.assertNotIn("invented-secret", self.log())

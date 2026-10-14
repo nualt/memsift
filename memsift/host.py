@@ -301,10 +301,17 @@ def note_tool(root: Path, session: dict, tool: dict) -> dict:
     for change in tool.get("changes", []):
         try:
             path = Path(change["path"])
-            relative = (path if path.is_absolute() else Path(root) / path).resolve().relative_to(Path(root).resolve())
-        except (OSError, ValueError, RuntimeError) as exc:
+            target = (path if path.is_absolute() else Path(root) / path).resolve()
+            base = Path(root).resolve()
+        except (OSError, RuntimeError) as exc:
             error("host-action-path", exc)
             continue
+        if target != base and base not in target.parents:
+            # An edit outside the repo (a scratch dir, the host's own memory files) is
+            # ignored by design; said plainly in debug mode, not logged as an error.
+            decision("tool", {"ignored": "edit outside the repo", "path": str(target)})
+            continue
+        relative = target.relative_to(base)
         prefix = ("Write " if change["kind"] == "write" else "Edit ") + str(relative)
         diff = redact(change.get("diff", ""))[:200]
         items.append(prefix + (": " + diff if change["kind"] == "edit" and diff else ""))

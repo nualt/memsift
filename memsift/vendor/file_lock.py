@@ -40,20 +40,29 @@ def file_lock(path: Path, timeout: float = 0.0):
                 fcntl.flock(fd, fcntl.LOCK_UN)
 
         deadline = time.monotonic() + max(0.0, timeout)
+        waited_since = None
         while True:
             try:
                 lock()
                 acquired = True
                 break
             except OSError as exc:
-                from .logfiles import error
-
-                error("file-lock", exc)
                 if exc.errno not in (errno.EAGAIN, errno.EACCES, errno.EDEADLK):
+                    from .logfiles import error
+
+                    error("file-lock", exc)
                     raise
+                # Busy: another memsift process holds it. Normal; wait and retry.
+                if waited_since is None:
+                    waited_since = time.monotonic()
                 if time.monotonic() >= deadline:
                     break
                 time.sleep(0.005)
+        if waited_since is not None:
+            from .logfiles import decision
+
+            decision("lock", {"file": os.path.basename(str(path)), "busy_ms": round((time.monotonic() - waited_since) * 1000),
+                              "taken": acquired})
         yield acquired
     finally:
         if acquired:

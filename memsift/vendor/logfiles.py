@@ -90,8 +90,16 @@ def error(event: str, exc: Exception, service: str = "", status: int = 0,
     try:
         message = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
         details = redact(response)[:300]
-        line = redact("ERROR %s %s status=%s duration=%.3f\n%s\n%s" %
-                      (event, service, status, duration, details, message))
+        # First line says where and what, in plain words; the full traceback follows.
+        head = ["ERROR " + event]
+        if service:
+            head.append(service)
+        if status:
+            head.append("HTTP %s" % status)
+        if duration:
+            head.append("%.2f s" % duration)
+        head.append("%s: %s" % (type(exc).__name__, str(exc).splitlines()[0] if str(exc) else ""))
+        line = redact(" · ".join(head) + ("\n  response: " + details if details else "") + "\n" + message)
         append_line(Path.home() / ".memsift" / "debug.log", line)
     finally:
         _logging.active = False

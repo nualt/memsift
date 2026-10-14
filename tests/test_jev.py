@@ -48,8 +48,8 @@ class JevTests(IsolatedTest):
         questions = jev.prompt_questions({"notes": {"g1": "grid"}, "datasets": {"lessons": {}}})
         self.assertEqual(questions["has_info"]["instructions"], "Does `conversation` already contain everything the agent needs to act on `prompt`?")
         self.assertEqual(questions["has_info"]["criteria"], {
-            "true": "the information the prompt relies on is stated in the conversation, or the prompt needs no past information at all (a new instruction, ok, commit, a general question)",
-            "false": "the prompt relies on a past decision, rule, fact or state of the work that the conversation does not contain"})
+            "true": "the conversation states it, or the prompt needs nothing from the past: ok, commit, a new instruction, a general knowledge question (\"what is a webhook?\")",
+            "false": "the prompt relies on a past choice, rule or fact of this project (\"prices excluding or including tax?\") that the conversation does not state"})
         self.assertEqual(questions["entry_g1"]["instructions"], {"note": "grid", "question": "Does `note` answer `prompt` or give information needed to act on it?"})
         self.assertEqual(questions["entry_g1"]["criteria"], {
             "true": "the note is about what the prompt asks or needs",
@@ -83,7 +83,7 @@ class JevTests(IsolatedTest):
                 self.assertEqual((service["failures"], service["paused"]), (count, paused))
                 log = (self.home / ".memsift/debug.log").read_text()
                 self.assertIn("Traceback", log)
-                self.assertIn("status=" + str(status), log)
+                self.assertIn("HTTP " + str(status), log)
                 self.assertNotIn("invented-private-value", log)
                 self.assertNotIn("invented-openrouter-key", log)
         self.assertEqual(len(self.fake.requests), 7)
