@@ -805,7 +805,7 @@ Sent by the stop hook, in the background, and for each turn of
 
 | Id | Type | Question |
 |---|---|---|
-| `nature` | choice | What kind of information does `turn` carry? |
+| `nature` | choice | What kind of information does `turn` carry? Keep only what would save redoing the whole path if the same situation came back tomorrow. |
 | `scope` | score | How long does it stay true? |
 | `general_rule` | noul | Does `turn` state a preference about how the agent should work in every project, not only this one? |
 | `correction` | noul | Does the user correct the agent in `turn`? |
@@ -821,11 +821,18 @@ text-only turn is not confirmed by an older edit.
 
 `nature` options:
 
-| Option | Criteria |
+| Option | Criteria (sent as structured JSON) |
 |---|---|
-| `project` | something that holds for this project and is worth remembering: a decision and its reason, a rule for how to work here, a constraint, a business rule, a fact such as an address or an account, where the work stands |
-| `lesson` | a technical problem and what fixed it or did not, useful in any project, not specific to this one |
-| `nothing` | status, reaction, small talk, typo, a one-off instruction, a micro-choice already applied in the code, or something left undecided |
+| `project` | what: a technical choice for this project and its reason (stack, provider, hosting, architecture), a constraint of this project that causes or will cause problems, or a structured feedback on how something went. examples: "we pick Postgres over MongoDB because orders need transactions", "the client's host only allows PHP 7, so no recent framework" |
+| `lesson` | what: a technical problem met while working and what fixed it or did not, worth knowing if it happens again. not_for: a general-knowledge question answered with no problem met. example: "the payment webhook failed because the body was parsed before the signature check; reading it raw fixed it" |
+| `nothing` | what: a UI detail (layout, grid, order, colour, placement, spacing: it belongs in a design system), a task done once, small talk, status, a general-knowledge question, or something left undecided. examples: "make the buttons rounded", "move the search bar to the right", "ok, commit" |
+
+The line between keep and drop is one test: would knowing it save redoing the
+whole path if the same situation came back tomorrow? An earlier wording put "a
+micro-choice already applied in the code" in `nothing`; it did not separate
+anything, since in the end everything is in the code ("no Tailwind" and "we use
+Stripe" too). UI details are dropped on purpose: a design system holds them.
+The examples in the criteria are invented, never taken from a test set.
 
 The three options do not overlap on purpose. A first design had five
 (`working_rule`, `decision`, `project_fact`, `lesson`, `nothing`): the first

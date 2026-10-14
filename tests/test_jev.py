@@ -348,7 +348,7 @@ class JevTests(IsolatedTest):
         from memsift import jev
         questions = jev.stop_questions({"project_card": "acme-shop"})
         expected = {
-            "nature": "What kind of information does `turn` carry?",
+            "nature": "What kind of information does `turn` carry? Keep only what would save redoing the whole path if the same situation came back tomorrow.",
             "general_rule": "Does `turn` state a preference about how the agent should work in every project, not only this one?",
             "scope": "How long does it stay true?",
             "correction": "Does the user correct the agent in `turn`?",
@@ -357,11 +357,9 @@ class JevTests(IsolatedTest):
             "reason_missing": "Does `turn` take a structuring decision without giving its reason?",
         }
         self.assertEqual({k: q["instructions"] for k, q in questions.items()}, expected)
-        self.assertEqual(questions["nature"]["criteria"], {
-            "project": "something that holds for this project and is worth remembering: a decision and its reason, a rule for how to work here, a constraint, a business rule, a fact such as an address or an account, where the work stands",
-            "lesson": "a technical problem and what fixed it or did not, useful in any project, not specific to this one",
-            "nothing": "status, reaction, small talk, typo, a one-off instruction, a micro-choice already applied in the code, or something left undecided",
-        })
+        self.assertEqual(questions["nature"]["criteria"], jev.NATURES)
+        self.assertEqual(set(jev.NATURES), {"project", "lesson", "nothing"})
+        self.assertIn("design system", jev.NATURES["nothing"]["what"])
         self.assertEqual(questions["general_rule"]["type"], "noul")
         self.assertEqual(questions["general_rule"]["criteria"], {
             "true": "a general working habit of the user, such as asking before committing, or the form of answers",
