@@ -10,7 +10,7 @@ import time
 from unittest.mock import patch
 
 from tests.support import IsolatedTest
-from tests.test_decisions import noul, stop_answers
+from tests.test_decisions import noul, prompt_kind, stop_answers
 from tests.test_compaction import answer as compact_answer
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -50,7 +50,7 @@ class CoreTests(IsolatedTest):
     def push_prompt(self, has_info=1, cognee=0, **answers):
         from memsift import store
         for _ in range(2 + bool(store.read_notes(self.repo)["entries"])):
-            self.fake.push({"answers": {"has_info": noul(has_info), "cognee": noul(cognee),
+            self.fake.push({"answers": {"has_info": prompt_kind(has_info), "cognee": noul(cognee),
                                         **{key: noul(value) for key, value in answers.items()}},
                             "usage": {"input_tokens": 500}})
 
@@ -296,7 +296,7 @@ class CoreTests(IsolatedTest):
         from memsift import core, store
         self.prepare("start")
         for _ in range(2):
-            self.fake.push({"answers": {"has_info": noul(0), "cognee": noul(1)},
+            self.fake.push({"answers": {"has_info": prompt_kind(0), "cognee": noul(1)},
                             "usage": {"input_tokens": 500}}, delay=3)
         started = time.monotonic()
         result = core.prompt(self.prepare("prompt", prompt="Earlier grid?"), self.config)
@@ -676,7 +676,9 @@ class CoreTests(IsolatedTest):
 
     def test_oversize_card_is_absent_at_prompt_and_protected_at_stop(self):
         from memsift import core, store
-        (self.repo / "jev.md").write_text("x" * 100000, encoding="utf-8")
+        # The fake reports 500 input tokens whatever the request size, which inflates the learned
+        # characters-per-token ratio; the card stays oversize even at a ratio of 10.
+        (self.repo / "jev.md").write_text("x" * 400000, encoding="utf-8")
         self.prepare("start")
         self.push_prompt()
         captured = self.prepare("prompt", prompt="Keep twelve columns.")
@@ -758,7 +760,7 @@ class CoreTests(IsolatedTest):
                               json.dumps({"type": "user", "message": {"content": "Current exchange"}}))
         store.write_text(store.home() / "datasets.md", "- lessons: past fixes\n")
         for _ in range(3):
-            self.fake.push({"answers": {"has_info": noul(0), "entry_d1": noul(1),
+            self.fake.push({"answers": {"has_info": prompt_kind(0), "entry_d1": noul(1),
                                         "entry_d2": noul(1), "cognee": noul(0),
                                         "dataset_lessons": noul(0)},
                             "usage": {"input_tokens": 500}}, delay=0.25)
@@ -784,7 +786,7 @@ class CoreTests(IsolatedTest):
         self.assertNotIn("excluded summary", repr(bodies))
         for name in ("has_info", "cognee"):
             self.assertNotIn("unique entry", repr(bodies[name]))
-        self.assertEqual(jev.choose_prompt({"has_info": noul(0.5)}, [], []),
+        self.assertEqual(jev.choose_prompt({"has_info": prompt_kind(0.5)}, [], []),
                          {"entries": [], "datasets": [], "recall": False})
 
     def test_slow_transcript_read_expires_the_whole_prompt_before_model_work(self):
@@ -828,7 +830,7 @@ class CoreTests(IsolatedTest):
         self.prepare("start")
         store.write_text(store.home() / "datasets.md", "- lessons: past fixes\n")
         for _ in range(2):
-            self.fake.push({"answers": {"has_info": noul(0), "cognee": noul(1),
+            self.fake.push({"answers": {"has_info": prompt_kind(0), "cognee": noul(1),
                                         "dataset_lessons": noul(1)},
                             "usage": {"input_tokens": 500}}, delay=0.05)
         self.fake.push(["Unsorted passage"], delay=0.1)

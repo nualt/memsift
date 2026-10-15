@@ -702,7 +702,7 @@ datasets.
 
 | Id | Type | Question |
 |---|---|---|
-| `has_info` | noul | Does `conversation` already contain everything the agent needs to act on `prompt`? |
+| `has_info` | choice | What kind of prompt is `prompt`, given `conversation`? |
 | `entry_<id>` | noul | Does `note` answer `prompt` or give information needed to act on it? (`note` is the entry's text, given inside the question) |
 | `cognee` | noul | Does `prompt` touch a topic where a past choice or problem of this project would change what the agent does? |
 | `dataset_<name>` | noul | Given its description and items, would `datasets.<name>` hold what the agent needs for `prompt`? |
@@ -718,21 +718,35 @@ prompt with one entry at a time:
                           "false": "the note is about something else, or the prompt needs nothing from it"}}
 ```
 
-Criteria for `has_info`:
+Choices for `has_info` (a kind of prompt; the code adds up the probabilities of
+the stop kinds, and `has_info` ≥ 0.5 means the agent needs nothing from memory):
 
 ```
-true    the conversation states it, or the prompt needs nothing from the past:
-        ok, commit, a new instruction, a general knowledge question
-        ("what is a webhook?")
-false   the prompt relies on a past choice, rule or fact of this project
-        ("prices excluding or including tax?") that the conversation does not
-        state
+stop      reaction                    "great", "thanks", "haha"
+          act on last work            "commit", "undo that", "go ahead"
+          self-contained instruction  "rename the contact page", "add a footer"
+          general knowledge           "what is an ORM?"; not for how this project
+                                      does something, even when asked like a
+                                      general question
+          about the conversation      "why did you put that in this file?"
+continue  new decision or fact        "we take Brevo for the emails" (it may
+                                      contradict an older note)
+          past choice or fact         "why did we rule out Firebase?", "are invoices
+                                      shown with tax?", "for the forms, do we use a
+                                      library or not?"
+          resume work                 "where were we?", "what's left to do?"
+          known problem               "the upload crashes again like last time"
+          builds on existing setup    "knowing we already have a staging server"
+          refers to earlier talk      "as we said for the newsletters"
 ```
 
-One example on each side shows Jev where the line runs. A first wording said "a
-general question"; Jev, which reads literally, took "prices excluding or
-including tax?" in an empty session for one, and the entry that held the answer
-was never looked at.
+A first version asked whether the conversation already held what the prompt
+needs. Jev took "the conversation discusses the topic" for "it states the
+fact": a prompt about a database set up before was stopped because the
+conversation had just explained how such databases work. Rewording the criteria
+or offering a "topic only" choice did not move it; sorting the prompt by kind
+did. Kinds on the same side may overlap without harm, since only the sum
+counts.
 
 Criteria for `cognee`:
 

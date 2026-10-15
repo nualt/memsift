@@ -9,6 +9,7 @@ import subprocess
 import sys
 from unittest.mock import patch
 
+from tests.test_decisions import prompt_kind
 from tests.support import IsolatedTest, child_env
 
 
@@ -19,9 +20,10 @@ def noul(value):
 def prompt_response(questions, has_info=0.1, cognee=0.9, dataset=0.6):
     answers = {}
     for name, question in questions.items():
-        if question["type"] == "noul":
-            value = has_info if name == "has_info" else cognee if name == "cognee" else dataset
-            answers[name] = noul(value)
+        if name == "has_info":
+            answers[name] = prompt_kind(has_info)
+        elif question["type"] == "noul":
+            answers[name] = noul(cognee if name == "cognee" else dataset)
     return answers
 
 
@@ -221,7 +223,7 @@ class CalibrationTests(IsolatedTest):
         from tests import calibrate_jev
 
         label = calibrate_jev._load(self.label(expected="nothing"))[0]
-        result = {"label": label, "answers": {"has_info": noul(0.69), "cognee": noul(0.9),
+        result = {"label": label, "answers": {"has_info": prompt_kind(0.69), "cognee": noul(0.9),
                                                "dataset_memory": noul(0.6)}}
         thresholds, correct = calibrate_jev._best_thresholds([result])
         self.assertEqual(thresholds, (jev.HAS_INFO, jev.ENTRY, jev.COGNEE))
@@ -332,7 +334,7 @@ class CalibrationTests(IsolatedTest):
     def test_accepted_direct_clis_use_only_guarded_fake_models(self):
         scripts = Path(__file__).parent
         labels = self.label()
-        answers = {"has_info": noul(0), "cognee": noul(0.9), "dataset_memory": noul(0.6)}
+        answers = {"has_info": prompt_kind(0), "cognee": noul(0.9), "dataset_memory": noul(0.6)}
         for _ in range(2):
             self.fake.push({"answers": answers, "usage": {"input_tokens": 100}})
         env = child_env(self.fake.url, self.home)

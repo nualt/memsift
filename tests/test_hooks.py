@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from tests.support import IsolatedTest, child_env
 from tests.test_core import event, stop_body, turn
-from tests.test_decisions import noul
+from tests.test_decisions import noul, prompt_kind
 
 ROOT = Path(__file__).parents[1]
 
@@ -76,7 +76,7 @@ class HookTests(IsolatedTest):
         for host in ("claude-code", "codex"):
             core.prepare(event(self.repo, "start", host=host))
             for _ in range(3):
-                self.fake.push({"answers": {"has_info": noul(0), "entry_d1": noul(1),
+                self.fake.push({"answers": {"has_info": prompt_kind(0), "entry_d1": noul(1),
                                             "cognee": noul(0)}, "usage": {"input_tokens": 500}})
             result, output = self.invoke(["prompt", "--host", host], json.dumps(
                 {"session_id": "a1", "cwd": str(self.repo), "prompt": "Continue"}))
@@ -113,7 +113,7 @@ class HookTests(IsolatedTest):
             self.wait_for(index.exists)
             entries = store.read_notes(self.repo)["entries"]
             for _ in range(2 + bool(entries)):
-                self.fake.push({"answers": {"has_info": noul(1), "cognee": noul(0),
+                self.fake.push({"answers": {"has_info": prompt_kind(1), "cognee": noul(0),
                                             **{"entry_" + entry["id"]: noul(0) for entry in entries}},
                                 "usage": {"input_tokens": 500}}, path="/api/alpha/decisions")
             before_prompt = len(self.fake.requests)
@@ -324,7 +324,7 @@ class HookTests(IsolatedTest):
         store.write_text(store.repo_dir(self.repo) / "cognee-index.json", json.dumps({"datasets": [
             {"name": "A", "id": "a", "items": []}, {"name": "B", "id": "b", "items": []}]}))
         for _ in range(2):
-            self.fake.push({"answers": {"has_info": noul(0), "cognee": noul(1),
+            self.fake.push({"answers": {"has_info": prompt_kind(0), "cognee": noul(1),
                                         "dataset_A": noul(1), "dataset_B": noul(1)},
                             "usage": {"input_tokens": 500}}, path="/api/alpha/decisions")
         self.fake.push(["fast passage"], path="/api/v1/recall")

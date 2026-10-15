@@ -219,7 +219,7 @@ def _expected_key(expected):
 
 
 def _choose(answers, entry_ids, dataset_names, has_info, entry, cognee, dataset):
-    if answers["has_info"]["noul"] >= has_info:
+    if jev.has_info(answers["has_info"]) >= has_info:
         return {"entries": [], "datasets": [], "recall": False}
     entries = [identifier for identifier in entry_ids
                if answers["entry_" + identifier]["noul"] >= entry]
@@ -242,7 +242,7 @@ def _candidates(values, current):
 
 
 def _best_thresholds(results):
-    observed_has_info = [item["answers"]["has_info"]["noul"] for item in results]
+    observed_has_info = [jev.has_info(item["answers"]["has_info"]) for item in results]
     observed_entry = [answer["noul"] for item in results for key, answer in item["answers"].items()
                       if key.startswith("entry_")]
     observed_cognee = [item["answers"]["cognee"]["noul"] for item in results]

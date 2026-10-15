@@ -8,7 +8,7 @@ import time
 from unittest.mock import patch
 
 from tests.support import IsolatedTest
-from tests.test_decisions import noul, stop_answers
+from tests.test_decisions import noul, prompt_kind, stop_answers
 
 FIXTURE = Path(__file__).parent / "fixtures" / "jev" / "response.json"
 
@@ -36,7 +36,7 @@ class JevTests(IsolatedTest):
         from memsift import breaker, jev
         state = {"prompt": "on reprend le header", "conversation": "", "notes": {}, "datasets": {}}
         for _ in range(2):
-            self.fake.push({"answers": {"has_info": noul(0.1), "cognee": noul(0.1)}, "usage": {"input_tokens": 100}})
+            self.fake.push({"answers": {"has_info": prompt_kind(0.1), "cognee": noul(0.1)}, "usage": {"input_tokens": 100}})
         jev.request_prompt(self.config, state, timeout=2)
         self.assertTrue(self.fake.requests)
         for sent in self.fake.requests:
@@ -46,10 +46,10 @@ class JevTests(IsolatedTest):
     def test_question_text_criteria_and_conditional_fields(self):
         from memsift import jev
         questions = jev.prompt_questions({"notes": {"g1": "grid"}, "datasets": {"lessons": {}}})
-        self.assertEqual(questions["has_info"]["instructions"], "Does `conversation` already contain everything the agent needs to act on `prompt`?")
-        self.assertEqual(questions["has_info"]["criteria"], {
-            "true": "the conversation states it, or the prompt needs nothing from the past: ok, commit, a new instruction, a general knowledge question (\"what is a webhook?\")",
-            "false": "the prompt relies on a past choice, rule or fact of this project (\"prices excluding or including tax?\") that the conversation does not state"})
+        self.assertEqual(questions["has_info"]["type"], "choice")
+        self.assertEqual(questions["has_info"]["instructions"], "What kind of prompt is `prompt`, given `conversation`?")
+        self.assertEqual(set(questions["has_info"]["criteria"]), set(jev.PROMPT_KINDS))
+        self.assertIn("builds on existing setup", questions["has_info"]["criteria"])
         self.assertEqual(questions["entry_g1"]["instructions"], {"note": "grid", "question": "Does `note` answer `prompt` or give information needed to act on it?"})
         self.assertEqual(questions["entry_g1"]["criteria"], {
             "true": "the note is about what the prompt asks or needs",
@@ -167,9 +167,9 @@ class JevTests(IsolatedTest):
         state = {"prompt": "grid", "conversation": exchanges}
         questions = {"has_info": jev.prompt_questions(state)["has_info"]}
         self.fake.push({"error": {"code": "context_length_exceeded"}}, status=400, delay=0.05)
-        self.fake.push({"answers": {"has_info": noul(0)}, "usage": {"input_tokens": 100}})
+        self.fake.push({"answers": {"has_info": prompt_kind(0)}, "usage": {"input_tokens": 100}})
         result = jev.request(self.config, state, questions, timeout=1)
-        self.assertEqual(result["has_info"], noul(0))
+        self.assertEqual(result["has_info"], prompt_kind(0))
         self.assertEqual(self.fake.requests[1]["body"]["state"]["conversation"], exchanges[2:])
         self.assertLess(self.fake.requests[1]["timeout"], self.fake.requests[0]["timeout"])
         self.assertEqual(state["conversation"], exchanges)
@@ -267,7 +267,7 @@ class JevTests(IsolatedTest):
     def test_real_prompt_deadline_discards_slow_body(self):
         from memsift import breaker, jev
         state = {"prompt": "grid", "notes": {}, "datasets": {}}
-        wire = json.dumps({"answers": {"has_info": noul(0)}, "usage": {"input_tokens": 100}}).encode()
+        wire = json.dumps({"answers": {"has_info": prompt_kind(0)}, "usage": {"input_tokens": 100}}).encode()
         self.fake.push_chunks([wire[:10], wire[10:20], wire[20:30], wire[30:40], wire[40:]], interval=0.55)
         start = time.monotonic()
         with self.assertRaises(breaker.ServiceError) as caught:
@@ -394,7 +394,7 @@ class JevTests(IsolatedTest):
                 breaker.resume("jev")
                 breaker.record("jev", {"kind": "failure", "reason": "previous failure", "status": 500})
                 for status in statuses:
-                    body = ({"answers": {"has_info": noul(0), "cognee": noul(0)},
+                    body = ({"answers": {"has_info": prompt_kind(0), "cognee": noul(0)},
                              "usage": {"input_tokens": 500}} if status == 200 else {"error": "unavailable"})
                     self.fake.push(body, status=status, delay=0.05 if status == 200 else 0)
                 with self.assertRaises(breaker.ServiceError):
@@ -405,7 +405,7 @@ class JevTests(IsolatedTest):
         from memsift import jev
         state = {"prompt": "Use the account", "notes": {"d1": "PASSWORD=invented-private-value"}}
         for _ in range(3):
-            self.fake.push({"answers": {"has_info": noul(0), "entry_d1": noul(1), "cognee": noul(0)},
+            self.fake.push({"answers": {"has_info": prompt_kind(0), "entry_d1": noul(1), "cognee": noul(0)},
                             "usage": {"input_tokens": 500}})
         jev.request_prompt(self.config, state, timeout=1)
         self.fake.push({"answers": {"passage_1": noul(1)}, "usage": {"input_tokens": 500}})

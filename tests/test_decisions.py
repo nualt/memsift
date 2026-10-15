@@ -7,6 +7,21 @@ def noul(value):
     return {"type": "noul", "noul": value}
 
 
+def prompt_kind(has_info):
+    """A valid answer to question 1: `has_info` on a stop kind, the rest on a continue kind."""
+    probabilities = {name: 0.0 for name in jev_kinds()}
+    probabilities["reaction"] = has_info
+    probabilities["past choice or fact"] = round(1 - has_info, 10)
+    choice = max(probabilities, key=probabilities.get)
+    return {"type": "choice", "choice": choice, "confidence": max(probabilities.values()),
+            "probabilities": probabilities}
+
+
+def jev_kinds():
+    from memsift.jev import PROMPT_KINDS
+    return list(PROMPT_KINDS)
+
+
 def stop_answers(nature="project", scope="this project", confidence=0.6,
                  correction=0.0, known=0.0, general_rule=0.0):
     natures = ["project", "lesson", "nothing"]
@@ -34,7 +49,7 @@ class DecisionTests(IsolatedTest):
             (0, 0.4999, 0.8, [], True), (0, 0.4999, 0.8001, [], True),
         ]:
             with self.subTest(has_info=has_info, entry=entry, recall=recall):
-                result = jev.choose_prompt({"has_info": noul(has_info), "entry_d1": noul(entry),
+                result = jev.choose_prompt({"has_info": prompt_kind(has_info), "entry_d1": noul(entry),
                                            "cognee": noul(recall), "dataset_lessons": noul(0.4)},
                                           ["d1"], ["lessons"])
                 self.assertEqual(result, {"entries": ids, "recall": search,
@@ -42,7 +57,7 @@ class DecisionTests(IsolatedTest):
 
     def test_dataset_threshold_fallback_ties_and_empty(self):
         from memsift import jev
-        answers = {"has_info": noul(0), "cognee": noul(1),
+        answers = {"has_info": prompt_kind(0), "cognee": noul(1),
                    "dataset_lessons": noul(0.4999), "dataset_projects": noul(0.4999)}
         self.assertEqual(jev.choose_prompt(answers, [], ["projects", "lessons"])["datasets"], ["projects"])
         answers["dataset_lessons"] = noul(0.5)
@@ -53,7 +68,7 @@ class DecisionTests(IsolatedTest):
 
     def test_entries_keep_notes_order(self):
         from memsift import jev
-        answers = {"has_info": noul(0), "cognee": noul(1),
+        answers = {"has_info": prompt_kind(0), "cognee": noul(1),
                    "entry_d1": noul(1), "entry_g2": noul(1)}
         self.assertEqual(jev.choose_prompt(answers, ["g2", "d1"], [])["entries"], ["g2", "d1"])
 

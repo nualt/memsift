@@ -14,7 +14,7 @@ from unittest.mock import patch
 from tests.support import IsolatedTest, child_env
 from tests.test_compaction import answer, envelope
 from tests.test_core import stop_body
-from tests.test_decisions import noul
+from tests.test_decisions import noul, prompt_kind
 from tests.test_host_contracts import load_fixture
 
 ROOT = Path(__file__).parents[1]
@@ -67,7 +67,7 @@ class IntegrationTests(IsolatedTest):
     def push_prompt(self, has_info=1, cognee=0, **choices):
         from memsift import store
         for _ in range(2 + bool(store.read_notes(self.repo)["entries"])):
-            self.fake.push({"answers": {"has_info": noul(has_info), "cognee": noul(cognee),
+            self.fake.push({"answers": {"has_info": prompt_kind(has_info), "cognee": noul(cognee),
                                         "dataset_memsift": noul(0),
                                         **{key: noul(value) for key, value in choices.items()}},
                             "usage": {"input_tokens": 500}},

@@ -55,6 +55,28 @@ NATURES = {
 }
 SCOPES = ["this turn", "this task", "this project", "always"]
 
+# Question 1 sorts the prompt by kind instead of asking whether the conversation already holds the
+# information: Jev took "the conversation discusses the topic" for "it states the fact". True means the
+# memory cascade goes on (notes, then Cognee); the stop kinds' probabilities add up to `has_info`.
+PROMPT_KINDS = {
+    "reaction": ({"what": "a reaction, thanks, small talk", "examples": ["great", "thanks", "haha"]}, False),
+    "act on last work": ({"what": "an action on what was just done or proposed", "examples": ["commit", "undo that", "go ahead"]}, False),
+    "self-contained instruction": ({"what": "a new instruction that carries everything it needs", "examples": ["rename the contact page", "add a footer"]}, False),
+    "general knowledge": ({"what": "a general-knowledge question, true in any project", "not_for": "how this project does something (its stack, its tools, its rules), even when asked like a general question", "examples": ["what is an ORM?"]}, False),
+    "about the conversation": ({"what": "a question about what was just said or done in this conversation", "examples": ["why did you put that in this file?"]}, False),
+    "new decision or fact": ({"what": "the user states a new decision or a new fact about this project", "examples": ["we take Brevo for the emails", "the client is based in Belgium"]}, True),
+    "past choice or fact": ({"what": "a question about a choice, a reason or a fact of this project decided before", "examples": ["why did we rule out Firebase?", "are invoices shown with tax?", "for the forms, do we use a library or not?"]}, True),
+    "resume work": ({"what": "resuming work, or asking where things stand or what is left", "examples": ["let's pick it up", "where were we?", "what's left to do?"]}, True),
+    "known problem": ({"what": "a problem met before or coming back", "examples": ["the upload crashes again like last time", "it keeps happening"]}, True),
+    "builds on existing setup": ({"what": "a task that depends on something already set up in this project", "examples": ["knowing we already have a staging server", "keeping the current production config"]}, True),
+    "refers to earlier talk": ({"what": "a reference to something said in an earlier conversation", "examples": ["as we said for the newsletters"]}, True),
+}
+
+
+def has_info(answer):
+    """Probability that the prompt needs nothing from memory: the sum of the stop kinds."""
+    return sum(p for name, p in answer["probabilities"].items() if not PROMPT_KINDS[name][1])
+
 
 def _noul(instructions, criteria=None):
     question = {"type": "noul", "instructions": instructions}
@@ -65,10 +87,8 @@ def _noul(instructions, criteria=None):
 
 def prompt_questions(state):
     questions = {
-        "has_info": _noul("Does `conversation` already contain everything the agent needs to act on `prompt`?", {
-            "true": "the conversation states it, or the prompt needs nothing from the past: ok, commit, a new instruction, a general knowledge question (\"what is a webhook?\")",
-            "false": "the prompt relies on a past choice, rule or fact of this project (\"prices excluding or including tax?\") that the conversation does not state",
-        }),
+        "has_info": {"type": "choice", "instructions": "What kind of prompt is `prompt`, given `conversation`?",
+                     "criteria": {name: spec for name, (spec, _) in PROMPT_KINDS.items()}},
     }
     for identifier, text in state.get("notes", {}).items():
         questions["entry_" + identifier] = _noul({
@@ -187,7 +207,7 @@ def stop_questions(state):
 
 def choose_prompt(answers, entry_ids, dataset_names):
     choice = {"entries": [], "datasets": [], "recall": False}
-    if answers["has_info"]["noul"] >= HAS_INFO:
+    if has_info(answers["has_info"]) >= HAS_INFO:
         return choice
     choice["entries"] = [i for i in entry_ids if answers["entry_" + i]["noul"] >= ENTRY]
     if choice["entries"] or answers["cognee"]["noul"] < COGNEE or not dataset_names:

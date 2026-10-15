@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from tests.support import IsolatedTest
 from tests.test_core import event, turn, stop_body
-from tests.test_decisions import noul
+from tests.test_decisions import noul, prompt_kind
 from tests.test_compaction import answer
 
 
@@ -125,7 +125,7 @@ class ReviewTests(IsolatedTest):
                 # Only the Cognee request carries the datasets (prompt request ③).
                 self.assertEqual(len(list(wire["state"]["datasets"])), 2)
             # The agent lacks the information (has_info 0), so the Cognee datasets are chosen.
-            self.fake.push({"answers": {key: noul(0 if key == "has_info" else 1) for key in wire["questions"]},
+            self.fake.push({"answers": {key: prompt_kind(0) if key == "has_info" else noul(1) for key in wire["questions"]},
                             "usage": {"input_tokens": 500}})
             return self.fake.open(request, timeout)
         with patch("memsift.transport.open_request", side_effect=respond):
