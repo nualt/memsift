@@ -116,7 +116,7 @@ set at calibration (SPEC part 4).
    ┌────────────────────────────── AGENT CONTEXT ───────────────────────────────┐
    │ … the conversation …                                                       │
    │ [ what the sorting kept, often nothing. For example:                       │
-   │   "Decision: the header reuses the footer grid" ]                          │
+   │   "we ship to France and Belgium only" ]                                   │
    │ [ pending flags: "This repo has no jev.md. Propose a first version." ]     │
    │ your prompt                                                                │
    └────────────────────────────────────────────────────────────────────────────┘
@@ -236,9 +236,9 @@ set at calibration (SPEC part 4).
 
 
   EXAMPLE: two panes on the same repo
-    pane A  "the header must reuse the footer grid"
-            ③ Jev: decision, this task → draft.md
-    pane B  "why is the header misaligned?"
+    pane A  "we ship to France and Belgium only"
+            ③ Jev: project, this project → draft.md
+    pane B  "can this order go to Spain?"
             ① Jev reads the same draft.md, ② finds the entry
             → added, without asking Cognee
 ```
@@ -309,8 +309,8 @@ The same test showed the prompt questions had the same flaw. They sent Jev one
 large state (the conversation, the compaction summary, `jev.md`, every entry,
 the datasets) and asked whether the agent "lacks information that already
 exists and is not in the conversation": no entry was pasted when ten were
-needed, and "commit" scored 0.77 on an unrelated entry. They now ask three
-plain things, each with only what it needs: does the conversation already hold
+needed, and "commit" scored 0.77 on an unrelated entry. They were split into
+three plain things, each with only what it needs: does the conversation already hold
 what the agent needs (prompt and conversation), does this entry answer the
 prompt (prompt and one entry), and, for Cognee, does this passage answer the
 prompt (prompt and one passage). On the same prompts, five of six recalls were
@@ -341,6 +341,13 @@ The compactor had a gap of its own: its instructions said what goes into the
 packet but never that new project entries also go into the digest, and it
 often left them in the packet only. On three invented projects, 13 of 18 new
 entries reached the digest; with one sentence added, 18 of 18.
+
+Rewriting the whole digest at each compaction had a cost too: in one test run,
+the rewrite kept a choice but dropped the user's reason for it ("the client
+already has an account, zero server upkeep"). Replayed 32 times, the same turn
+kept the reason every time: a rare slip, but one that comes back at every
+compaction. The compactor now names the old lines to replace or drop, and code
+keeps every other line word for word.
 
 ### Only what is missing, and already exists
 
@@ -389,7 +396,8 @@ Each level holds what matches its weight:
 
 ```
 jev.md       what is structural; changes rarely; the user approves every change
-digest.md    decisions and facts of the project, capped; small ones fade out
+digest.md    decisions and facts of the project, capped; at the cap, only the
+             working rules stay, the rest is already in Cognee
 Cognee       everything, over time
 ```
 
@@ -400,10 +408,12 @@ the notes are full, rather than at each turn, is cheaper (one request every few
 dozen turns) and better: seeing the whole batch, the compactor merges
 duplicates and settles contradictions, the most recent winning.
 
-Code keeps control of what the compactor cannot do reliably: it numbers the
-digest lines (so Jev can point at them), cuts a digest that grows too long
-(models count tokens poorly, and a growing digest would end in a compaction
-at every turn), and rejects an answer that does not match the schema. A
+Code keeps control of what the compactor cannot do reliably: it keeps every
+digest line the compactor does not name word for word, numbers the lines (so
+Jev can point at them), empties a digest that grows too long but for its
+working rules (models count tokens poorly, and a growing digest would end in a
+compaction at every turn), and rejects an answer that does not match the
+schema. A
 compactor that goes wrong never damages the notes. The packet holds only what
 is new, so Cognee never receives the same thing twice.
 

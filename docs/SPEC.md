@@ -148,7 +148,7 @@ install: a hook runs `python3 run.py <event>` with the system interpreter.
 ├── debug.log               every error, always; every decision if MEMSIFT_DEBUG=1 (part 7)
 ├── sessions/<session>.json one per running session, deleted at session end
 └── repos/<repo-key>/
-    ├── digest.md           compacted project memory, written by the compactor  ≤ 3 000 tokens
+    ├── digest.md           compacted project memory, written at compaction  ≤ 3 000 tokens
     ├── draft.md            entries added since the last compaction
     ├── pending.jsonl       turns noted while Jev was unreachable
     ├── outbox/             packets waiting for Cognee (part 6)
@@ -209,9 +209,9 @@ sentences (part 5).
 
 ```
 - [d1] 2026-10-14 project
-  User: no, the header must reuse the footer grid
-  Agent: ok, the header now uses the footer's 12-column grid
-  Actions: Edit src/header.tsx · Bash: pnpm build (ok)
+  User: we ship to France and Belgium only, the client has no customs setup
+  Agent: ok, the shipping zones now list France and Belgium only
+  Actions: Edit src/shipping.ts · Bash: pnpm build (ok)
 ```
 
 | Field | Source |
@@ -243,9 +243,9 @@ pending:
 
 ```
 - [d4] 2026-10-14 project · correction · pending
-  User: no, the product grid has 12 columns, not 10
-  Agent: ok, switching the product grid to 12 columns
-  Actions: Edit src/product-grid.tsx
+  User: no, free shipping starts at 60 euros, not 50
+  Agent: ok, the free shipping threshold is now 60 euros
+  Actions: Edit src/shipping.ts
 ```
 
 While it is pending, each following stop hook adds one question to its Jev
@@ -266,11 +266,11 @@ the most recent wins.
 
 ### digest.md
 
-Per repo. Written only by the compactor, never appended to. Holds what entries
-of nature `project` say. The compactor never rewrites it: it names the old lines
-to replace or drop and gives the new project entries; code keeps every other
-line word for word and sorts each section most recent first. An option only considered stays, marked as considered, until a
-later entry decides. `lesson` entries never go here: they live in
+Per repo. Written only at compaction, never appended to. Holds what entries
+of nature `project` say. The compactor does not rewrite it: it names the old
+lines to replace or drop and gives the new project entries; code keeps every
+other line word for word and sorts each section most recent first. An option
+only considered stays, marked as considered, until a later entry decides. `lesson` entries never go here: they live in
 Cognee only. Format in part 5.
 
 ### draft.md
@@ -312,7 +312,7 @@ asking it. Rebuilt in the background at each session start from
     {
       "name": "memsift",
       "id": "6f1c…",
-      "items": ["acme-shop 2026-10-13 header grid and footer alignment",
+      "items": ["acme-shop 2026-10-13 shipping zones and free shipping",
                 "acme-shop 2026-10-12 pnpm build scripts and sharp"]
     }
   ]
@@ -339,7 +339,7 @@ repo, then the file is deleted. One sorter at a time per repo, under
 `replay.lock`; a second one finding it taken does nothing.
 
 ```json
-{"ts": "2026-10-14T07:31:02Z", "session": "a1b2…", "prompt": "…", "answer": "…", "actions": ["Edit src/header.tsx", "git commit"]}
+{"ts": "2026-10-14T07:31:02Z", "session": "a1b2…", "prompt": "…", "answer": "…", "actions": ["Edit src/shipping.ts", "git commit"]}
 ```
 
 `prompt` and `answer` are cut with the same limits as draft entries
@@ -364,10 +364,10 @@ behind, so session start removes session files older than 7 days.
   "prompt": "commit it",
   "snapshot": "9b1e…",
   "actions": [
-    {"turn": 2, "prompt": "the product grid has 12 columns, not 10",
-     "items": ["Edit src/product-grid.tsx: grid-cols-10 → grid-cols-12"]},
+    {"turn": 2, "prompt": "free shipping starts at 60 euros, not 50",
+     "items": ["Edit src/shipping.ts: FREE_SHIPPING_FROM 50 → 60"]},
     {"turn": 3, "prompt": "commit it",
-     "items": ["Bash: git commit -m \"product grid in 12 columns\" (ok)"]}
+     "items": ["Bash: git commit -m \"free shipping from 60 euros\" (ok)"]}
   ],
   "flags": ["jev_md_missing"],
   "outage_notices": []
@@ -457,6 +457,7 @@ does     1. writes sessions/<session>.json: repo key, host, source
          4. in the background: rebuilds cognee-index.json, then compares the
             server's datasets with datasets.md
             dataset without a line               → flag dataset_undescribed:<name>
+            then sends the packets waiting in the outbox
 returns  nothing
 ```
 
@@ -472,14 +473,18 @@ input    session_id, prompt, transcript_path
 does     1. turn + 1; keeps the prompt in the session file
          2. memsift paused (part 6)?  → outage notice once, then nothing
          3. Jev, all questions sent at once, 2 s at most (part 4):
-              ① does the conversation already hold what the agent needs?
+              ① what kind of prompt is it? eleven kinds: five need nothing
+                 from memory (a reaction, an action on the last work…), six
+                 may (a past choice, resuming work, a known problem…)
                  reads: the prompt + the end of the conversation
               ② for each notes entry, one entry per question: does it answer the prompt?
                  reads: the prompt + that entry only
-              ③ is it worth asking Cognee, and in which datasets?
+              ③ does the prompt touch a topic where a past choice or problem
+                 of this project would change what the agent does? and for
+                 each dataset, would it hold what the agent needs?
                  reads: the prompt + the datasets
          4. decides:
-              P① ≥ 0.5                            → nothing from memory
+              the five "nothing" kinds together ≥ 0.5  → nothing from memory
               otherwise, entries with P② ≥ 0.5    → those entries
               no such entry, P③ ≥ 0.8             → Cognee
          5. Cognee: recall on the chosen datasets, 12 s at most, then Jev
@@ -495,7 +500,7 @@ their criteria are in part 4.
 the worst case is 2 + 12 + 2 = 16 s. Any step that times out ends the hook
 with nothing from memory; unsorted Cognee passages are never pasted.
 
-**What the agent has, and only that.** Question ① judges what the agent
+**What the agent has, and only that.** Question ① reads only what the agent
 actually has in front of it: the conversation since the last compaction. The
 compaction summary is not counted: it says "we worked on payment", not "Stripe,
 because PayPal's fees are too high", so an entry the summary mentions vaguely
@@ -540,9 +545,9 @@ returns nothing at all.
 
 ```
 memsift, from the working notes:
-- [d3] 2026-10-12 decision
-  User: no, the header must reuse the footer grid
-  Agent: ok, the header now uses the footer's 12-column grid
+- [d3] 2026-10-12 project
+  User: we ship to France and Belgium only, the client has no customs setup
+  Agent: ok, the shipping zones now list France and Belgium only
 
 memsift, from Cognee (dataset lessons):
 - pnpm blocks dependency build scripts; allow them in package.json
@@ -599,6 +604,7 @@ does     1. memsift paused?  → appends the turn to pending.jsonl, stops
          2. Jev, one request (part 4):
               nature: project / lesson / nothing
               a general working habit, valid in every project?
+              how long does it stay true: this turn, task, project, always?
               is it a correction of the agent?
               each pending correction: confirmed?
               already known (working notes, CLAUDE.md, AGENTS.md)?
@@ -642,7 +648,7 @@ Runs in the background, so the terminal closes at once.
 ```
 input    session_id
 does     1. draft.md not empty → compaction, even below 8 000 tokens:
-            packets sent to Cognee, digest.md rewritten (part 5)
+            packets sent to Cognee, digest.md updated (part 5)
          2. deletes sessions/<session>.json
 returns  nothing
 ```
@@ -666,7 +672,7 @@ Authorization: Bearer $OPENROUTER_API_KEY
 | Question type | Returns | Used for |
 |---|---|---|
 | `noul` | probability of yes, 0 to 1 | every yes/no question |
-| `choice` | one option and the distribution | the nature of a turn |
+| `choice` | one option and the distribution | the kind of a prompt, the nature of a turn |
 | `score` | a position on ordered levels | the scope of a turn |
 
 Rules that follow from how Jev works:
@@ -806,7 +812,7 @@ when it is about something else, or the prompt needs nothing from it.
 
 Code: a passage is pasted when `passage_<n> ≥ 0.7`. There is no question about
 whether the agent already has it: question ① of the prompt request already
-established that the conversation lacks the information.
+set aside the prompts that need nothing from memory.
 
 Measured on full passages returned by Cognee, the right passages scored 0.88
 to 0.92 and the wrong ones at most 0.63. The first version (all five passages
@@ -901,8 +907,6 @@ pasted something, and what?"), run through Jev, and the thresholds that match
 the labels best are kept. Calibration also checks:
 
 - accuracy on prompts in the user's language, Jev being strongest in English;
-- the prompt request with its full state against a minimal one (`jev.md` and
-  notes only), keeping whichever errs less;
 - the `nature` answer with its options in another order, since Jev can lean
   toward the first option.
 
@@ -1004,16 +1008,17 @@ Answer schema:
 
 Code writes the file: old lines not named in `changes` word for word, replaced
 lines with the new text and the day's date, then the new lines; an unknown id is
-ignored. Code numbers the lines; the compactor only names the ids it was shown. Ids start again from `g1` at each compaction.
+ignored. Code numbers the lines; the compactor only names the ids it was shown.
+Ids start again from `g1` at each compaction.
 
 ```
 # Digest: acme-shop-3f2a91
 ## In progress
-- [g1] header: reuses the footer grid, 12 columns (2026-10-12)
+- [g1] order confirmation email: template still to write (2026-10-12)
 ## Decisions
 - [g2] payment through Stripe Elements; Stripe Checkout ruled out, not customisable enough (2026-10-08)
 ## Project facts
-- [g3] sharp must be allowed in pnpm (2026-10-09)
+- [g3] orders ship from the client's Lille warehouse (2026-10-09)
 ## Working rules
 - [g4] no Tailwind in this project (2026-10-07)
 ```
@@ -1036,7 +1041,7 @@ It is uploaded as a text file whose name is its identity in Cognee:
 
 ```
 <repo name> <date> <time> <topics>.txt
-acme-shop 2026-10-14 15h32 header grid, sharp.txt
+acme-shop 2026-10-14 15h32 shipping zones, sharp.txt
 ```
 
 The time keeps names unique: Cognee refuses a known name with different
@@ -1116,7 +1121,7 @@ without installing anything.
 A packet that cannot be sent waits as one file per packet:
 
 ```
-repos/<repo-key>/outbox/acme-shop 2026-10-14 15h32 header grid, sharp.txt
+repos/<repo-key>/outbox/acme-shop 2026-10-14 15h32 shipping zones, sharp.txt
 ```
 
 Sending is retried, oldest first, at session start (memsift already talks to
@@ -1211,16 +1216,16 @@ or an edit outside the repo, appear only in debug mode, as plain lines.
 and token counts:
 
 ```
-09:41:02 prompt  "back to the header"  has_info 0.10 · g1 0.92 → 1 entry pasted
+09:41:02 prompt  "where were we on shipping?"  has_info 0.10 · g1 0.92 → 1 entry pasted
                  jev 0.4 s · 21 300 tokens (estimated 22 100)
 09:41:40 stop    project · this task · 0.81 → d7 appended
-09:52:13 prompt  "pick up the footer from two weeks ago"  has_info 0.05 · cognee 0.90
+09:52:13 prompt  "how did we fix the deploy two weeks ago?"  has_info 0.05 · cognee 0.90
                  → Cognee lessons, memsift 5.8 s → p2 kept · total 6.6 s
 ```
 
 ### Automatic tests
 
-`python3 -m unittest discover -s tests`, standard library only, no network,
+`python3 -m unittest discover -s tests -t .`, standard library only, no network,
 no model. Each test runs with a temporary `HOME`, so it never touches the real
 `~/.memsift` or `~/.cognee`.
 
@@ -1280,7 +1285,7 @@ first on Claude Code, then on Codex:
 
 | # | Do | Expect |
 |---|---|---|
-| 1 | new session, "back to the header" | the digest entry about the header is pasted |
+| 1 | new session, "where were we on shipping?" | the digest entry about shipping is pasted |
 | 2 | "fix the typo in the README" | nothing is pasted |
 | 3 | correct the agent, then let it commit | `confirmed` appended for that correction |
 | 4 | ask about a topic two weeks old | Cognee asked; waiting time measured |

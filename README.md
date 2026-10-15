@@ -51,7 +51,7 @@ and only the prompt adds anything to the agent's context.
       ├── needs nothing from memory (most prompts:
       │   "ok", "commit", a self-contained task) ──► nothing is added
       │
-      ├── no, and a note answers ─────────────────► that note is added
+      ├── may need memory, and a note answers ────► that note is added
       │   (each note checked on its own)
       │
       └── no note answers, and the topic is the kind
