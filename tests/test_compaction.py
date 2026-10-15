@@ -219,6 +219,7 @@ class CompactionTests(IsolatedTest):
             self.assertIn("Keep the user's words. Invent nothing, add nothing.", instructions)
             self.assertIn("Lessons go to the packet only, never to the digest.", instructions)
             self.assertIn("only new draft entries", instructions)
+            self.assertIn("the old digest plus every new project entry", instructions)
             self.assertIn("never the old digest again", instructions)
             self.assertNotIn("invented-input-secret", repr(body))
             response = body["response_format"]

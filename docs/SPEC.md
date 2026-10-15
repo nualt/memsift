@@ -943,8 +943,8 @@ Instructions:
 - Apply each confirmed correction: replace the statement it corrects.
   Leave pending corrections out; code carries them over.
 - Lessons go to the packet only, never to the digest.
-- Digest: work in progress first, then most recent first. Drop what is no
-  longer true.
+- Digest: the old digest plus every new project entry, merged; work in
+  progress first, then most recent first. Drop what is no longer true.
 - Write in the language of the entries.
 
 Answer schema:
