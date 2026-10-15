@@ -267,8 +267,10 @@ the most recent wins.
 ### digest.md
 
 Per repo. Written only by the compactor, never appended to. Holds what entries
-of nature `project` say, sorted by the compactor into its sections, work in
-progress first, then most recent first. `lesson` entries never go here: they live in
+of nature `project` say: each compaction keeps the old digest and adds every new
+project entry, sorted into its sections, work in progress first, then most
+recent first. An option only considered stays, marked as considered, until a
+later entry decides. `lesson` entries never go here: they live in
 Cognee only. Format in part 5.
 
 ### draft.md

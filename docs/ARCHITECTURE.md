@@ -81,18 +81,20 @@ set at calibration (SPEC part 4).
      │   the only hook you wait for
      ▼
    ┌──────────── JEV · questions sent at once · 2 s at most ──────────┐
-   │ ① "Does the conversation already hold what the agent needs?"     │
+   │ ① "What kind of prompt is it?" eleven kinds; five need nothing   │
+   │     (reaction, self-contained task, general question…)           │
    │     reads: the prompt + the end of the conversation              │
    │ ② for each notes entry, ONE per question:                        │
    │     "Does this entry answer the prompt?"                         │
    │     reads: the prompt + that entry only                          │
-   │ ③ "Is it worth asking COGNEE?" and, for each dataset:            │
+   │ ③ "Is the topic the kind kept?" (choice, constraint, problem met │
+   │    before) → worth asking COGNEE; and, for each dataset:         │
    │    "Would it hold the answer?" (datasets.md + cognee-index.json) │
    │ → each answer is a probability (0 to 1); code decides            │
    └────────────────────────────────┬─────────────────────────────────┘
           ┌─────────────────────────┴─────────────────────────┐
           ▼                         ▼                         ▼
-   ① ≥ 0.5                   entries with ② ≥ 0.5      no such entry, ③ ≥ 0.8
+   ① needs nothing ≥ 0.5     entries with ② ≥ 0.5      no such entry, ③ ≥ 0.8
    (most prompts)            → those entries           (otherwise: nothing)
    → NOTHING ADDED             are added as they are             │
                                │                                 ▼
@@ -179,8 +181,10 @@ set at calibration (SPEC part 4).
    │ HAIKU reads ALL of the repo's notes, in one request:             │
    │   ├─ packet: what is new since the last compaction, cleaned      │
    │   │    and merged, lessons included ──────► COGNEE (or outbox)   │
-   │   └─ digest.md rewritten: in progress · decisions ·              │
-   │        project facts · working rules; never lessons              │
+   │   └─ digest.md rewritten: the old digest plus every new project  │
+   │        entry · in progress · decisions · project facts ·         │
+   │        working rules; never lessons; an option only considered   │
+   │        is kept, marked as considered                             │
    │        lines numbered by code, cut by code at 3 000 tokens       │
    │ draft.md emptied, except lines added meanwhile and corrections   │
    │ still pending                                                    │
@@ -318,6 +322,24 @@ the gist, not the detail. And Jev reads only the end of the conversation, up to
 The lesson for the rest of the design: a question to Jev is written, then run on
 real turns, before it is relied on.
 
+Two of those three questions changed again after a test on a held-out project
+and 47 labelled real prompts. Asking whether the conversation already holds
+what the agent needs, Jev took "the conversation discusses the topic" for "it
+states the fact": a prompt about a database set up weeks before was stopped
+because the conversation had just explained how such databases work. Neither a
+sharper wording nor a "topic only" choice moved it. Sorting the prompt by kind
+did: Jev is good at telling what kind of thing it reads, not at telling what
+someone else knows. The same held for Cognee: "is it worth searching?" never
+reached its threshold, and the six prompts that needed Cognee were scattered
+between ranks 2 and 31 out of 47. Asking whether the topic is the kind memsift
+keeps put three of them first; Cognee only holds what the end-of-turn sorting
+kept, so a topic it drops is not worth a search.
+
+The compactor had a gap of its own: its instructions said what goes into the
+packet but never that new project entries also go into the digest, and it
+often left them in the packet only. On three invented projects, 13 of 18 new
+entries reached the digest; with one sentence added, 18 of 18.
+
 ### Only what is missing, and already exists
 
 The test is not "is it in the agent's context?" but "is it in front of it,
@@ -348,8 +370,11 @@ pass: Jev picks their entries by reading them.
 
 Code, docs and instruction files already hold the details. Memory keeps what
 cannot be read in the repo: why a choice was made, what was ruled out, where
-the work stands. "The button is blue" is visible in the code; "we chose Medusa
-because…" is not. While a spec is being written, its content ends up in the
+the work stands. The test for keeping a turn is whether it would save redoing
+the whole path if the same situation came back tomorrow: a technical choice and
+its reason, a constraint that causes problems, a problem met and what fixed
+it. "The button is blue" or "a 12-column grid" belong in a design system; "we
+chose Medusa because…" belongs in memory. While a spec is being written, its content ends up in the
 spec file: the action note shows the edit, Jev sees it as already known, and
 nothing is stored twice.
 

@@ -46,15 +46,17 @@ and only the prompt adds anything to the agent's context.
   you type a prompt
       │
       ▼
-  Jev, two seconds at most: does the conversation already
-  hold what the agent needs?
+  Jev, two seconds at most: what kind of prompt is it?
       │
-      ├── yes (most prompts) ─────────────────────► nothing is added
+      ├── needs nothing from memory (most prompts:
+      │   "ok", "commit", a self-contained task) ──► nothing is added
       │
       ├── no, and a note answers ─────────────────► that note is added
       │   (each note checked on its own)
       │
-      └── no note answers, worth asking Cognee
+      └── no note answers, and the topic is the kind
+          memsift keeps (a technical choice, a constraint,
+          a problem met before)
               │
               ▼
           Cognee returns its closest passages (12 s at most)
@@ -70,9 +72,12 @@ and only the prompt adds anything to the agent's context.
 1. **Session start.** memsift notes how the session started, checks that the
    project has a `jev.md`, and in the background fetches the list of what
    Cognee holds. Nothing is sent to the agent.
-2. **Each prompt.** Jev checks whether the end of the conversation already
-   holds what the agent needs; if not, it checks each note on its own against
-   the prompt, and if none answers, whether Cognee is worth asking (and in
+2. **Each prompt.** Jev sorts the prompt into one of eleven kinds: a reaction,
+   a self-contained task or a general question needs nothing from memory; a
+   question about a past choice, resuming work, a problem coming back or a
+   task that builds on what is already set up does. In that case it checks
+   each note on its own against the prompt, and if none answers, whether the
+   topic is the kind memsift keeps, which decides if Cognee is asked (and in
    which datasets). Cognee's passages are checked one by one before anything
    is added.
 3. **While the agent works.** memsift notes what changed the repo: edits,
@@ -90,7 +95,10 @@ Jev sorts each turn into one of three kinds:
 |---|---|---|
 | this project | "no Tailwind in this repo", "we go with Stripe: PayPal fees are too high", "prices are shown with VAT" | the project's working notes, then Cognee |
 | a technical lesson | "pnpm blocks build scripts unless allowed" | the working notes until compaction, then Cognee only |
-| nothing | "ok", typos, status updates, a change already visible in the code | dropped |
+| nothing | "ok", typos, status updates, a task done once, UI details such as layout or colour (they belong in a design system) | dropped |
+
+The line is one test: would knowing it save redoing the whole path if the same
+situation came back tomorrow?
 
 How you like to work in general ("ask before committing") is not kept: it
 belongs in your `CLAUDE.md` or `AGENTS.md`, which the agent already loads in
@@ -98,7 +106,9 @@ full. memsift keeps project memory only.
 
 When the working notes reach 8 000 tokens, a cheap model (Claude Haiku, by default) cleans and
 deduplicates them, sends them to Cognee, and rewrites a short digest of the
-project. At the end of a session, whatever is left goes the same way.
+project: the old digest plus every new project entry. An option only
+considered ("I was thinking of Netlify") is kept, marked as considered; a later
+decision replaces it. At the end of a session, whatever is left goes the same way.
 
 The full picture, moment by moment, is in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
