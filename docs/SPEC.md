@@ -267,9 +267,9 @@ the most recent wins.
 ### digest.md
 
 Per repo. Written only by the compactor, never appended to. Holds what entries
-of nature `project` say: each compaction keeps the old digest and adds every new
-project entry, sorted into its sections, work in progress first, then most
-recent first. An option only considered stays, marked as considered, until a
+of nature `project` say. The compactor never rewrites it: it names the old lines
+to replace or drop and gives the new project entries; code keeps every other
+line word for word and sorts each section most recent first. An option only considered stays, marked as considered, until a
 later entry decides. `lesson` entries never go here: they live in
 Cognee only. Format in part 5.
 
@@ -926,7 +926,7 @@ does nothing, since the running one will empty the draft.
 ```
 1. reads digest.md and draft.md, and remembers where draft.md ended;
    a draft holding only pending corrections → stops, nothing to compact
-2. the compactor, one request → new digest + packet
+2. the compactor, one request → changes to old lines + new lines + packet
 3. code checks the answer (schema, ids, length, and a digest that comes back
    empty while the input had a digest line or a project entry that is not a
    pending correction); invalid → one retry; invalid again → nothing is
@@ -964,25 +964,34 @@ of a cent.
 
 Instructions:
 
-- Keep the user's words. Invent nothing, add nothing.
-- Merge duplicates. When two entries contradict each other, the most recent wins.
-- Apply each confirmed correction: replace the statement it corrects.
-  Leave pending corrections out; code carries them over.
-- Lessons go to the packet only, never to the digest.
-- Digest: the old digest plus every new project entry, merged; work in
-  progress first, then most recent first. Drop what is no longer true.
+- Do not rewrite the digest. Every old line you do not mention is kept word
+  for word.
+- Mention an old line only to replace it (a new entry contradicts, corrects or
+  completes it) or to drop it (no longer true, or work in progress now done).
+  Two old lines that say the same thing: replace one with the merged line,
+  drop the other.
+- New lines: one per new decision, fact, constraint, rule or piece of work in
+  progress from the project entries the digest does not already hold. Keep the
+  user's words and the user's reason. An option only considered is written as
+  considered.
+- Lessons never go to the digest.
+- Apply each confirmed correction by replacing the line it corrects. Leave
+  pending corrections out; code carries them over.
+- Packet: only the new draft entries, cleaned and merged, lessons included.
 - Write in the language of the entries.
+
+Why not a rewrite: when the model rewrote the whole digest at each compaction,
+a test run lost the user's reason for a choice in one rewrite ("the client
+already has an account, zero server upkeep"). A line the model does not name
+can no longer be shortened.
 
 Answer schema:
 
 ```json
 {
-  "digest": {
-    "in_progress":   [{"text": "…", "date": "YYYY-MM-DD"}],
-    "decisions":     [{"text": "…", "date": "YYYY-MM-DD"}],
-    "project_facts": [{"text": "…", "date": "YYYY-MM-DD"}],
-    "working_rules": [{"text": "…", "date": "YYYY-MM-DD"}]
-  },
+  "changes": [{"id": "gN", "action": "replace | drop", "text": "…"}],
+  "new": [{"section": "in_progress | decisions | project_facts | working_rules",
+           "text": "…", "date": "YYYY-MM-DD"}],
   "packet": {
     "topics": "2 to 4 words",
     "text": "…"
@@ -992,8 +1001,9 @@ Answer schema:
 
 ### digest.md
 
-Code writes the file from the answer and numbers the lines; the compactor
-never handles ids. Ids start again from `g1` at each compaction.
+Code writes the file: old lines not named in `changes` word for word, replaced
+lines with the new text and the day's date, then the new lines; an unknown id is
+ignored. Code numbers the lines; the compactor only names the ids it was shown. Ids start again from `g1` at each compaction.
 
 ```
 # Digest: acme-shop-3f2a91
@@ -1007,11 +1017,13 @@ never handles ids. Ids start again from `g1` at each compaction.
 - [g4] no Tailwind in this project (2026-10-07)
 ```
 
-**Length.** If the digest goes over 3 000 tokens, code removes the oldest
-lines of the last non-empty section, then the one before, until it fits.
-A model cannot count tokens reliably, and a digest that grows would leave less
-room for the draft, until a compaction ran at every turn. The removed lines are
-already in Cognee, sent by this packet or an earlier one.
+**Length.** The digest only grows unless the model drops a line. If it goes over
+3 000 tokens, code empties it but for its working rules, which apply to every
+prompt; if the rules alone are still too long, the oldest go first. A model
+cannot count tokens reliably, and a digest that grows would leave less room for
+the draft, until a compaction ran at every turn. The removed lines are already
+in Cognee, sent by this packet or an earlier one. At about 10 tokens per prompt
+in tests, this happens every 250 to 300 prompts.
 
 ### Packet
 
@@ -1235,7 +1247,7 @@ What each module checks:
 | `test_transcript` | Claude Code and Codex: only the exchanges after the last compaction marker are read, the summary is not sent; tool calls replaced by action notes · the end of the conversation is kept up to 25 000 tokens, oldest cut first · a transcript of several MB is read from the end, not loaded whole |
 | `test_actions` | in a temporary git repo: an edit in the repo is noted with a diff of at most 200 characters · a write keeps the file name only · edits outside the repo are ignored · a read-only command is ignored · a command changing an already modified file is noted · a commit is noted · outside git, commands are not noted · failed then succeeded is marked · Codex `apply_patch` is noted like an edit · only the last 5 turns are kept |
 | `test_decisions` | table-driven, probabilities in, outcome out: the prompt cascade (thresholds and their boundaries, dataset fallback to the highest) · the passage rule · the stop rule, including the lower bar for corrections · confirmed corrections · each flag given once, then removed |
-| `test_compaction` | lines appended during a compaction survive it · pending corrections are carried over · an invalid answer twice writes nothing and counts one failure · an empty digest from notes that had lines is refused, retried and logged with its reason · an over-long digest loses its oldest lines of the last section · lines are numbered `g1`… by code · a second compaction finding the lock does nothing · packet names carry the time, and a taken name gets ` (2)` · the packet is in the outbox before `digest.md` is rewritten · Cognee down leaves the packet in the outbox · a draft of pending corrections only makes no model call · a lessons-only draft may give an empty digest · a confirmation appended during a compaction is carried over with its correction |
+| `test_compaction` | lines appended during a compaction survive it · pending corrections are carried over · an invalid answer twice writes nothing and counts one failure · an empty digest from notes that had lines is refused, retried and logged with its reason · old lines the model does not name are kept word for word, unknown ids ignored · an over-long digest keeps only its working rules, the oldest rules cut if still too long · lines are numbered `g1`… by code · a second compaction finding the lock does nothing · packet names carry the time, and a taken name gets ` (2)` · the packet is in the outbox before `digest.md` is rewritten · Cognee down leaves the packet in the outbox · a draft of pending corrections only makes no model call · a lessons-only draft may give an empty digest · a confirmation appended during a compaction is carried over with its correction |
 | `test_failures` | 3 timeouts pause a service · 401 pauses at once · 429 and 529 are not counted · a success resets the counter · the notice is given once per session · a pause seen by one session applies to all · `/memsift-resume` tests, resumes, sends the outbox, sorts this repo's `pending.jsonl` and prints its summary · another repo's pending turns are sorted by its first stop · a stop whose Jev call times out queues its turn in `pending.jsonl` · two sorters on one repo sort each turn once · a test call during resume or doctor changes no counter |
 | `test_hooks` | `run.py` end to end for every event and host, against the fake server: output shape per host · background hooks return in under a second · the prompt hook returns nothing within about 2 s when Jev takes 3 s · an exception inside the core still exits 0 and is in `debug.log` with its traceback |
 | `test_doctor` | each check reports ✓ and ✗ correctly · no key value appears in the output |

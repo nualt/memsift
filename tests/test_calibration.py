@@ -49,12 +49,8 @@ def stop_response(questions):
 
 def compacted(text="The acme-shop header uses the footer grid."):
     return {
-        "digest": {
-            "in_progress": [],
-            "decisions": [{"text": text, "date": "2026-10-14"}],
-            "project_facts": [],
-            "working_rules": [],
-        },
+        "changes": [],
+        "new": [{"section": "decisions", "text": text, "date": "2026-10-14"}],
         "packet": {"topics": "header grid", "text": text},
     }
 

@@ -130,7 +130,7 @@ def main(argv=None):
             answer, usage = _request_with_usage(
                 dict(config, MEMSIFT_COMPACTOR_MODEL=model), notes)
             answer = compactor.validate(answer, notes)
-            digest = compactor.render_digest(draft_path.parent, answer["digest"], ratio)
+            digest = compactor.render_digest(draft_path.parent, compactor.apply(notes["digest"], answer), ratio)
             measured_output = store.estimate(json.dumps(answer, ensure_ascii=False), ratio)
             print("\n=== %s ===" % model)
             print("Validation: valid")

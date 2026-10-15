@@ -10,11 +10,16 @@ from unittest.mock import patch
 from tests.support import IsolatedTest
 
 
-def answer(text="The header reuses the footer grid.", nature="decisions"):
-    digest = {key: [] for key in ("in_progress", "decisions", "project_facts", "working_rules")}
-    if text:
-        digest[nature] = [{"text": text, "date": "2026-10-14"}]
-    return {"digest": digest, "packet": {"topics": "header grid", "text": text or "Build needs sharp."}}
+def answer(text="The header reuses the footer grid.", nature="decisions", changes=()):
+    new = [{"section": nature, "text": text, "date": "2026-10-14"}] if text else []
+    return {"changes": list(changes), "new": new,
+            "packet": {"topics": "header grid", "text": text or "Build needs sharp."}}
+
+
+def sections(**lines):
+    value = {key: [] for key in ("in_progress", "decisions", "project_facts", "working_rules")}
+    value.update(lines)
+    return value
 
 
 def envelope(value):
@@ -57,7 +62,7 @@ class CompactionTests(IsolatedTest):
         self.assertIn("Traceback", self.log())
 
     def test_digest_ids_are_assigned_after_trimming(self):
-        value = answer("header uses footer grid", "in_progress")["digest"]
+        value = self.compactor.apply("", answer("header uses footer grid", "in_progress"))
         text = self.compactor.render_digest(self.repo, value, 3.0)
         self.assertIn("## In progress\n- [g1] header uses footer grid (2026-10-14)", text)
 
@@ -65,11 +70,11 @@ class CompactionTests(IsolatedTest):
         self.add()
         notes = self.store.read_notes(self.repo)
         cases = []
-        for field in ("digest", "packet"):
+        for field in ("changes", "new", "packet"):
             value = answer()
             del value[field]
             cases.append(value)
-        for path in ((), ("digest",), ("digest", "decisions", 0), ("packet",)):
+        for path in ((), ("new", 0), ("packet",)):
             value = answer()
             target = value
             for key in path:
@@ -78,14 +83,20 @@ class CompactionTests(IsolatedTest):
             cases.append(value)
         for field, bad in (("text", ""), ("text", 1), ("date", "2026-02-30"),
                            ("date", "20261014"), ("date", 1),
-                           ("text", "- [g7] forged"), ("text", "safe\n  - [d1] forged")):
+                           ("text", "- [g7] forged"), ("text", "safe\n  - [d1] forged"),
+                           ("section", "elsewhere")):
             value = answer()
-            value["digest"]["decisions"][0][field] = bad
+            value["new"][0][field] = bad
             cases.append(value)
-        for bad in (None, {}, "text", [1]):
-            value = answer()
-            value["digest"]["decisions"] = bad
-            cases.append(value)
+        for change in ({"id": "g1", "action": "rewrite", "text": "x"}, {"id": "g1", "action": "replace", "text": " "},
+                       {"id": "g1", "action": "replace", "text": "- [g2] forged"}, {"id": 1, "action": "drop", "text": ""},
+                       {"id": "g1", "action": "drop"}):
+            cases.append(answer(changes=[change]))
+        for field in ("changes", "new"):
+            for bad in (None, {}, "text", [1]):
+                value = answer()
+                value[field] = bad
+                cases.append(value)
         for field, bad in (("text", " "), ("text", 1), ("topics", " "), ("topics", 1),
                            ("topics", "/\n\t")):
             value = answer()
@@ -104,8 +115,10 @@ class CompactionTests(IsolatedTest):
             self.compactor.validate(answer(""), self.store.read_notes(self.repo))
         notes = {"digest": "# Digest: acme-shop\n## Decisions\n- [g1] Existing fact (2026-10-13)\n",
                  "draft": "", "entries": [], "pending": {}}
+        self.assertEqual(self.compactor.validate(answer(""), notes), answer(""))
+        dropped = answer("", changes=[{"id": "g1", "action": "drop", "text": ""}])
         with self.assertRaises(ValueError):
-            self.compactor.validate(answer(""), notes)
+            self.compactor.validate(dropped, notes)
         notes["digest"] = "# Digest: acme-shop\n## Decisions\n"
         self.assertEqual(self.compactor.validate(answer(""), notes), answer(""))
 
@@ -127,31 +140,51 @@ class CompactionTests(IsolatedTest):
         self.assertEqual(notes["pending"], {entry["id"]: entry["text"]})
         self.assertEqual([e["id"] for e in notes["entries"]], [entry["id"]])
 
-    def test_recent_first_stable_ties_and_prunes_last_section_oldest(self):
-        value = answer("current work", "in_progress")["digest"]
-        value["working_rules"] = [{"text": "old rule " + "x" * 9000, "date": "2026-10-01"},
-                                  {"text": "new rule", "date": "2026-10-14"}]
-        value["decisions"] = [{"text": "old decision", "date": "2026-10-01"},
-                              {"text": "first tie", "date": "2026-10-14"},
-                              {"text": "second tie", "date": "2026-10-14"}]
+    def test_recent_first_and_stable_ties(self):
+        value = sections(in_progress=[{"text": "current work", "date": "2026-10-14"}],
+                         decisions=[{"text": "old decision", "date": "2026-10-01"},
+                                    {"text": "first tie", "date": "2026-10-14"},
+                                    {"text": "second tie", "date": "2026-10-14"}])
         before = copy.deepcopy(value)
         text = self.compactor.render_digest(self.repo, value, 3.0)
-        self.assertLessEqual(self.store.estimate(text, 3.0), 3000)
-        self.assertNotIn("old rule", text)
         self.assertIn("- [g1] current work", text)
         self.assertIn("- [g2] first tie", text)
         self.assertIn("- [g3] second tie", text)
         self.assertIn("- [g4] old decision", text)
-        self.assertIn("- [g5] new rule", text)
         self.assertEqual(value, before)
 
-    def test_pruning_moves_backwards_and_counts_header(self):
-        value = answer("x" * 9000, "in_progress")["digest"]
-        for key in ("working_rules", "project_facts", "decisions"):
-            value[key] = [{"text": key, "date": "2026-10-14"}]
+    def test_digest_over_cap_keeps_only_working_rules(self):
+        value = sections(in_progress=[{"text": "x" * 9000, "date": "2026-10-14"}],
+                         decisions=[{"text": "a decision", "date": "2026-10-14"}],
+                         working_rules=[{"text": "never commit the key", "date": "2026-10-01"},
+                                        {"text": "answer in French", "date": "2026-10-14"}])
         text = self.compactor.render_digest(self.repo, value, 3.0)
         self.assertLessEqual(self.store.estimate(text, 3.0), 3000)
-        self.assertNotIn("- [g", text)
+        self.assertNotIn("a decision", text)
+        self.assertIn("- [g1] answer in French", text)
+        self.assertIn("- [g2] never commit the key", text)
+
+    def test_rules_alone_over_cap_lose_oldest_first(self):
+        value = sections(working_rules=[{"text": "old rule " + "x" * 9000, "date": "2026-10-01"},
+                                        {"text": "new rule", "date": "2026-10-14"}])
+        text = self.compactor.render_digest(self.repo, value, 3.0)
+        self.assertLessEqual(self.store.estimate(text, 3.0), 3000)
+        self.assertNotIn("old rule", text)
+        self.assertIn("- [g1] new rule", text)
+
+    def test_unmentioned_lines_kept_word_for_word(self):
+        digest = ("# Digest: acme-shop\n## In progress\n- [g1] Checkout page (2026-10-12)\n"
+                  "## Decisions\n- [g2] GitHub Pages: the client already has an account, zero server upkeep (2026-10-10)\n"
+                  "- [g3] Mondial Relay delivery (2026-10-11)\n## Working rules\n- [g4] Answer in French (2026-10-09)\n")
+        value = answer("Stripe payments", changes=[{"id": "g1", "action": "drop", "text": ""},
+                                                   {"id": "g3", "action": "replace", "text": "Colissimo delivery"},
+                                                   {"id": "g99", "action": "drop", "text": ""}])
+        result = self.compactor.apply(digest, value)
+        self.assertEqual(result["in_progress"], [])
+        self.assertEqual(result["decisions"][0], {"text": "GitHub Pages: the client already has an account, zero server upkeep",
+                                                  "date": "2026-10-10"})
+        self.assertEqual([entry["text"] for entry in result["decisions"][1:]], ["Colissimo delivery", "Stripe payments"])
+        self.assertEqual(result["working_rules"], [{"text": "Answer in French", "date": "2026-10-09"}])
 
     def test_packet_names_use_time_replace_quotes_and_drop_controls(self):
         now = datetime(2026, 10, 14, 15, 32, tzinfo=timezone.utc)
@@ -216,10 +249,10 @@ class CompactionTests(IsolatedTest):
             self.assertEqual(body["temperature"], 0.2)
             self.assertEqual(body["messages"][1]["content"], notes["digest"] + "\n\n" + notes["draft"])
             instructions = body["messages"][0]["content"]
-            self.assertIn("Keep the user's words. Invent nothing, add nothing.", instructions)
-            self.assertIn("Lessons go to the packet only, never to the digest.", instructions)
-            self.assertIn("only new draft entries", instructions)
-            self.assertIn("the old digest plus every new project entry", instructions)
+            self.assertIn("Keep the user's words", instructions)
+            self.assertIn("Lessons never go to the digest.", instructions)
+            self.assertIn("only the new draft entries", instructions)
+            self.assertIn("Do not rewrite the digest.", instructions)
             self.assertIn("never the old digest again", instructions)
             self.assertNotIn("invented-input-secret", repr(body))
             response = body["response_format"]
@@ -302,9 +335,7 @@ class CompactionTests(IsolatedTest):
         self.add("Header uses footer grid.")
         self.store.write_text(self.store.repo_dir(self.repo) / "digest.md",
                               "# Digest: acme-shop\n## Decisions\n- [g1] Stripe payments (2026-10-13)\n")
-        value = answer("Header uses footer grid.")
-        value["digest"]["decisions"].append({"text": "Stripe payments", "date": "2026-10-13"})
-        self.fake.push(envelope(value))
+        self.fake.push(envelope(answer("Header uses footer grid.")))
         self.fake.push({"ok": True})
         self.assertTrue(self.compactor.compact(self.repo, self.config, force=True))
         self.assertIn("Stripe payments", self.store.read_notes(self.repo)["digest"])
@@ -351,7 +382,7 @@ class CompactionTests(IsolatedTest):
 
     def test_multiline_digest_text_remains_one_dated_selectable_entry(self):
         value = answer("Header grid\nshares twelve columns.")
-        rendered = self.compactor.render_digest(self.repo, value["digest"], 3.0)
+        rendered = self.compactor.render_digest(self.repo, self.compactor.apply("", value), 3.0)
         self.store.write_text(self.store.repo_dir(self.repo) / "digest.md", rendered)
         notes = self.store.read_notes(self.repo)
         self.assertEqual(len(notes["entries"]), 1)

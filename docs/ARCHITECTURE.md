@@ -181,11 +181,13 @@ set at calibration (SPEC part 4).
    │ HAIKU reads ALL of the repo's notes, in one request:             │
    │   ├─ packet: what is new since the last compaction, cleaned      │
    │   │    and merged, lessons included ──────► COGNEE (or outbox)   │
-   │   └─ digest.md rewritten: the old digest plus every new project  │
-   │        entry · in progress · decisions · project facts ·         │
-   │        working rules; never lessons; an option only considered   │
-   │        is kept, marked as considered                             │
-   │        lines numbered by code, cut by code at 3 000 tokens       │
+   │   └─ digest.md updated: Haiku names old lines to replace or      │
+   │        drop, and adds every new project entry; code keeps the    │
+   │        other lines word for word · in progress · decisions ·     │
+   │        project facts · working rules; never lessons; an option   │
+   │        only considered is kept, marked as considered             │
+   │        lines numbered by code; at 3 000 tokens, emptied but for  │
+   │        the working rules                                         │
    │ draft.md emptied, except lines added meanwhile and corrections   │
    │ still pending                                                    │
    │ invalid answer twice → nothing written, the notes stay as is     │

@@ -105,10 +105,12 @@ belongs in your `CLAUDE.md` or `AGENTS.md`, which the agent already loads in
 full. memsift keeps project memory only.
 
 When the working notes reach 8 000 tokens, a cheap model (Claude Haiku, by default) cleans and
-deduplicates them, sends them to Cognee, and rewrites a short digest of the
-project: the old digest plus every new project entry. An option only
-considered ("I was thinking of Netlify") is kept, marked as considered; a later
-decision replaces it. At the end of a session, whatever is left goes the same way.
+deduplicates them, sends them to Cognee, and updates a short digest of the
+project: it adds every new project entry and names the old lines to replace or
+drop; every other line is kept word for word. An option only considered ("I was
+thinking of Netlify") is kept, marked as considered; a later decision replaces
+it. When the digest reaches 3 000 tokens, it is emptied but for its working
+rules: everything else is already in Cognee. At the end of a session, whatever is left goes the same way.
 
 The full picture, moment by moment, is in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
