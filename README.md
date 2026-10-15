@@ -129,7 +129,7 @@ The full picture, moment by moment, is in
    should invent.
 3. **The repo is the memory of what is in it.** Code, docs and `CLAUDE.md` are
    not stored again. A choice that can be read in the code ("the button is
-   blue") is not a decision worth remembering; the reason behind it might be.
+   blue") is not a decision worth remembering.
 4. **Corrections wait for proof.** When you correct the agent, the old line is
    only replaced once an edit, a commit or the following turns confirm it.
 5. **Local first, Cognee second.** Jev selects entries from the working notes
