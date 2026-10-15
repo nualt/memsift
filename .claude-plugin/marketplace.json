@@ -8,7 +8,7 @@
     {
       "name": "memsift",
       "source": "./",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "description": "Selective memory for coding agents, backed by Cognee."
     }
   ]

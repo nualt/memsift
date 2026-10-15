@@ -380,6 +380,13 @@ class CompactionTests(IsolatedTest):
         self.assertEqual(self.service()["failures"], 1)
         self.assertIn("Traceback", self.log())
 
+    def test_a_date_copied_into_the_text_is_not_written_twice(self):
+        value = sections(decisions=[{"text": "Cloudflare Pages for branch previews (2026-10-15)", "date": "2026-10-15"},
+                                    {"text": "Formspree (2026-10-14) (2026-10-14)", "date": "2026-10-14"}])
+        text = self.compactor.render_digest(self.repo, value, 3.0)
+        self.assertIn("- [g1] Cloudflare Pages for branch previews (2026-10-15)\n", text)
+        self.assertIn("- [g2] Formspree (2026-10-14)\n", text)
+
     def test_multiline_digest_text_remains_one_dated_selectable_entry(self):
         value = answer("Header grid\nshares twelve columns.")
         rendered = self.compactor.render_digest(self.repo, self.compactor.apply("", value), 3.0)

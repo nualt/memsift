@@ -16,9 +16,9 @@ It was built for the agents that run [Nualt](https://nualt.fr)'s own projects,
 on a self-hosted [Cognee](https://github.com/topoteretes/cognee) server, as a
 fork of Cognee's own Claude Code and Codex integrations.
 
-> Status: 0.1 implementation with offline tests. Live installation, context
-> delivery and model acceptance remain unverified. The contract is in
-> [docs/SPEC.md](docs/SPEC.md); calibrate before relying on the thresholds.
+> Status: 0.1.1. Tested offline and in real Claude Code sessions on two scripted
+> test projects (100 and 80 prompts), against the original plugin. Codex is
+> tested offline only. The contract is in [docs/SPEC.md](docs/SPEC.md).
 
 ## What is in here
 
@@ -121,8 +121,9 @@ The full picture, moment by moment, is in
 1. **A decision model, not a chat model, decides what to inject.** Jev returns
    probabilities, not text. A typical full prompt budget is about 26 000
    estimated tokens. Each prompt classification has a two-second deadline;
-   the whole Cognee cascade has at most 2 + 12 + 2 = 16 seconds. Live latency
-   and costs still need operator measurement.
+   the whole Cognee cascade has at most 2 + 12 + 2 = 16 seconds. On a scripted
+   80-prompt project, memory was added on 13 prompts, after a median wait of
+   0.8 s; the original plugin added some on all 80, after 3.0 s.
 2. **Missing means it already exists somewhere.** When you are writing a spec,
    everything is new and nothing is in memory yet. Asking Cognee then is wasted
    time. Jev looks for information that exists, not information the agent
@@ -243,11 +244,11 @@ agent already retained. Claude Code uses the latest clear summary.
 
 ## Cost
 
-Cost depends on provider prices, actual token usage and how often memory is
-selected. The opt-in calibration scripts print estimates from their dated
-price table and ask for confirmation before calling models. Check prices
-with your provider before running them; these estimates are not measured
-session costs. Cognee runs on your own server.
+Measured on OpenRouter over one day of tests (about 200 prompts, plus
+checks): about $0.04 in all, $0.03 for Jev and $0.01 for the compactor.
+Cognee runs on your own server. Cost depends on provider prices and on how
+often memory is selected. The opt-in calibration scripts print estimates from
+their dated price table and ask for confirmation before calling models.
 
 ## Watching what it does
 
@@ -292,8 +293,8 @@ There is no automatic resume. On a prompt timeout, work continues without memory
 
 | Host | Status |
 |---|---|
-| Claude Code | implemented and tested offline; live install and acceptance pending |
-| Codex | implemented and tested offline; root install, skill discovery and acceptance pending |
+| Claude Code | tested offline and in real sessions |
+| Codex | tested offline |
 | Gemini CLI | later; its hooks can inject context |
 | Cursor | later, partial; its prompt hook cannot inject context |
 
@@ -305,14 +306,14 @@ server on `127.0.0.1`; external sockets are refused in tests and their guarded
 children. No dependencies, real credentials or model calls are needed. CI is
 configured for Python 3.9 and the latest stable `3.x`, with prereleases disabled.
 
-Live acceptance is separate: follow the eight checks in
-[SPEC part 7](docs/SPEC.md#live-tests), first on Claude Code, then Codex, with
-`MEMSIFT_DEBUG=1`. Installation and those checks have not been run as part of
-offline integration. The probability thresholds remain first guesses.
-Calibrate on about fifty real prompts and compare two or three real drafts
-only after reviewing and confirming each script's cost estimate. Keep labels
-and captures outside the repository. Reports of wrong injections and missed
-recalls are welcome as issues.
+Live runs: two scripted test projects (100 and 80 prompts) in real Claude Code
+sessions, with real models and a real Cognee server, each also run with the
+original plugin. Corrections confirmed over several turns, `/compact` and
+service outages are covered by offline tests only. The thresholds were set on
+47 labelled real prompts; the calibration scripts (`tests/calibrate_jev.py`,
+`tests/compare_compactors.py`) print their cost estimate and ask before
+calling models. Keep labels and captures outside the repository. Reports of
+wrong injections and missed recalls are welcome as issues.
 
 ## Origin and license
 

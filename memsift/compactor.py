@@ -57,6 +57,7 @@ INSTRUCTIONS = (
     "Packet: only the new draft entries, cleaned and merged, lessons included, never the old digest again. "
     "Write in the language of the entries. Do not write ids or formatted - [gN] or - [dN] records in any text."
 )
+_TRAILING_DATES = re.compile(r"(?:\s*\(\d{4}-\d{2}-\d{2}\))+\s*$")
 _LINE = re.compile(r"^- \[(g\d+)\] (.*) \((\d{4}-\d{2}-\d{2})\)$")
 
 
@@ -155,7 +156,8 @@ def render_digest(root, digest, ratio):
             lines.append("## " + heading)
             for entry in sections[key]:
                 identifier += 1
-                text = " ".join(entry["text"].splitlines())
+                # The model sometimes copies a line's date into its text; code adds the date itself.
+                text = _TRAILING_DATES.sub("", " ".join(entry["text"].splitlines()))
                 lines.append("- [g%d] %s (%s)" % (identifier, text, entry["date"]))
         rendered = redact("\n".join(lines) + "\n")
         if store.estimate(rendered, ratio) <= 3000:
