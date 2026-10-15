@@ -203,9 +203,11 @@ def _prompt_memory(work, config, deadline):
         return "memsift, from the working notes:\n" + "".join(state["notes"][identifier] for identifier in choice["entries"])
     if not choice["recall"] or breaker.paused("cognee"):
         return ""
-    passages = cognee.recall(config, state["prompt"],
-                             [rows.get(name, {"name": name, "id": ""}) for name in choice["datasets"]],
-                             timeout=_remaining(deadline, 12.0))
+    # A dataset described in datasets.md but missing from a fetched index does not exist on
+    # Cognee yet: searching it only waits for a 404.
+    targets = [rows.get(name, {"name": name, "id": ""}) for name in choice["datasets"]
+               if name in rows or "fetched_at" not in index]
+    passages = cognee.recall(config, state["prompt"], targets, timeout=_remaining(deadline, 12.0))
     if not passages:
         return ""
     passage_state = {"prompt": state["prompt"],

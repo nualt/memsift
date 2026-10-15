@@ -700,7 +700,8 @@ request          state                                        questions
 `conversation` is the end of the conversation since the last compaction, up to
 25 000 tokens (part 3). Entries are every entry of `digest.md` and `draft.md`.
 `datasets` merges `datasets.md` and `cognee-index.json`, without `IGNORED`
-datasets.
+datasets. A dataset described in `datasets.md` but missing from a fetched
+`cognee-index.json` does not exist on Cognee yet, and is never searched.
 
 | Id | Type | Question |
 |---|---|---|

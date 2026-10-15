@@ -43,11 +43,11 @@ def redact(value):
     if isinstance(value, str):
         stripped = value.strip()
         if stripped.startswith("{") and stripped.endswith("}"):
+            # Text shaped like {…} is often code, not JSON: the regular expressions below still run.
             try:
                 parsed = json.loads(value)
-            except ValueError as exc:
-                from .logfiles import error
-                error("redact-json", exc)
+            except ValueError:
+                pass
             else:
                 clean = redact(parsed)
                 if clean == parsed:

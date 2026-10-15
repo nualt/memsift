@@ -2,7 +2,9 @@
 
 import os
 from pathlib import Path
+import shutil
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -51,13 +53,27 @@ def child_env(server_url, home):
     return env
 
 
+def _remove(path):
+    # Detached hook workers may still write a log line or their state as a test ends;
+    # they finish within moments, so removal is retried instead of failing the test.
+    for _ in range(20):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            time.sleep(0.1)
+    shutil.rmtree(path, ignore_errors=True)
+
+
 class IsolatedTest(unittest.TestCase):
     """Test case with a temporary HOME, acme-shop repo and loopback services."""
 
     def setUp(self):
-        self._temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self._temporary.cleanup)
-        self.home = Path(self._temporary.name) / "home"
+        temporary = tempfile.mkdtemp()
+        self.addCleanup(_remove, temporary)
+        self.home = Path(temporary) / "home"
         self.repo = self.home / "acme-shop"
         self.repo.mkdir(parents=True)
 

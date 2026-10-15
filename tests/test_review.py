@@ -171,12 +171,12 @@ class ReviewTests(IsolatedTest):
         self.assertIn(middle["ts"], draft)
         self.assertEqual(store.pending_turns(self.repo), [])
 
-    def test_malformed_json_redaction_logs_and_masks_the_fallback(self):
+    def test_malformed_json_redaction_masks_the_fallback_without_logging(self):
         from memsift import store
         from memsift.vendor.redact import redact
         result = redact('{invalid: "PASSWORD": "invented-fallback-secret"}')
         self.assertNotIn("invented-fallback-secret", result)
-        self.assertIn("Traceback", store.read_text(store.home() / "debug.log"))
+        self.assertEqual(store.read_text(store.home() / "debug.log"), "")
 
     def test_decision_logging_failure_does_not_requeue_a_durable_turn(self):
         from memsift import core, store

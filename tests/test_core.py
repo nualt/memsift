@@ -271,6 +271,18 @@ class CoreTests(IsolatedTest):
                 self.assertLessEqual(recall["timeout"], 12)
                 self.assertLessEqual(passage["timeout"], 2)
 
+    def test_described_dataset_missing_from_fetched_index_is_not_searched(self):
+        from memsift import core, store
+        (self.repo / "jev.md").write_text("acme-shop card", encoding="utf-8")
+        store.write_text(store.home() / "datasets.md", "- lessons: technical fixes\n- projects: past projects\n")
+        self.prepare("start")
+        store.update_json(store.repo_dir(self.repo) / "cognee-index.json", {}, lambda _: {
+            "fetched_at": "2026-10-15T08:00:00Z", "datasets": [{"name": "lessons", "id": "lessons-id", "items": []}]})
+        before = len(self.fake.requests)
+        self.push_prompt(0, 1, dataset_lessons=0, dataset_projects=1)
+        self.assertEqual(core.prompt(self.prepare("prompt", prompt="Past projects?"), self.config), "")
+        self.assertEqual(len(self.fake.requests), before + 2)
+
     def test_empty_recall_skips_passage_model_and_pause_uses_only_local_notes(self):
         from memsift import breaker, core, store
         (self.repo / "jev.md").write_text("acme-shop card", encoding="utf-8")
