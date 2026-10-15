@@ -78,9 +78,13 @@ def prompt_questions(state):
             "true": "the note is about what the prompt asks or needs",
             "false": "the note is about something else, or the prompt needs nothing from it",
         })
-    questions["cognee"] = _noul("Is it worth searching the long-term memory?", {
-        "true": "the prompt refers to past work, a decision or a preference, absent from the conversation and the notes, and the agent would act differently knowing it",
-        "false": "a general question, an answer found in the code or the docs, or memory would only be a bonus without changing what the agent does",
+    # Asks for the kind of topic the Stop judgment keeps, not whether the agent lacks the
+    # information: Jev cannot see that, but it sorts topics well.
+    questions["cognee"] = _noul("Does `prompt` touch a topic where a past choice or problem of this project would change what the agent does?", {
+        "true": {"what": "a technical choice and its reason (stack, provider, hosting, architecture, database), a constraint of this project, a problem met before or coming back",
+                 "examples": ["can we switch the emails to another provider?", "the deploy broke again like last time"]},
+        "false": {"what": "a UI detail (layout, colour, placement), a reaction to the last message, a task that carries everything it needs, a general-knowledge question",
+                  "examples": ["move the logo to the left", "rename the contact page", "what does HTTP 418 mean?"]},
     })
     for name in state.get("datasets", {}):
         questions["dataset_" + name] = _noul("Given its description and items, would `datasets.%s` hold what the agent needs for `prompt`?" % name)

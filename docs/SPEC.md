@@ -704,7 +704,7 @@ datasets.
 |---|---|---|
 | `has_info` | noul | Does `conversation` already contain everything the agent needs to act on `prompt`? |
 | `entry_<id>` | noul | Does `note` answer `prompt` or give information needed to act on it? (`note` is the entry's text, given inside the question) |
-| `cognee` | noul | Is it worth searching the long-term memory? |
+| `cognee` | noul | Does `prompt` touch a topic where a past choice or problem of this project would change what the agent does? |
 | `dataset_<name>` | noul | Given its description and items, would `datasets.<name>` hold what the agent needs for `prompt`? |
 
 An entry question is sent as a structured instruction, so Jev compares the
@@ -737,12 +737,22 @@ was never looked at.
 Criteria for `cognee`:
 
 ```
-true    the prompt refers to past work, a decision or a preference, absent from
-        the conversation and the notes, and the agent would act differently
-        knowing it
-false   a general question, an answer found in the code or the docs, or memory
-        would only be a bonus without changing what the agent does
+true    a technical choice and its reason (stack, provider, hosting,
+        architecture, database), a constraint of this project, a problem met
+        before or coming back
+        e.g. "can we switch the emails to another provider?",
+             "the deploy broke again like last time"
+false   a UI detail (layout, colour, placement), a reaction to the last
+        message, a task that carries everything it needs, a general-knowledge
+        question
+        e.g. "move the logo to the left", "rename the contact page",
+             "what does HTTP 418 mean?"
 ```
+
+The question asks what kind of topic the prompt touches, the same kind the Stop
+judgment keeps, not whether the agent lacks the information: Jev cannot see
+that, and a first wording built on it never reached the threshold. Cognee only
+holds what Stop kept, so a topic Stop drops is not worth a search.
 
 Code:
 

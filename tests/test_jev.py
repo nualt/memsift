@@ -55,8 +55,9 @@ class JevTests(IsolatedTest):
             "true": "the note is about what the prompt asks or needs",
             "false": "the note is about something else, or the prompt needs nothing from it"})
         self.assertEqual(questions["dataset_lessons"]["instructions"], "Given its description and items, would `datasets.lessons` hold what the agent needs for `prompt`?")
-        self.assertEqual(questions["cognee"]["instructions"], "Is it worth searching the long-term memory?")
-        self.assertEqual(questions["cognee"]["criteria"], {"true": "the prompt refers to past work, a decision or a preference, absent from the conversation and the notes, and the agent would act differently knowing it", "false": "a general question, an answer found in the code or the docs, or memory would only be a bonus without changing what the agent does"})
+        self.assertEqual(questions["cognee"]["instructions"], "Does `prompt` touch a topic where a past choice or problem of this project would change what the agent does?")
+        self.assertIn("a problem met before or coming back", questions["cognee"]["criteria"]["true"]["what"])
+        self.assertIn("a UI detail", questions["cognee"]["criteria"]["false"]["what"])
         passage = jev.passage_questions({"passages": {"p2": "grid"}})
         self.assertEqual(passage, {"passage_2": {"type": "noul", "instructions": {
             "passage": "grid", "question": "Does `passage` answer `prompt` or give information needed to act on it?"},
